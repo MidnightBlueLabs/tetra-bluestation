@@ -5,7 +5,7 @@ use serde::Deserialize;
 /// ETSI TS 100 392-15 V1.5.1 (2011-02), clause 6: Duplex spacing
 const TETRA_DUPLEX_SPACING: [[Option<u32>; 16]; 8] = [
     [ None,    Some(1600), Some(10000), Some(10000), Some(10000), Some(10000), Some(10000), None,        None,        None,        None,    None,    None,    None,    None,    None ],
-    [ None,    Some(4500), None,        Some(36000), Some(7000),  None,        None,        None,        Some(45000), Some(45000), None,    None,    None,    None,    None,    None ],
+    [ None,    Some(4500), None,        Some(36000), Some(7600),  None,        None,        None,        Some(45000), Some(45000), None,    None,    None,    None,    None,    None ],
     [ Some(0), Some(0),    Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
     [ None,    None,       None,        Some(8000),  Some(8000),  None,        None,        None,        Some(18000), Some(18000), None,    None,    None,    None,    None,    None ],
     [ None,    None,       None,        Some(18000), Some(5000),  None,        Some(30000), Some(30000), None,        Some(39000), None,    None,    None,    None,    None,    None ],
