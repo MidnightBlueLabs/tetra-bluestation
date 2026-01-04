@@ -1,0 +1,97 @@
+name: Bug report
+description: Create a report to help us improve
+title: ""
+labels: []
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug 🐛  
+        Please fill out the sections below as completely as possible.
+
+  - type: textarea
+    id: bug_description
+    attributes:
+      label: Bug description
+      description: Describe the bug clearly and concisely.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Steps to reproduce
+
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: List of hardware used.
+      placeholder: |
+        - SDR model:
+        - Radio model:
+        - Hardware running `tetra-bluestation`:
+    validations:
+      required: true
+
+  - type: textarea
+    id: software
+    attributes:
+      label: Software
+      description: Steps to reproduce the bug.
+      placeholder: |
+        - Build and launch `tetra-bluestation` from the <branch name> branch
+        - Operation that causes the bug
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+      placeholder: Describe the expected behavior.
+    validations:
+      required: false
+
+  - type: textarea
+    id: command_output
+    attributes:
+      label: Command output
+      description: |
+        Paste the **exact** console output when the bug happens.
+      render: shell
+      placeholder: |
+        $ ./target/release/tetra-bluestation ./example_config/config_bel.toml
+        <output here>
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain your problem.
+      placeholder: Drag and drop images here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: config_toml
+    attributes:
+      label: Config.toml
+      description: If applicable, paste the content of your `config.toml` file.
+      render: toml
+      placeholder: |
+        config_version = "0.4"
+        stack_mode = "Bs"
+
+        [phy_io]
+        backend = "SoapySdr"
+        ...
+    validations:
+      required: false
