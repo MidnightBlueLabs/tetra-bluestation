@@ -1,3 +1,5 @@
+[![Build Multi-Arch](https://github.com/web-rpi/tetra-bluestation/actions/workflows/build.yml/badge.svg)](https://github.com/web-rpi/tetra-bluestation/actions/workflows/build.yml)
+
 ```
 ░▀█▀░█▀▀░▀█▀░█▀▄░█▀█░░░░░█▀▄░█░░░█░█░█▀▀░█▀▀░▀█▀░█▀█░▀█▀░▀█▀░█▀█░█▀█
 ░░█░░█▀▀░░█░░█▀▄░█▀█░▄▄▄░█▀▄░█░░░█░█░█▀▀░▀▀█░░█░░█▀█░░█░░░█░░█░█░█░█

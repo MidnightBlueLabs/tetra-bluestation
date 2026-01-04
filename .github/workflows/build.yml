@@ -1,0 +1,144 @@
+name: Build Multi-Arch
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        arch: [x86_64, arm64-pi5, arm64-pi4]
+    name: Build ${{ matrix.arch }}
+    steps:
+      # 1. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Setup environment for x86_64
+      - name: Setup environment
+        if: matrix.arch == 'x86_64'
+        run: |
+          echo "ARCH=x86_64" >> $GITHUB_ENV
+          sudo apt update
+          sudo apt install -y clang llvm-dev libclang-dev pkg-config build-essential \
+            libsoapysdr-dev libasound2-dev soapysdr-tools python3-soapysdr jq coreutils
+
+      # 3. Setup QEMU for ARM64
+      - name: Setup QEMU for ARM64
+        if: matrix.arch != 'x86_64'
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
+
+      # 4. Setup Rust for x86_64
+      - name: Setup Rust
+        if: matrix.arch == 'x86_64'
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+          profile: minimal
+          override: true
+
+      # 5. Cache Rust build artifacts
+      - name: Cache Rust target
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: rust-build-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            rust-build-${{ matrix.arch }}-
+
+      # 6. Extract version & define artifact names
+      - name: Set environment variables
+        id: vars
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')
+          SAFE_BRANCH=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+
+          case "${{ matrix.arch }}" in
+            x86_64)
+              BIN_NAME="tetra-bluestation-${VERSION}-${SAFE_BRANCH}-linux-x86_64"
+              ;;
+            arm64-pi5)
+              BIN_NAME="tetra-bluestation-${VERSION}-${SAFE_BRANCH}-arm64-pi5"
+              ;;
+            arm64-pi4)
+              BIN_NAME="tetra-bluestation-${VERSION}-${SAFE_BRANCH}-arm64-pi4"
+              ;;
+          esac
+
+          SHA_NAME="${BIN_NAME}.sha256"
+          TAG_NAME="v${VERSION}-${SAFE_BRANCH}"
+
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=$SAFE_BRANCH" >> $GITHUB_ENV
+          echo "BIN_NAME=$BIN_NAME" >> $GITHUB_ENV
+          echo "SHA_NAME=$SHA_NAME" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+
+      # 7. Build binaries
+      - name: Build release binary x86_64
+        if: matrix.arch == 'x86_64'
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Build release binary ARM64 in Docker + QEMU
+        if: matrix.arch != 'x86_64'
+        run: |
+          CPU_FLAGS=""
+          if [ "${{ matrix.arch }}" == "arm64-pi4" ]; then
+            CPU_FLAGS="export RUSTFLAGS='-C target-cpu=cortex-a72'"
+          fi
+
+          docker run --rm --platform linux/arm64 -v $PWD:/src arm64v8/ubuntu:22.04 bash -c "
+            apt update
+            apt install -y build-essential pkg-config libsoapysdr-dev libasound2-dev clang llvm-dev libclang-dev python3-soapysdr curl git jq
+            cd /src
+            curl https://sh.rustup.rs -sSf | sh -s -- -y
+            source \$HOME/.cargo/env
+            rustup target add aarch64-unknown-linux-gnu
+            $CPU_FLAGS
+            cargo build --release --target aarch64-unknown-linux-gnu
+          "
+        shell: bash
+
+      # 8. Prepare binary
+      - name: Prepare binary
+        run: |
+          case "${{ matrix.arch }}" in
+            x86_64)
+              cp target/x86_64-unknown-linux-gnu/release/tetra-bluestation "${BIN_NAME}"
+              ;;
+            *)
+              cp target/aarch64-unknown-linux-gnu/release/tetra-bluestation "${BIN_NAME}"
+              ;;
+          esac
+
+      # 9. Generate SHA256 checksum
+      - name: Generate SHA256 checksum
+        run: sha256sum "${BIN_NAME}" | awk '{print $1}' > "${SHA_NAME}"
+
+      # 10. Upload release assets
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "Build ${{ env.VERSION }}"
+          body: "Automatic build"
+          files: |
+            ${{ env.BIN_NAME }}
+
+      # 11. Create or update Git tag
+      - name: Create or update tag
+        if: matrix.arch == 'x86_64'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag -f "${{ env.TAG_NAME }}"
+          git push origin "${{ env.TAG_NAME }}" --force
