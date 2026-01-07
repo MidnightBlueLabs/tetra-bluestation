@@ -68,7 +68,7 @@ body:
       options:
         - LimeSDR
         - USRP
-        - SXCeiver
+        - SXceiver
         - Other
     validations:
       required: true
