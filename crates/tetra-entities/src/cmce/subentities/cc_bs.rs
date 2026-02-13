@@ -639,6 +639,21 @@ impl CcBsSubentity {
             }),
         };
         queue.push_back(notify);
+
+        // Also notify UMAC so it can gate UL voice loopback/forwarding
+        let notify_umac = SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: message.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                call_id: circuit.call_id,
+                source_issi: calling_party.ssi,
+                dest_gssi,
+                ts: circuit.ts,
+            }),
+        };
+        queue.push_back(notify_umac);
     }
 
     pub fn route_xx_deliver(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
@@ -790,6 +805,16 @@ impl CcBsSubentity {
                 msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
             };
             queue.push_back(notify);
+
+            // Also notify UMAC to stop UL voice loopback/forwarding
+            let notify_umac = SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
+            };
+            queue.push_back(notify_umac);
         }
 
         // Clean up
@@ -935,6 +960,19 @@ impl CcBsSubentity {
             }),
         };
         queue.push_back(notify);
+
+        // Also notify UMAC to stop UL voice loopback/forwarding
+        let notify_umac = SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: self.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd {
+                call_id,
+                ts: call.ts,
+            }),
+        };
+        queue.push_back(notify_umac);
     }
 
     /// Handle U-TX DEMAND: another radio requests floor during hangtime
@@ -998,6 +1036,21 @@ impl CcBsSubentity {
             }),
         };
         queue.push_back(notify);
+
+        // Also notify UMAC to resume UL voice loopback/forwarding
+        let notify_umac = SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: self.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                call_id,
+                source_issi: requesting_party.ssi,
+                dest_gssi: dest_addr.ssi,
+                ts: call.ts,
+            }),
+        };
+        queue.push_back(notify_umac);
 
         // Send D-TX GRANTED via FACCH
         let d_tx_granted = DTxGranted {
