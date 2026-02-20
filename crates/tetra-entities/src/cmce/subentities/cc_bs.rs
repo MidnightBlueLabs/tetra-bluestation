@@ -610,21 +610,23 @@ impl CcBsSubentity {
             },
         );
 
-        // Notify Brew entity about this local call so it can forward to TetraPack
-        // if the group is subscribed
-        let notify = SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Brew,
-            dltime: message.dltime,
-            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
-                call_id: circuit.call_id,
-                source_issi: calling_party.ssi,
-                dest_gssi,
-                ts: circuit.ts,
-            }),
-        };
-        queue.push_back(notify);
+        // Notify Brew entity about this local call if Brew is loaded.
+        // It can then forward to TetraPack if the group is subscribed
+        if self.config.config().brew.is_some() {
+            let msg = SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: message.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                    call_id: circuit.call_id,
+                    source_issi: calling_party.ssi,
+                    dest_gssi,
+                    ts: circuit.ts,
+                }),
+            };
+            queue.push_back(msg);
+        }
     }
 
     pub fn route_xx_deliver(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
@@ -765,15 +767,17 @@ impl CcBsSubentity {
             self.release_timeslot(ts);
 
             // Notify Brew only for local calls
-            if is_local {
-                let notify = SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Brew,
-                    dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
-                };
-                queue.push_back(notify);
+            if self.config.config().brew.is_some() {
+                if is_local {
+                    let notify = SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Brew,
+                        dltime: self.dltime,
+                        msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
+                    };
+                    queue.push_back(notify);
+                }
             }
         }
 
@@ -893,14 +897,16 @@ impl CcBsSubentity {
         queue.push_back(msg);
 
         // Notify Brew to stop forwarding audio for local calls
-        if is_local {
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::LocalCallTxStopped { call_id, ts }),
-            });
+        if self.config.config().brew.is_some() {
+            if is_local {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::LocalCallTxStopped { call_id, ts }),
+                });
+            }
         }
     }
 
@@ -975,23 +981,25 @@ impl CcBsSubentity {
         queue.push_back(msg);
 
         // Notify Brew only for local calls (speaker change = new LocalCallStart for new speaker)
-        let Some(call) = self.active_calls.get(&call_id) else {
-            return;
-        };
-        if matches!(call.origin, CallOrigin::Local { .. }) {
-            let notify = SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
-                    call_id,
-                    source_issi: requesting_party.ssi,
-                    dest_gssi: dest_addr.ssi,
-                    ts: call.ts,
-                }),
+        if self.config.config().brew.is_some() {
+            let Some(call) = self.active_calls.get(&call_id) else {
+                return;
             };
-            queue.push_back(notify);
+            if matches!(call.origin, CallOrigin::Local { .. }) {
+                let notify = SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                        call_id,
+                        source_issi: requesting_party.ssi,
+                        dest_gssi: dest_addr.ssi,
+                        ts: call.ts,
+                    }),
+                };
+                queue.push_back(notify);
+            }
         }
     }
 
@@ -1077,19 +1085,20 @@ impl CcBsSubentity {
             self.send_d_tx_granted_facch(queue, call_id_val, source_issi, dest_gssi, ts);
 
             // Respond to Brew with existing call resources
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Brew,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
-                    brew_uuid,
-                    call_id: call_id_val,
-                    ts,
-                    usage,
-                }),
-            });
-            return;
+            if self.config.config().brew.is_some() {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
+                        brew_uuid,
+                        call_id: call_id_val,
+                        ts,
+                        usage,
+                    }),
+                });
+            }
         }
 
         // New network call - allocate circuit
@@ -1223,18 +1232,20 @@ impl CcBsSubentity {
         );
 
         // Respond to Brew with allocated resources
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Brew,
-            dltime: self.dltime,
-            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
-                brew_uuid,
-                call_id,
-                ts,
-                usage,
-            }),
-        });
+        if self.config.config().brew.is_some() {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
+                    brew_uuid,
+                    call_id,
+                    ts,
+                    usage,
+                }),
+            });
+        }
     }
 
     /// Handle network call end request

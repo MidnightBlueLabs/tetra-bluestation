@@ -34,9 +34,9 @@ pub struct CfgBrewDto {
     /// Use TLS (wss:// / https://)
     pub tls: bool,
     /// Optional username for HTTP Digest auth
-    pub username: Option<String>,
+    pub username: u32,
     /// Optional password for HTTP Digest auth
-    pub password: Option<String>,
+    pub password: String,
     /// ISSI to register with the TetraPack server
     pub issi: u32,
     /// GSSIs (group IDs) to affiliate to
@@ -63,8 +63,8 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         host: src.host,
         port: src.port,
         tls: src.tls,
-        username: src.username,
-        password: src.password,
+        username: Some(src.username.to_string()),
+        password: Some(src.password),
         issi: src.issi,
         groups: src.groups,
         reconnect_delay_secs: src.reconnect_delay_secs,

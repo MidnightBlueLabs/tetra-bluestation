@@ -1205,18 +1205,20 @@ impl UmacBs {
                 let ts = prim.ts;
                 let data = prim.data;
 
-                // Forward UL voice to upper layers (Brew entity)
-                if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
-                    let fwd = SapMsg {
-                        sap: Sap::TmdSap,
-                        src: TetraEntity::Umac,
-                        dest: TetraEntity::Brew,
-                        dltime,
-                        msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts, data: data.clone() }),
-                    };
-                    queue.push_back(fwd);
-                } else {
-                    tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to Brew", ts);
+                // Forward UL voice to Brew (User plane) if loaded
+                if self.config.config().brew.is_some() {
+                    if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+                        let msg = SapMsg {
+                            sap: Sap::TmdSap,
+                            src: TetraEntity::Umac,
+                            dest: TetraEntity::Brew,
+                            dltime,
+                            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts, data: data.clone() }),
+                        };
+                        queue.push_back(msg);
+                    } else {
+                        tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to Brew", ts);
+                    }
                 }
 
                 // Loopback only if there's an active DL circuit on this timeslot
