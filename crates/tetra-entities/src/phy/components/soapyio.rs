@@ -4,16 +4,16 @@ use tetra_config::SharedConfig;
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDevError;
 
 use super::dsp_types;
-use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 use super::dsp_types::*;
 use super::soapy_defaults::SdrSettings;
+use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 
 type StreamType = ComplexSample;
 
 #[derive(Debug)]
 pub enum Mode {
     Bs,
-    Ms, 
+    Ms,
     Mon,
 }
 
@@ -25,8 +25,8 @@ pub struct RxResult {
 }
 
 pub struct SoapyIo {
-    rx_ch:  usize,
-    tx_ch:  usize,
+    rx_ch: usize,
+    tx_ch: usize,
     rx_fs: f64,
     tx_fs: f64,
     /// Timestamp for the first sample read from SDR.
@@ -42,9 +42,9 @@ pub struct SoapyIo {
 
     dev: soapysdr::Device,
     /// Receive stream. None if receiving is disabled.
-    rx:  Option<soapysdr::RxStream<StreamType>>,
+    rx: Option<soapysdr::RxStream<StreamType>>,
     /// Transmit stream. None if transmitting is disabled.
-    tx:  Option<soapysdr::TxStream<StreamType>>,
+    tx: Option<soapysdr::TxStream<StreamType>>,
 }
 
 /// It is annoying to repeat error handling so do that in a macro.
@@ -52,43 +52,45 @@ pub struct SoapyIo {
 macro_rules! soapycheck {
     ($text:literal, $soapysdr_call:expr) => {
         match $soapysdr_call {
-            Ok(ret) => { ret },
+            Ok(ret) => ret,
             Err(err) => {
                 tracing::error!("SoapySDR: Failed to {}: {}", $text, err);
                 return Err(err);
             }
         }
-    }
+    };
 }
 
 impl SoapyIo {
-
     /// Get gain value from config or use default value from SdrSettings
     fn get_gain_or_default(gain_name: &str, cfg_val: Option<f64>, defaults: &SdrSettings) -> (String, f64) {
         if let Some(val) = cfg_val {
             (gain_name.to_string(), val)
         } else {
-            defaults.rx_gain.iter()
+            defaults
+                .rx_gain
+                .iter()
                 .find(|(name, _)| name == gain_name)
                 .cloned()
                 .unwrap_or_else(|| (gain_name.to_string(), 0.0))
         }
     }
 
-    pub fn new(
-        cfg: &SharedConfig, 
-        mode: Mode
-    ) -> Result<Self, soapysdr::Error> {
+    pub fn new(cfg: &SharedConfig, mode: Mode) -> Result<Self, soapysdr::Error> {
         let rx_ch = 0;
         let tx_ch = 0;
         let mut use_get_hardware_time = true;
 
         let binding = cfg.config();
-        let soapy_cfg = binding.phy_io.soapysdr.as_ref().expect("SoapySdr config must be set for SoapySdr PhyIo");
+        let soapy_cfg = binding
+            .phy_io
+            .soapysdr
+            .as_ref()
+            .expect("SoapySdr config must be set for SoapySdr PhyIo");
         let driver = soapy_cfg.io_cfg.get_soapy_driver_name();
         let dev_args_str = &[("driver", driver)];
-        
-        // Get PPM corrected freqs  
+
+        // Get PPM corrected freqs
         let (dl_corrected, _) = soapy_cfg.dl_freq_corrected();
         let (ul_corrected, _) = soapy_cfg.ul_freq_corrected();
 
@@ -120,8 +122,7 @@ impl SoapyIo {
             }
         }
 
-        let dev = soapycheck!("open SoapySDR device",
-            soapysdr::Device::new(dev_args));
+        let dev = soapycheck!("open SoapySDR device", soapysdr::Device::new(dev_args));
 
         let rx_enabled = rx_freq.is_some();
         let tx_enabled = tx_freq.is_some();
@@ -130,7 +131,7 @@ impl SoapyIo {
         let driver_key = dev.driver_key().unwrap_or_default();
         let hardware_key = dev.hardware_key().unwrap_or_default();
         let mut sdr_settings = SdrSettings::get_defaults(&driver_key, &hardware_key);
-        
+
         // Apply user configuration overrides based on driver type
         let driver = soapy_cfg.io_cfg.get_soapy_driver_name();
         match driver {
@@ -143,7 +144,7 @@ impl SoapyIo {
                     if let Some(ref ant) = cfg.tx_ant {
                         sdr_settings.tx_ant = Some(ant.clone());
                     }
-                    
+
                     // Override gain settings
                     let mut rx_gains = Vec::new();
                     rx_gains.push(Self::get_gain_or_default("PGA", cfg.rx_gain_pga, &sdr_settings));
@@ -163,14 +164,14 @@ impl SoapyIo {
                     if let Some(ref ant) = cfg.tx_ant {
                         sdr_settings.tx_ant = Some(ant.clone());
                     }
-                    
+
                     // Override gain settings
                     let mut rx_gains = Vec::new();
                     rx_gains.push(Self::get_gain_or_default("LNA", cfg.rx_gain_lna, &sdr_settings));
                     rx_gains.push(Self::get_gain_or_default("TIA", cfg.rx_gain_tia, &sdr_settings));
                     rx_gains.push(Self::get_gain_or_default("PGA", cfg.rx_gain_pga, &sdr_settings));
                     sdr_settings.rx_gain = rx_gains;
-                    
+
                     let mut tx_gains = Vec::new();
                     tx_gains.push(Self::get_gain_or_default("PAD", cfg.tx_gain_pad, &sdr_settings));
                     tx_gains.push(Self::get_gain_or_default("IAMP", cfg.tx_gain_iamp, &sdr_settings));
@@ -186,13 +187,13 @@ impl SoapyIo {
                     if let Some(ref ant) = cfg.tx_ant {
                         sdr_settings.tx_ant = Some(ant.clone());
                     }
-                    
+
                     // Override gain settings
                     let mut rx_gains = Vec::new();
                     rx_gains.push(Self::get_gain_or_default("LNA", cfg.rx_gain_lna, &sdr_settings));
                     rx_gains.push(Self::get_gain_or_default("PGA", cfg.rx_gain_pga, &sdr_settings));
                     sdr_settings.rx_gain = rx_gains;
-                    
+
                     let mut tx_gains = Vec::new();
                     tx_gains.push(Self::get_gain_or_default("DAC", cfg.tx_gain_dac, &sdr_settings));
                     tx_gains.push(Self::get_gain_or_default("MIXER", cfg.tx_gain_mixer, &sdr_settings));
@@ -204,59 +205,65 @@ impl SoapyIo {
             }
         }
 
-        tracing::info!("Got driver key '{}' hardware_key '{}', using settings for {}", 
-                driver_key, hardware_key, sdr_settings.name);
+        tracing::info!(
+            "Got driver key '{}' hardware_key '{}', using settings for {}",
+            driver_key,
+            hardware_key,
+            sdr_settings.name
+        );
 
         let samp_rate = match mode {
             Mode::Bs | Mode::Ms => sdr_settings.fs_bs,
-            Mode::Mon => sdr_settings.fs_monitor
+            Mode::Mon => sdr_settings.fs_monitor,
         };
         let mut rx_fs: f64 = 0.0;
         if rx_enabled {
-            soapycheck!("set RX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, samp_rate));
+            soapycheck!("set RX sample rate", dev.set_sample_rate(soapysdr::Direction::Rx, rx_ch, samp_rate));
             // Read the actual sample rate obtained and store it
             // to avoid having to read it again every time it is needed.
-            rx_fs = soapycheck!("get RX sample rate",
-                dev.sample_rate(soapysdr::Direction::Rx, rx_ch));
+            rx_fs = soapycheck!("get RX sample rate", dev.sample_rate(soapysdr::Direction::Rx, rx_ch));
         }
         let mut tx_fs: f64 = 0.0;
         if tx_enabled {
-            soapycheck!("set TX sample rate",
-                dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, samp_rate));
-            tx_fs = soapycheck!("get TX sample rate",
-                dev.sample_rate(soapysdr::Direction::Tx, tx_ch));
+            soapycheck!("set TX sample rate", dev.set_sample_rate(soapysdr::Direction::Tx, tx_ch, samp_rate));
+            tx_fs = soapycheck!("get TX sample rate", dev.sample_rate(soapysdr::Direction::Tx, tx_ch));
         }
 
         if rx_enabled {
             // If rx_enabled is true, we already know sdr_rx_freq is not None,
             // so unwrap is fine here.
-            soapycheck!("set RX center frequency",
-            dev.set_frequency(soapysdr::Direction::Rx, rx_ch, rx_freq.unwrap(), soapysdr::Args::new()));
+            soapycheck!(
+                "set RX center frequency",
+                dev.set_frequency(soapysdr::Direction::Rx, rx_ch, rx_freq.unwrap(), soapysdr::Args::new())
+            );
 
             if let Some(ref ant) = sdr_settings.rx_ant {
-                soapycheck!("set RX antenna",
-                    dev.set_antenna(soapysdr::Direction::Rx, rx_ch, ant.as_str()));
+                soapycheck!("set RX antenna", dev.set_antenna(soapysdr::Direction::Rx, rx_ch, ant.as_str()));
             }
 
             for (name, gain) in &sdr_settings.rx_gain {
-                soapycheck!("set RX gain",
-                    dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str(), *gain));
+                soapycheck!(
+                    "set RX gain",
+                    dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str(), *gain)
+                );
             }
         }
 
         if tx_enabled {
-            soapycheck!("set TX center frequency",
-            dev.set_frequency(soapysdr::Direction::Tx, tx_ch, tx_freq.unwrap(), soapysdr::Args::new()));
+            soapycheck!(
+                "set TX center frequency",
+                dev.set_frequency(soapysdr::Direction::Tx, tx_ch, tx_freq.unwrap(), soapysdr::Args::new())
+            );
 
             if let Some(ref ant) = sdr_settings.tx_ant {
-                soapycheck!("set TX antenna",
-                    dev.set_antenna(soapysdr::Direction::Tx, tx_ch, ant.as_str()));
+                soapycheck!("set TX antenna", dev.set_antenna(soapysdr::Direction::Tx, tx_ch, ant.as_str()));
             }
 
             for (name, gain) in &sdr_settings.tx_gain {
-                soapycheck!("set TX gain",
-                    dev.set_gain_element(soapysdr::Direction::Tx, tx_ch, name.as_str(), *gain));
+                soapycheck!(
+                    "set TX gain",
+                    dev.set_gain_element(soapysdr::Direction::Tx, tx_ch, name.as_str(), *gain)
+                );
             }
         }
 
@@ -272,7 +279,7 @@ impl SoapyIo {
             Mode::Bs | Mode::Ms => {
                 // Minimize latency
                 rx_args.set("latency", "0");
-            },
+            }
             Mode::Mon => {
                 // Maximize throughput with high sample rates
                 rx_args.set("latency", "1");
@@ -280,24 +287,20 @@ impl SoapyIo {
         };
 
         let mut rx = if rx_enabled {
-            Some(soapycheck!("setup RX stream",
-                dev.rx_stream_args(&[rx_ch], rx_args)))
+            Some(soapycheck!("setup RX stream", dev.rx_stream_args(&[rx_ch], rx_args)))
         } else {
             None
         };
         let mut tx = if tx_enabled {
-            Some(soapycheck!("setup TX stream",
-                dev.tx_stream_args(&[tx_ch], tx_args)))
+            Some(soapycheck!("setup TX stream", dev.tx_stream_args(&[tx_ch], tx_args)))
         } else {
             None
         };
         if let Some(rx) = &mut rx {
-            soapycheck!("activate RX stream",
-                rx.activate(None));
+            soapycheck!("activate RX stream", rx.activate(None));
         }
         if let Some(tx) = &mut tx {
-            soapycheck!("activate TX stream",
-                tx.activate(None));
+            soapycheck!("activate TX stream", tx.activate(None));
         }
         Ok(Self {
             rx_ch,
@@ -314,8 +317,8 @@ impl SoapyIo {
     }
 
     pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {
-        if let Some(rx) = &mut self.rx {       
-            // RX is enabled     
+        if let Some(rx) = &mut self.rx {
+            // RX is enabled
             match rx.read(&mut [buffer], 1000000) {
                 Ok(len) => {
                     // Get timestamp, set initial time if not yet set
@@ -332,11 +335,8 @@ impl SoapyIo {
                     // This is used in case timestamp is missing.
                     self.rx_next_count = count + len as SampleCount;
 
-                    Ok(RxResult {
-                        len,
-                        count
-                    })
-                },
+                    Ok(RxResult { len, count })
+                }
                 Err(_) => Err(RxTxDevError::RxReadError),
             }
         } else {
@@ -348,12 +348,13 @@ impl SoapyIo {
     pub fn transmit(&mut self, buffer: &[StreamType], count: Option<SampleCount>) -> Result<(), RxTxDevError> {
         if let Some(tx) = &mut self.tx {
             if let Some(initial_time) = self.initial_time {
-                tx.write_all(&[buffer],
-                    count.map(|count|
-                        initial_time + ticks_to_time_ns(count, self.tx_fs)
-                    ),
-                    false, 1000000
-                ).map_err(|_| RxTxDevError::RxReadError)
+                tx.write_all(
+                    &[buffer],
+                    count.map(|count| initial_time + ticks_to_time_ns(count, self.tx_fs)),
+                    false,
+                    1000000,
+                )
+                .map_err(|_| RxTxDevError::RxReadError)
             } else {
                 // initial_time is not available, so TX is not possible yet
                 Err(RxTxDevError::RxReadError)
@@ -370,12 +371,11 @@ impl SoapyIo {
 
     /// Current hardware time as RX sample count
     pub fn rx_current_count(&self) -> Result<SampleCount, RxTxDevError> {
-        if !self.rx_enabled() { return Ok(0); }
+        if !self.rx_enabled() {
+            return Ok(0);
+        }
         if self.use_get_hardware_time {
-            Ok(time_ns_to_ticks(
-                self.current_time()? - self.initial_time.unwrap_or(0),
-                self.rx_fs
-            ))
+            Ok(time_ns_to_ticks(self.current_time()? - self.initial_time.unwrap_or(0), self.rx_fs))
         } else {
             Ok(self.rx_next_count - 1)
         }
@@ -383,12 +383,11 @@ impl SoapyIo {
 
     /// Current hardware time as TX sample count
     pub fn tx_current_count(&self) -> Result<SampleCount, RxTxDevError> {
-        if !self.tx_enabled() { return Ok(0); }
+        if !self.tx_enabled() {
+            return Ok(0);
+        }
         if self.use_get_hardware_time {
-            Ok(time_ns_to_ticks(
-                self.current_time()? - self.initial_time.unwrap_or(0),
-                self.tx_fs
-            ))
+            Ok(time_ns_to_ticks(self.current_time()? - self.initial_time.unwrap_or(0), self.tx_fs))
         } else {
             // Assumes equal RX and TX sample rates
             // and does not work if RX is disabled.

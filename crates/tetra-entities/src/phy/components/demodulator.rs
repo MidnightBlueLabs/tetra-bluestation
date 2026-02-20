@@ -13,7 +13,6 @@ use super::fir;
 use super::history;
 use super::modem_common::*;
 
-
 /// Samples per symbol
 pub const SPS: usize = 4;
 
@@ -70,13 +69,12 @@ pub struct Demodulator {
     subslot1: SlotBurstFinder,
     subslot2: SlotBurstFinder,
 
-
     matched_filter: fir::FirComplexSym,
 
-    past_samples: history::History<ComplexSample, {SPS * 512}>,
+    past_samples: history::History<ComplexSample, { SPS * 512 }>,
     /// Absolute values of past samples,
     /// used for symbol timing estimation.
-    past_samples_abs: history::History<RealSample, {SPS * 512}>,
+    past_samples_abs: history::History<RealSample, { SPS * 512 }>,
 }
 
 impl Demodulator {
@@ -99,14 +97,13 @@ impl Demodulator {
             subslot2: SlotBurstFinder::new(),
 
             matched_filter: fir::FirComplexSym::new(CHANNEL_FILTER_TAPS.len()),
-            past_samples:     history::History::new(num::zero()),
+            past_samples: history::History::new(num::zero()),
             past_samples_abs: history::History::new(num::zero()),
         };
 
         self_.set_slot_ready_time();
         self_
     }
-
 
     fn add_slots(&mut self, slots: i32) {
         self.set_slot(self.current_slot.add_timeslots(slots));
@@ -142,7 +139,6 @@ impl Demodulator {
         }
     }
 
-
     /// Process one input sample
     pub fn sample(&mut self, input: ComplexSample, sample_counter: SampleCount) {
         // Lost samples during a slot would cause some symbols to be
@@ -153,7 +149,7 @@ impl Demodulator {
         // due to a small number of lost samples.
         let samples_lost = sample_counter - self.next_input_sample_count;
         let samples_to_add = samples_lost.max(0).min(SAMPLES_SLOT);
-        for i in -samples_to_add .. 0 {
+        for i in -samples_to_add..0 {
             self.process_sample(ComplexSample::ZERO, sample_counter + i);
         }
         self.process_sample(input, sample_counter);
@@ -186,14 +182,14 @@ impl Demodulator {
 
             // Slot timing logic for different modes
             match self.mode {
-                Mode::Idle => {},
+                Mode::Idle => {}
                 Mode::DlUnsynchronized => {
                     // When unsynchronized, try demodulating blocks more often
                     // so that they overlap.
                     // TODO: figure out maximum step that still makes sure
                     // a synchronization sequence gets detected in any position.
                     self.slot_ready_time += SAMPLES_SYMBOL * 100;
-                },
+                }
                 Mode::Dl => {
                     // Track slot timing.
                     // If timing seems to off by more than half a sample, adjust slot timing.
@@ -207,28 +203,27 @@ impl Demodulator {
                     }
 
                     self.add_slots(1);
-                },
+                }
                 Mode::Ul => {
                     self.add_slots(1);
-                },
+                }
             }
         }
     }
 
     fn process_past_samples(&mut self) {
         match self.mode {
-            Mode::Idle => {},
+            Mode::Idle => {}
             Mode::Ul => {
                 // Look for a normal uplink burst
                 self.process_slot(SPS * 256, 256, 0);
                 // Look for control uplink bursts in both subslots
                 self.process_slot(SPS * 256, 128, 1);
-                self.process_slot(SPS * 256 - SPS * 255/2, 128, 2);
-            },
+                self.process_slot(SPS * 256 - SPS * 255 / 2, 128, 2);
+            }
             Mode::Dl | Mode::DlUnsynchronized => {
                 self.process_slot(SPS * 256, 256, 0);
-            }
-            // TODO: a shorter window could be used for Mode::DlUnsynchronized
+            } // TODO: a shorter window could be used for Mode::DlUnsynchronized
         }
     }
 
@@ -251,19 +246,17 @@ impl Demodulator {
 
         let bits = &mut burst_finder.bits;
         let mut previous_symbol: Option<ComplexSample> = None;
-        for i in (first_symbol_index..first_symbol_index + SPS*n_symbols).step_by(SPS) {
+        for i in (first_symbol_index..first_symbol_index + SPS * n_symbols).step_by(SPS) {
             // Use fractional part of timing estimate to interpolate between samples.
             // Linear interpolation is not the best choice here but maybe good enough.
-            let symbol =
-                (1.0 - timing_fract) * self.past_samples.delayed(d - i) +
-                timing_fract         * self.past_samples.delayed(d - (i+1));
+            let symbol = (1.0 - timing_fract) * self.past_samples.delayed(d - i) + timing_fract * self.past_samples.delayed(d - (i + 1));
 
             if let Some(previous_symbol) = previous_symbol {
                 // Differential phase demodulation
                 let diff = symbol * previous_symbol.conj();
                 // Make decisions
-                bits.push(if diff.im < 0.0 { 1 } else { 0 } );
-                bits.push(if diff.re < 0.0 { 1 } else { 0 } );
+                bits.push(if diff.im < 0.0 { 1 } else { 0 });
+                bits.push(if diff.re < 0.0 { 1 } else { 0 });
             }
             previous_symbol = Some(symbol);
         }
@@ -276,9 +269,13 @@ impl Demodulator {
                 // Try to find a synchronization training sequence in bits.
                 // Look for sequence only in positions after the nominal position,
                 // so that we can switch to Mode::Dl and still demodulate the burst.
-                let (pos, dist) = find_sequence(&bits[train_consts::SEQ_SYNC_OFFSET+2..], &train_consts::SEQ_SYNC_AS_ARR);
+                let (pos, dist) = find_sequence(&bits[train_consts::SEQ_SYNC_OFFSET + 2..], &train_consts::SEQ_SYNC_AS_ARR);
                 if dist <= SlotBurstFinder::SEQ_SYNC_MAX_ERRS {
-                    tracing::info!("Found synchronization training sequence at {} with {} errors, switching to synchronized mode", pos, dist);
+                    tracing::info!(
+                        "Found synchronization training sequence at {} with {} errors, switching to synchronized mode",
+                        pos,
+                        dist
+                    );
 
                     // Set reference time such that this burst will get demodulated
                     // in slot number 0 after switching to Mode::Dl.
@@ -302,7 +299,7 @@ impl Demodulator {
                     self.slots_since_last_valid_burst = 0;
                     training_sequence_found = true;
                 }
-            },
+            }
             Mode::Dl => {
                 training_sequence_found = burst_finder.check_slot(SlotType::Dl);
 
@@ -320,7 +317,7 @@ impl Demodulator {
 
                 self.demodulated_slot_time = self.current_slot;
                 self.demodulated_slot_available = true;
-            },
+            }
             Mode::Ul => {
                 training_sequence_found = burst_finder.check_slot(if subslot_number == 0 { SlotType::UlFull } else { SlotType::UlSub });
 
@@ -329,10 +326,9 @@ impl Demodulator {
                 // but it seems simpler to do it here.
                 self.demodulated_slot_time = self.current_slot.add_timeslots(-2);
                 self.demodulated_slot_available = true;
-            },
+            }
             Mode::Idle => unreachable!(),
         }
-
 
         if self.mode == Mode::Dl && training_sequence_found {
             // Try to keep symbol timing phase near SPS/2.
@@ -366,17 +362,11 @@ impl Demodulator {
         let mut sum_i: RealSample = 0.0;
         let mut sum_q: RealSample = 0.0;
         for i in (0..n).step_by(SPS) {
-            sum_i +=
-                self.past_samples_abs.delayed(d -  i     ) -
-                self.past_samples_abs.delayed(d - (i + 2));
-            sum_q +=
-                self.past_samples_abs.delayed(d - (i + 1)) -
-                self.past_samples_abs.delayed(d - (i + 3));
+            sum_i += self.past_samples_abs.delayed(d - i) - self.past_samples_abs.delayed(d - (i + 2));
+            sum_q += self.past_samples_abs.delayed(d - (i + 1)) - self.past_samples_abs.delayed(d - (i + 3));
         }
         // Scale result between 0 and SPS.
-        let timing_phase =
-            (sum_q.atan2(sum_i) * (SPS as RealSample / (2.0 * sample_consts::PI)))
-            .rem_euclid(SPS as RealSample);
+        let timing_phase = (sum_q.atan2(sum_i) * (SPS as RealSample / (2.0 * sample_consts::PI))).rem_euclid(SPS as RealSample);
         // rem_euclid may return rhs in some rare cases
         // (see https://doc.rust-lang.org/std/primitive.f32.html#method.rem_euclid )
         // so wrap it to 0 in that case.
@@ -419,13 +409,9 @@ impl Demodulator {
     }
 }
 
-
 fn hamming_distance(a: &[u8], b: &[u8]) -> usize {
-    a.iter().zip(b)
-    .map(|(a_bit, b_bit)| { if a_bit != b_bit { 1 } else { 0 } } )
-    .sum()
+    a.iter().zip(b).map(|(a_bit, b_bit)| if a_bit != b_bit { 1 } else { 0 }).sum()
 }
-
 
 /// Find the position in bits which looks most like the sequence.
 /// Return the position and hamming distance.
@@ -442,7 +428,6 @@ fn find_sequence(bits: &[u8], sequence: &[u8]) -> (usize, usize) {
     }
     (min_pos, min_dist)
 }
-
 
 enum SlotType {
     /// Downlink slot
@@ -512,7 +497,7 @@ impl SlotBurstFinder {
         let max_train_pos = max_burst_pos + train_pos_in_burst;
 
         let train_len = train_bits.len();
-        let (pos, dist) = find_sequence(&self.bits[min_train_pos .. max_train_pos + train_len], train_bits);
+        let (pos, dist) = find_sequence(&self.bits[min_train_pos..max_train_pos + train_len], train_bits);
         if dist <= max_bit_errors && dist < self.train_errs {
             let train_pos = min_train_pos + pos;
             self.burst_pos = train_pos - train_pos_in_burst;
@@ -531,46 +516,64 @@ impl SlotBurstFinder {
         match slot_type {
             SlotType::Dl => {
                 if self.check_sequence(
-                    train_consts::SEQ_SYNC_OFFSET, 510,
+                    train_consts::SEQ_SYNC_OFFSET,
+                    510,
                     TrainingSequence::SyncTrainSeq,
                     &train_consts::SEQ_SYNC_AS_ARR[..],
                     Self::SEQ_SYNC_MAX_ERRS,
-                ) { return true; }
+                ) {
+                    return true;
+                }
                 if self.check_sequence(
-                    train_consts::SEQ_NORM_DL_OFFSET, 510,
+                    train_consts::SEQ_NORM_DL_OFFSET,
+                    510,
                     TrainingSequence::NormalTrainSeq1,
                     &train_consts::SEQ_NORM1_AS_ARR[..],
                     Self::SEQ_NORM_DL_MAX_ERRS,
-                ) { return true; };
+                ) {
+                    return true;
+                };
                 if self.check_sequence(
-                    train_consts::SEQ_NORM_DL_OFFSET, 510,
+                    train_consts::SEQ_NORM_DL_OFFSET,
+                    510,
                     TrainingSequence::NormalTrainSeq2,
                     &train_consts::SEQ_NORM2_AS_ARR[..],
                     Self::SEQ_NORM_DL_MAX_ERRS,
-                ) { return true; };
-            },
+                ) {
+                    return true;
+                };
+            }
             SlotType::UlFull => {
                 if self.check_sequence(
-                    4+216, 4+216+22+216+4,
+                    4 + 216,
+                    4 + 216 + 22 + 216 + 4,
                     TrainingSequence::NormalTrainSeq1,
                     &train_consts::SEQ_NORM1_AS_ARR[..],
                     Self::SEQ_NORM_UL_MAX_ERRS,
-                ) { return true };
+                ) {
+                    return true;
+                };
                 if self.check_sequence(
-                    4+216, 4+216+22+216+4,
+                    4 + 216,
+                    4 + 216 + 22 + 216 + 4,
                     TrainingSequence::NormalTrainSeq2,
                     &train_consts::SEQ_NORM2_AS_ARR[..],
                     Self::SEQ_NORM_UL_MAX_ERRS,
-                ) { return true; };
-            },
+                ) {
+                    return true;
+                };
+            }
             SlotType::UlSub => {
                 if self.check_sequence(
-                    4+84, 4+84+30+84+4,
+                    4 + 84,
+                    4 + 84 + 30 + 84 + 4,
                     TrainingSequence::ExtendedTrainSeq,
                     &train_consts::SEQ_EXT_AS_ARR[..],
                     Self::SEQ_EXT_MAX_ERRS,
-                ) { return true };
-            },
+                ) {
+                    return true;
+                };
+            }
         }
         false
     }
@@ -578,7 +581,7 @@ impl SlotBurstFinder {
     fn get_burst<'a>(&'a mut self) -> RxBurstBits<'a> {
         RxBurstBits {
             train_type: self.train_type,
-            bits: &self.bits[self.burst_pos .. self.burst_pos + self.burst_len]
+            bits: &self.bits[self.burst_pos..self.burst_pos + self.burst_len],
         }
     }
 }

@@ -35,18 +35,10 @@ pub enum BrewEvent {
     GroupCallEnd { uuid: Uuid, cause: u8 },
 
     /// Voice frame received (ACELP traffic)
-    VoiceFrame {
-        uuid: Uuid,
-        length_bits: u16,
-        data: Vec<u8>,
-    },
+    VoiceFrame { uuid: Uuid, length_bits: u16, data: Vec<u8> },
 
     /// Subscriber event received
-    SubscriberEvent {
-        msg_type: u8,
-        issi: u32,
-        groups: Vec<u32>,
-    },
+    SubscriberEvent { msg_type: u8, issi: u32, groups: Vec<u32> },
 
     /// Error from server
     ServerError { error_type: u8, data: Vec<u8> },
@@ -77,11 +69,7 @@ pub enum BrewCommand {
     },
 
     /// Send a voice frame to TetraPack (ACELP data from UL)
-    SendVoiceFrame {
-        uuid: Uuid,
-        length_bits: u16,
-        data: Vec<u8>,
-    },
+    SendVoiceFrame { uuid: Uuid, length_bits: u16, data: Vec<u8> },
 
     /// Send GROUP_IDLE to TetraPack (transmission ended)
     SendGroupIdle { uuid: Uuid, cause: u8 },
@@ -149,9 +137,7 @@ impl Write for BrewStream {
 /// Build a rustls ClientConfig with system root certificates
 fn build_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
     let mut root_store = rustls::RootCertStore::empty();
-    for cert in
-        rustls_native_certs::load_native_certs().map_err(|e| format!("load certs: {}", e))?
-    {
+    for cert in rustls_native_certs::load_native_certs().map_err(|e| format!("load certs: {}", e))? {
         let _ = root_store.add(cert);
     }
     let config = rustls::ClientConfig::builder()
@@ -173,8 +159,7 @@ fn connect_stream(host: &str, port: u16, use_tls: bool) -> Result<BrewStream, St
 
     tracing::debug!("BrewWorker: resolved {} -> {}", addr, socket_addr);
 
-    let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10))
-        .map_err(|e| format!("TCP connect failed: {}", e))?;
+    let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10)).map_err(|e| format!("TCP connect failed: {}", e))?;
 
     tcp.set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| format!("set read timeout: {}", e))?;
@@ -185,8 +170,7 @@ fn connect_stream(host: &str, port: u16, use_tls: bool) -> Result<BrewStream, St
             .to_string()
             .try_into()
             .map_err(|e| format!("invalid server name '{}': {}", host, e))?;
-        let tls_conn = rustls::ClientConnection::new(tls_config, server_name)
-            .map_err(|e| format!("TLS init failed: {}", e))?;
+        let tls_conn = rustls::ClientConnection::new(tls_config, server_name).map_err(|e| format!("TLS init failed: {}", e))?;
         let tls_stream = rustls::StreamOwned::new(tls_conn, tcp);
         tracing::debug!("BrewWorker: TLS connected to {}", addr);
         Ok(BrewStream::Tls(tls_stream))
@@ -243,10 +227,7 @@ fn build_digest_response(
     );
 
     let response_hash = if qop.contains("auth") {
-        md5_hex(&format!(
-            "{}:{}:{}:{}:{}:{}",
-            ha1, nonce, nc, cnonce, "auth", ha2
-        ))
+        md5_hex(&format!("{}:{}:{}:{}:{}:{}", ha1, nonce, nc, cnonce, "auth", ha2))
     } else {
         md5_hex(&format!("{}:{}:{}", ha1, nonce, ha2))
     };
@@ -275,11 +256,7 @@ pub struct BrewWorker {
 }
 
 impl BrewWorker {
-    pub fn new(
-        config: BrewConfig,
-        event_sender: Sender<BrewEvent>,
-        command_receiver: Receiver<BrewCommand>,
-    ) -> Self {
+    pub fn new(config: BrewConfig, event_sender: Sender<BrewEvent>, command_receiver: Receiver<BrewCommand>) -> Self {
         Self {
             config,
             event_sender,
@@ -290,12 +267,7 @@ impl BrewWorker {
     /// Main worker entry point — runs until disconnect or fatal error
     pub fn run(&mut self) {
         let scheme = if self.config.tls { "wss" } else { "ws" };
-        tracing::info!(
-            "BrewWorker starting, server {}://{}:{}",
-            scheme,
-            self.config.host,
-            self.config.port
-        );
+        tracing::info!("BrewWorker starting, server {}://{}:{}", scheme, self.config.host, self.config.port);
 
         loop {
             // Attempt connection
@@ -307,10 +279,7 @@ impl BrewWorker {
                 Err(e) => {
                     tracing::error!("BrewWorker: connection error: {}", e);
                     let _ = self.event_sender.send(BrewEvent::Disconnected(e.clone()));
-                    tracing::info!(
-                        "BrewWorker: reconnecting in {:?}",
-                        self.config.reconnect_delay
-                    );
+                    tracing::info!("BrewWorker: reconnecting in {:?}", self.config.reconnect_delay);
                     std::thread::sleep(self.config.reconnect_delay);
                 }
             }
@@ -340,9 +309,7 @@ impl BrewWorker {
             .map_err(|e| format!("HTTP write failed: {}", e))?;
 
         let mut response_buf = vec![0u8; 4096];
-        let n = stream
-            .read(&mut response_buf)
-            .map_err(|e| format!("HTTP read failed: {}", e))?;
+        let n = stream.read(&mut response_buf).map_err(|e| format!("HTTP read failed: {}", e))?;
 
         if n == 0 {
             return Err("empty HTTP response".to_string());
@@ -373,11 +340,7 @@ impl BrewWorker {
                 .find(|l| l.to_lowercase().starts_with("www-authenticate"))
                 .ok_or("401 but no WWW-Authenticate header")?;
 
-            let challenge = www_auth
-                .splitn(2, ':')
-                .nth(1)
-                .ok_or("malformed WWW-Authenticate")?
-                .trim();
+            let challenge = www_auth.splitn(2, ':').nth(1).ok_or("malformed WWW-Authenticate")?.trim();
 
             if !challenge.to_lowercase().starts_with("digest") {
                 return Err(format!("unsupported auth scheme: {}", challenge));
@@ -386,9 +349,7 @@ impl BrewWorker {
             let (username, password) = match (&self.config.username, &self.config.password) {
                 (Some(u), Some(p)) => (u.as_str(), p.as_str()),
                 _ => {
-                    return Err(
-                        "server requires auth but no username/password configured".to_string()
-                    );
+                    return Err("server requires auth but no username/password configured".to_string());
                 }
             };
 
@@ -400,9 +361,7 @@ impl BrewWorker {
 
             tracing::debug!("BrewWorker: digest realm={} qop={}", realm, qop);
 
-            let auth_header = build_digest_response(
-                username, password, realm, nonce, qop, "/brew/", "GET", opaque,
-            );
+            let auth_header = build_digest_response(username, password, realm, nonce, qop, "/brew/", "GET", opaque);
 
             // ── Second request (authenticated) ──
             // Drop old stream, open new connection
@@ -422,9 +381,7 @@ impl BrewWorker {
                 .map_err(|e| format!("auth HTTP write failed: {}", e))?;
 
             let mut auth_buf = vec![0u8; 4096];
-            let n2 = stream2
-                .read(&mut auth_buf)
-                .map_err(|e| format!("auth HTTP read failed: {}", e))?;
+            let n2 = stream2.read(&mut auth_buf).map_err(|e| format!("auth HTTP read failed: {}", e))?;
 
             if n2 == 0 {
                 return Err("empty auth HTTP response".to_string());
@@ -466,10 +423,7 @@ impl BrewWorker {
 
         // Step 2: Connect WebSocket to the endpoint
         let scheme = if self.config.tls { "wss" } else { "ws" };
-        let ws_url = format!(
-            "{}://{}:{}{}",
-            scheme, self.config.host, self.config.port, endpoint
-        );
+        let ws_url = format!("{}://{}:{}{}", scheme, self.config.host, self.config.port, endpoint);
         tracing::info!("BrewWorker: connecting WebSocket to {}", ws_url);
 
         // Build request with User-Agent and subprotocol headers.
@@ -482,16 +436,12 @@ impl BrewWorker {
             .header("Sec-WebSocket-Protocol", "brew")
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
-            .header(
-                "Sec-WebSocket-Key",
-                tungstenite::handshake::client::generate_key(),
-            )
+            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
             .header("Sec-WebSocket-Version", "13")
             .body(())
             .map_err(|e| format!("failed to build WS request: {}", e))?;
 
-        let (mut ws, _response) = tungstenite::connect(request)
-            .map_err(|e| format!("WebSocket connect failed: {}", e))?;
+        let (mut ws, _response) = tungstenite::connect(request).map_err(|e| format!("WebSocket connect failed: {}", e))?;
 
         tracing::info!("BrewWorker: WebSocket connected");
         let _ = self.event_sender.send(BrewEvent::Connected);
@@ -518,10 +468,7 @@ impl BrewWorker {
     }
 
     /// Send initial registration and group affiliation
-    fn send_registration(
-        &self,
-        ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    ) -> Result<(), String> {
+    fn send_registration(&self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
         // Register ISSI
         let reg_msg = build_subscriber_register(self.config.issi, &[]);
         ws.send(Message::Binary(reg_msg.into()))
@@ -539,10 +486,7 @@ impl BrewWorker {
     }
 
     /// Main WebSocket message processing loop
-    fn message_loop(
-        &mut self,
-        ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    ) -> Result<(), String> {
+    fn message_loop(&mut self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
         loop {
             // ── Check for incoming WebSocket messages ──
             match ws.read() {
@@ -563,8 +507,7 @@ impl BrewWorker {
                     // Text or other — unexpected for Brew
                 }
                 Err(tungstenite::Error::Io(ref e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                    if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut =>
                 {
                     // No data available — normal for non-blocking
                 }
@@ -600,11 +543,7 @@ impl BrewWorker {
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send affiliation: {}", e);
                         } else {
-                            tracing::debug!(
-                                "BrewWorker: sent AFFILIATE issi={} groups={:?}",
-                                issi,
-                                groups
-                            );
+                            tracing::debug!("BrewWorker: sent AFFILIATE issi={} groups={:?}", issi, groups);
                         }
                     }
                     BrewCommand::DeaffiliateGroups { issi, groups } => {
@@ -612,11 +551,7 @@ impl BrewWorker {
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
                         } else {
-                            tracing::debug!(
-                                "BrewWorker: sent DEAFFILIATE issi={} groups={:?}",
-                                issi,
-                                groups
-                            );
+                            tracing::debug!("BrewWorker: sent DEAFFILIATE issi={} groups={:?}", issi, groups);
                         }
                     }
                     BrewCommand::SendGroupTx {
@@ -630,19 +565,10 @@ impl BrewWorker {
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send GROUP_TX: {}", e);
                         } else {
-                            tracing::debug!(
-                                "BrewWorker: sent GROUP_TX uuid={} src={} dst={}",
-                                uuid,
-                                source_issi,
-                                dest_gssi
-                            );
+                            tracing::debug!("BrewWorker: sent GROUP_TX uuid={} src={} dst={}", uuid, source_issi, dest_gssi);
                         }
                     }
-                    BrewCommand::SendVoiceFrame {
-                        uuid,
-                        length_bits,
-                        data,
-                    } => {
+                    BrewCommand::SendVoiceFrame { uuid, length_bits, data } => {
                         let msg = build_voice_frame(&uuid, length_bits, &data);
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send voice frame: {}", e);
@@ -653,11 +579,7 @@ impl BrewWorker {
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send GROUP_IDLE: {}", e);
                         } else {
-                            tracing::debug!(
-                                "BrewWorker: sent GROUP_IDLE uuid={} cause={}",
-                                uuid,
-                                cause
-                            );
+                            tracing::debug!("BrewWorker: sent GROUP_IDLE uuid={} cause={}", uuid, cause);
                         }
                     }
                     BrewCommand::Disconnect => {
@@ -706,19 +628,11 @@ impl BrewWorker {
                     });
                 }
                 BrewMessage::Service(svc) => {
-                    tracing::debug!(
-                        "BrewWorker: service type={}: {}",
-                        svc.service_type,
-                        svc.json_data
-                    );
+                    tracing::debug!("BrewWorker: service type={}: {}", svc.service_type, svc.json_data);
                 }
             },
             Err(e) => {
-                tracing::warn!(
-                    "BrewWorker: failed to parse message ({} bytes): {}",
-                    data.len(),
-                    e
-                );
+                tracing::warn!("BrewWorker: failed to parse message ({} bytes): {}", data.len(), e);
             }
         }
     }
@@ -746,43 +660,23 @@ impl BrewWorker {
                 }
             }
             CALL_STATE_GROUP_IDLE => {
-                let cause = if let BrewCallPayload::Cause(c) = cc.payload {
-                    c
-                } else {
-                    0
-                };
-                tracing::info!(
-                    "BrewWorker: GROUP_IDLE uuid={} cause={}",
-                    cc.identifier,
-                    cause
-                );
+                let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
+                tracing::info!("BrewWorker: GROUP_IDLE uuid={} cause={}", cc.identifier, cause);
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
                     cause,
                 });
             }
             CALL_STATE_CALL_RELEASE => {
-                let cause = if let BrewCallPayload::Cause(c) = cc.payload {
-                    c
-                } else {
-                    0
-                };
-                tracing::info!(
-                    "BrewWorker: CALL_RELEASE uuid={} cause={}",
-                    cc.identifier,
-                    cause
-                );
+                let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
+                tracing::info!("BrewWorker: CALL_RELEASE uuid={} cause={}", cc.identifier, cause);
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
                     cause,
                 });
             }
             state => {
-                tracing::debug!(
-                    "BrewWorker: unhandled call state {} uuid={}",
-                    state,
-                    cc.identifier
-                );
+                tracing::debug!("BrewWorker: unhandled call state {} uuid={}", state, cc.identifier);
             }
         }
     }
@@ -809,11 +703,7 @@ impl BrewWorker {
                 tracing::debug!("BrewWorker: SDS report uuid={}", frame.identifier);
             }
             ft => {
-                tracing::debug!(
-                    "BrewWorker: unhandled frame type {} uuid={}",
-                    ft,
-                    frame.identifier
-                );
+                tracing::debug!("BrewWorker: unhandled frame type {} uuid={}", ft, frame.identifier);
             }
         }
     }

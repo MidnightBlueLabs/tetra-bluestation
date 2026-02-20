@@ -4,29 +4,29 @@ pub type Todo = i32;
 // SAPs as defined in the standard
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Sap {
-    TpSap, // Phy/LMAC
+    TpSap,  // Phy/LMAC
     TpcSap, // Phy/LMAC mgmt
 
     /// LMAC/UMAC
-    TmvSap, 
+    TmvSap,
 
     /// UMAC/LLC
-    TmaSap, 
+    TmaSap,
     // TmbSap, // UMAC/ TLB-SAP, broadcast, merged with TLB-SAP in TLMB-SAP
     // TmcSap, // UMAC/ TLC-SAP, mgmt, merged with TLC-SAP in TLMC-SAP
     TmdSap, // Uplane
 
     /// LLC/MLE
-    TlaSap, 
+    TlaSap,
     /// LLC/MLE broadcast, merged TMB-SAP and TLB-SAP
-    TlmbSap, 
+    TlmbSap,
     /// LLC/MLE mgmt, merged TMC-SAP and TLC-SAP
     TlmcSap,
 
     /// MLE/MM
-    LmmSap,  
+    LmmSap,
     /// MLE/CMCE
-    LcmcSap, 
+    LcmcSap,
 
     /// MS CMCE -> User
     TnccSap,
@@ -42,5 +42,5 @@ pub enum Sap {
     TnmmSap,
 
     /// Custom SAP for inter-entity control messages
-    Control
+    Control,
 }

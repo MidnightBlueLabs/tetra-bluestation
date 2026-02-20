@@ -2,7 +2,6 @@ use core::fmt;
 
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
-
 /// Clause 21.4.4.3 ACCESS-DEFINE
 #[derive(Debug, Clone)]
 pub struct AccessDefine {
@@ -60,9 +59,13 @@ impl AccessDefine {
         s.min_pdu_prio = buf.read_field(3, "min_pdu_prio")? as u8;
         s.opt_field_flag = buf.read_field(2, "opt_field_flag")? as u8;
         // TODO REVIEW: conditional read of subscriber_class
-        if s.opt_field_flag == 1 { s.subscriber_class = Some(buf.read_field(16, "subscriber_class")? as u16); }
+        if s.opt_field_flag == 1 {
+            s.subscriber_class = Some(buf.read_field(16, "subscriber_class")? as u16);
+        }
         // TODO REVIEW: conditional read of gssi
-        if s.opt_field_flag == 2 { s.gssi = Some(buf.read_field(24, "gssi")? as u32); }
+        if s.opt_field_flag == 2 {
+            s.gssi = Some(buf.read_field(24, "gssi")? as u32);
+        }
         // required constant FILLER
         assert!(buf.read_field(3, "filler")? == 4);
 
@@ -84,9 +87,13 @@ impl AccessDefine {
         buf.write_bits(self.min_pdu_prio as u64, 3);
         buf.write_bits(self.opt_field_flag as u64, 2);
         // TODO REVIEW: conditional write of subscriber_class
-        if let Some(v) = self.subscriber_class { buf.write_bits(v as u64, 16); }
+        if let Some(v) = self.subscriber_class {
+            buf.write_bits(v as u64, 16);
+        }
         // TODO REVIEW: conditional write of gssi
-        if let Some(v) = self.gssi { buf.write_bits(v as u64, 24); }
+        if let Some(v) = self.gssi {
+            buf.write_bits(v as u64, 24);
+        }
         // write required constant FILLER
         buf.write_bits(4, 3);
     }
@@ -107,12 +114,12 @@ impl fmt::Display for AccessDefine {
             self.min_pdu_prio,
             self.opt_field_flag
         )?;
-        
-        if let Some(v) = self.subscriber_class { 
-            write!(f, "  subscriber_class: {}", v)?; 
+
+        if let Some(v) = self.subscriber_class {
+            write!(f, "  subscriber_class: {}", v)?;
         };
-        if let Some(v) = self.gssi { 
-            write!(f, "  gssi: {}", v)?; 
+        if let Some(v) = self.gssi {
+            write!(f, "  gssi: {}", v)?;
         };
         write!(f, " }}")
     }

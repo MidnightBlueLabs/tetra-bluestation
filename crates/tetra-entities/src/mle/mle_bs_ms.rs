@@ -107,9 +107,7 @@ impl Mle {
         let SapMsgInner::TlaTlDataIndBl(prim) = &mut message.msg else {
             panic!()
         };
-        let Some(mut sdu) = prim.tl_sdu.take() else {
-            panic!("no tl_sdu")
-        };
+        let Some(mut sdu) = prim.tl_sdu.take() else { panic!("no tl_sdu") };
         assert!(sdu.get_pos() == 0); // We should be at the start of the MAC PDU
         let Some(bits) = sdu.read_bits(3) else {
             tracing::warn!("insufficient bits: {}", sdu.dump_bin());
@@ -123,12 +121,9 @@ impl Mle {
         // Dispatch to appropriate component (or to self if for MLE)
         match pdu_type {
             MleProtocolDiscriminator::Mm => {
-                let handle = self.router.create_handle(
-                    prim.main_address,
-                    prim.link_id,
-                    prim.endpoint_id,
-                    message.dltime,
-                );
+                let handle = self
+                    .router
+                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LmmMleUnitdataInd {
                     sdu,
                     handle,
@@ -144,12 +139,9 @@ impl Mle {
                 queue.push_back(msg);
             }
             MleProtocolDiscriminator::Cmce => {
-                let handle = self.router.create_handle(
-                    prim.main_address,
-                    prim.link_id,
-                    prim.endpoint_id,
-                    message.dltime,
-                );
+                let handle = self
+                    .router
+                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LcmcMleUnitdataInd {
                     sdu,
                     handle,
@@ -206,9 +198,7 @@ impl Mle {
         let SapMsgInner::TlaTlUnitdataIndBl(prim) = &mut message.msg else {
             panic!()
         };
-        let Some(mut sdu) = prim.tl_sdu.take() else {
-            panic!("no tl_sdu")
-        };
+        let Some(mut sdu) = prim.tl_sdu.take() else { panic!("no tl_sdu") };
         assert!(sdu.get_pos() == 0); // We should be at the start of the MAC PDU
 
         let Some(bits) = sdu.read_bits(3) else {
@@ -224,12 +214,9 @@ impl Mle {
         match pdu_type {
             MleProtocolDiscriminator::Mm => {
                 tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-                let handle = self.router.create_handle(
-                    prim.main_address,
-                    prim.link_id,
-                    prim.endpoint_id,
-                    message.dltime,
-                );
+                let handle = self
+                    .router
+                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LmmMleUnitdataInd {
                     sdu,
                     handle,
@@ -246,12 +233,9 @@ impl Mle {
             }
             MleProtocolDiscriminator::Cmce => {
                 tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-                let handle = self.router.create_handle(
-                    prim.main_address,
-                    prim.link_id,
-                    prim.endpoint_id,
-                    message.dltime,
-                );
+                let handle = self
+                    .router
+                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LcmcMleUnitdataInd {
                     sdu,
                     handle,
@@ -326,11 +310,7 @@ impl Mle {
                 pdu
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed parsing DMleSysinfo: {:?} {}",
-                    e,
-                    inner.tl_sdu.dump_bin()
-                );
+                tracing::warn!("Failed parsing DMleSysinfo: {:?} {}", e, inner.tl_sdu.dump_bin());
                 return;
             }
         };
@@ -389,11 +369,7 @@ impl Mle {
                 pdu
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed parsing DMleSync: {:?} {}",
-                    e,
-                    inner.tl_sdu.dump_bin()
-                );
+                tracing::warn!("Failed parsing DMleSync: {:?} {}", e, inner.tl_sdu.dump_bin());
                 return;
             }
         };

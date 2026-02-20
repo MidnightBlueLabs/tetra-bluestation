@@ -39,7 +39,9 @@ impl MacPduType {
 }
 
 impl From<MacPduType> for u64 {
-    fn from(e: MacPduType) -> Self { e.into_raw() }
+    fn from(e: MacPduType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MacPduType {

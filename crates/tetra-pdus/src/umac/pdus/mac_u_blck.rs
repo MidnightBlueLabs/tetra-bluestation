@@ -3,7 +3,6 @@ use core::fmt;
 use tetra_core::BitBuffer;
 use tetra_core::pdu_parse_error::PduParseErr;
 
-
 /// Clause 21.4.2.5 MAC-U-BLCK
 #[derive(Debug, Clone)]
 pub struct MacUBlck {
@@ -39,7 +38,6 @@ impl MacUBlck {
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
-        
         // write required constant mac_pdu_type
         buf.write_bits(3, 2);
         // write required constant supp_pdu_subtype
@@ -49,7 +47,6 @@ impl MacUBlck {
         buf.write_bits(self.event_label as u64, 10);
         buf.write_bits(self.reservation_req as u64, 4);
     }
-
 }
 
 impl fmt::Display for MacUBlck {

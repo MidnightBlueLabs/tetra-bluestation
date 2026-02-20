@@ -1,8 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, TdmaTime, assert_warn};
 use tetra_core::pdu_parse_error::PduParseErr;
-
+use tetra_core::{BitBuffer, TdmaTime, assert_warn};
 
 /// Clause 21.4.4.2
 #[derive(Debug, Clone)]
@@ -73,7 +72,6 @@ impl MacSync {
         buf.write_bits(self.frame_18_ext as u8 as u64, 1);
         buf.write_bits(0, 1);
     }
-
 }
 
 impl fmt::Display for MacSync {

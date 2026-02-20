@@ -1,13 +1,12 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, assert_warn, unimplemented_log};
 use tetra_core::pdu_parse_error::PduParseErr;
+use tetra_core::{BitBuffer, assert_warn, unimplemented_log};
 
 use crate::umac::enums::sysinfo_opt_field_flag::SysinfoOptFieldFlag;
 use crate::umac::fields::sysinfo_default_def_for_access_code_a::SysinfoDefaultDefForAccessCodeA;
 use crate::umac::fields::sysinfo_ext_services::SysinfoExtendedServices;
 use crate::umac::fields::ts_common_frames::TsCommonFrames;
-
 
 /// Clause 21.4.4.1 SYSINFO
 #[derive(Debug, Clone)]
@@ -85,10 +84,10 @@ impl MacSysinfo {
         s.rxlev_access_min = buf.read_field(4, "rxlev_access_min")? as u8;
         s.access_parameter = buf.read_field(4, "access_parameter")? as u8;
         s.radio_dl_timeout = buf.read_field(4, "radio_dl_timeout")? as u8;
-        
+
         let has_cck_field = buf.read_field(1, "has_cck_field")? == 1;
-        if has_cck_field { 
-            s.cck_id = Some(buf.read_field(16, "cck_id")? as u16); 
+        if has_cck_field {
+            s.cck_id = Some(buf.read_field(16, "cck_id")? as u16);
         } else {
             s.hyperframe_number = Some(buf.read_field(16, "hyperframe_number")? as u16);
         }
@@ -114,7 +113,7 @@ impl MacSysinfo {
             SysinfoOptFieldFlag::ExtServicesBroadcast => {
                 tracing::trace!("Sysinfo: Extended services broadcast");
                 // TODO FIXME: retrieve aie_enabled bool from global config
-                s.ext_services = Some(SysinfoExtendedServices::from_bitbuf(buf, true)?); 
+                s.ext_services = Some(SysinfoExtendedServices::from_bitbuf(buf, true)?);
             }
         }
 
@@ -122,7 +121,6 @@ impl MacSysinfo {
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
-
         buf.write_bits(2, 2); // Broadcast
         buf.write_bits(0, 2); // SYSINFO PDU;
 
@@ -138,13 +136,16 @@ impl MacSysinfo {
         buf.write_bits(self.radio_dl_timeout as u64, 4);
 
         // Write CCK ID or Hyperframe number
-        assert!(self.cck_id.is_some() ^ self.hyperframe_number.is_some(), "Either cck_id or hyperframe_number must be set");
+        assert!(
+            self.cck_id.is_some() ^ self.hyperframe_number.is_some(),
+            "Either cck_id or hyperframe_number must be set"
+        );
         if let Some(cck_id) = self.cck_id {
             buf.write_bits(1, 1);
             buf.write_bits(cck_id as u64, 16);
         } else {
             buf.write_bits(0, 1);
-            buf.write_bits(self.hyperframe_number.unwrap() as u64, 16);            
+            buf.write_bits(self.hyperframe_number.unwrap() as u64, 16);
         }
 
         // Write option field
@@ -174,7 +175,6 @@ impl MacSysinfo {
     }
 }
 
-
 impl fmt::Display for MacSysinfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -192,10 +192,12 @@ impl fmt::Display for MacSysinfo {
             self.radio_dl_timeout
         )?;
 
-        if let Some(cck_id) = self.cck_id { 
-            writeln!(f, "  cck_id: {}",             cck_id)?; 
+        if let Some(cck_id) = self.cck_id {
+            writeln!(f, "  cck_id: {}", cck_id)?;
         };
-        if let Some(hyperframe_number) = self.hyperframe_number { writeln!(f, "  hyperframe_number: {}", hyperframe_number)?; };
+        if let Some(hyperframe_number) = self.hyperframe_number {
+            writeln!(f, "  hyperframe_number: {}", hyperframe_number)?;
+        };
 
         writeln!(f, "  option_field: {}", self.option_field)?;
 

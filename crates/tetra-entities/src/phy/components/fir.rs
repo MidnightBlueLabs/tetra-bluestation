@@ -5,12 +5,12 @@ const VECLEN: usize = 4;
 /// FIR filter for complex signal with symmetric real taps.
 pub struct FirComplexSym {
     half_length: usize,
-    i:           usize,
+    i: usize,
     /// Real part of first half of history.
     /// Data is repeated twice for "fake circular buffering".
-    history_re:  Vec<RealSample>,
+    history_re: Vec<RealSample>,
     /// Imaginary part.
-    history_im:  Vec<RealSample>,
+    history_im: Vec<RealSample>,
     /// Real part of second half of history.
     /// The signal is reversed here to make it easier
     /// to implement a symmetric filter.
@@ -25,9 +25,9 @@ impl FirComplexSym {
         let len = half_length * 2;
         Self {
             half_length,
-            i:           0,
-            history_re:  vec![num::zero(); len],
-            history_im:  vec![num::zero(); len],
+            i: 0,
+            history_re: vec![num::zero(); len],
+            history_im: vec![num::zero(); len],
             reversed_re: vec![num::zero(); len],
             reversed_im: vec![num::zero(); len],
         }
@@ -41,15 +41,15 @@ impl FirComplexSym {
         let ir = self.half_length - 1 - i;
 
         // Move older samples to reversed history buffer
-        self.reversed_re[ir]                    = self.history_re[i];
+        self.reversed_re[ir] = self.history_re[i];
         self.reversed_re[ir + self.half_length] = self.history_re[i];
-        self.reversed_im[ir]                    = self.history_im[i];
+        self.reversed_im[ir] = self.history_im[i];
         self.reversed_im[ir + self.half_length] = self.history_im[i];
         // Put new sample in first history buffer
-        self.history_re [i]                     = in_.re;
-        self.history_re [i + self.half_length]  = in_.re;
-        self.history_im [i]                     = in_.im;
-        self.history_im [i + self.half_length]  = in_.im;
+        self.history_re[i] = in_.re;
+        self.history_re[i + self.half_length] = in_.re;
+        self.history_im[i] = in_.im;
+        self.history_im[i + self.half_length] = in_.im;
 
         // I tried to write the following loop so that the compiler
         // could auto-vectorize the code to use SIMD instructions.
@@ -58,12 +58,12 @@ impl FirComplexSym {
         let mut sum_re: [RealSample; VECLEN] = [num::zero(); VECLEN];
         let mut sum_im: [RealSample; VECLEN] = [num::zero(); VECLEN];
 
-        for ((((t, h_re), h_im), r_re), r_im) in
-            half_taps.chunks_exact(VECLEN)
-            .zip(self.history_re [i+1 .. i+1+self.half_length].chunks_exact(VECLEN))
-            .zip(self.history_im [i+1 .. i+1+self.half_length].chunks_exact(VECLEN))
-            .zip(self.reversed_re[ir ..  ir +self.half_length].chunks_exact(VECLEN))
-            .zip(self.reversed_im[ir ..  ir +self.half_length].chunks_exact(VECLEN))
+        for ((((t, h_re), h_im), r_re), r_im) in half_taps
+            .chunks_exact(VECLEN)
+            .zip(self.history_re[i + 1..i + 1 + self.half_length].chunks_exact(VECLEN))
+            .zip(self.history_im[i + 1..i + 1 + self.half_length].chunks_exact(VECLEN))
+            .zip(self.reversed_re[ir..ir + self.half_length].chunks_exact(VECLEN))
+            .zip(self.reversed_im[ir..ir + self.half_length].chunks_exact(VECLEN))
         {
             for vi in 0..VECLEN {
                 sum_re[vi] += (h_re[vi] + r_re[vi]) * t[vi];
@@ -72,9 +72,12 @@ impl FirComplexSym {
         }
 
         // Increment index
-        self.i = if self.i < self.half_length-1 { self.i + 1 } else { 0 };
+        self.i = if self.i < self.half_length - 1 { self.i + 1 } else { 0 };
 
-        ComplexSample { re: sum_re.iter().sum(), im: sum_im.iter().sum() }
+        ComplexSample {
+            re: sum_re.iter().sum(),
+            im: sum_im.iter().sum(),
+        }
     }
 }
 
@@ -83,7 +86,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_fir_complex_sym() {
-        const TAPS: [RealSample; 8] = [ 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0 ];
+        const TAPS: [RealSample; 8] = [8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0];
         let mut fir = FirComplexSym::new(TAPS.len());
 
         let mut out = Vec::<ComplexSample>::new();
@@ -92,12 +95,12 @@ mod tests {
         // Add different numbers of zero samples in between to see that
         // buffer indexing works correctly in every case.
         let impulses_in = [
-            ComplexSample{ re: 1.0, im: 0.0 },
-            ComplexSample{ re: 0.0, im: 1.0 },
-            ComplexSample{ re: 0.1, im: 0.2 },
-            ComplexSample{ re:-0.3, im:-0.4 },
+            ComplexSample { re: 1.0, im: 0.0 },
+            ComplexSample { re: 0.0, im: 1.0 },
+            ComplexSample { re: 0.1, im: 0.2 },
+            ComplexSample { re: -0.3, im: -0.4 },
         ];
-        let nzeros: [usize; 4] = [ 100, 101, 102, 123 ];
+        let nzeros: [usize; 4] = [100, 101, 102, 123];
         for (in_, zeros) in impulses_in.iter().zip(nzeros) {
             out.clear();
             out.push(fir.sample(&TAPS, *in_));
@@ -123,7 +126,7 @@ mod tests {
             }
             // Rest of output should be zeros
             //eprintln!("Checking output is zeros when it should be");
-            for value in out[TAPS.len()*2 ..].iter() {
+            for value in out[TAPS.len() * 2..].iter() {
                 check(*value, num::zero());
             }
         }

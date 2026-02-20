@@ -35,7 +35,9 @@ impl UlDlAssignment {
 }
 
 impl From<UlDlAssignment> for u64 {
-    fn from(e: UlDlAssignment) -> Self { e.into_raw() }
+    fn from(e: UlDlAssignment) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for UlDlAssignment {

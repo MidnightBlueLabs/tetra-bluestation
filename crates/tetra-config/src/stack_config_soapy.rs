@@ -6,11 +6,11 @@ pub struct SoapySdrIoCfg {
     /// USRP B2xx series configuration (B200, B210)
     #[serde(default)]
     pub iocfg_usrpb2xx: Option<UsrpB2xxCfg>,
-    
+
     /// LimeSDR configuration
     #[serde(default)]
     pub iocfg_limesdr: Option<LimeSdrCfg>,
-    
+
     /// SXceiver configuration
     #[serde(default)]
     pub iocfg_sxceiver: Option<SXceiverCfg>,
@@ -39,8 +39,6 @@ impl Default for SoapySdrIoCfg {
         }
     }
 }
-
-
 
 /// Configuration for Ettus USRP B2xx series
 #[derive(Debug, Clone, Deserialize)]

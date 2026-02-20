@@ -95,7 +95,9 @@ impl SdsProtocolId {
 }
 
 impl From<SdsProtocolId> for u64 {
-    fn from(e: SdsProtocolId) -> Self { e.into_raw() }
+    fn from(e: SdsProtocolId) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for SdsProtocolId {
@@ -105,11 +107,15 @@ impl core::fmt::Display for SdsProtocolId {
             SdsProtocolId::SimpleTextMessaging => write!(f, "SimpleTextMessaging"),
             SdsProtocolId::SimpleLocationSystem => write!(f, "SimpleLocationSystem"),
             SdsProtocolId::WirelessDatagramProtocol => write!(f, "WirelessDatagramProtocol"),
-            SdsProtocolId::WirelessControlMessageProtocol => write!(f, "WirelessControlMessageProtocol"),
+            SdsProtocolId::WirelessControlMessageProtocol => {
+                write!(f, "WirelessControlMessageProtocol")
+            }
             SdsProtocolId::MDmo => write!(f, "MDmo"),
             SdsProtocolId::PinAuth => write!(f, "PinAuth"),
             SdsProtocolId::EteeMessage => write!(f, "EteeMessage"),
-            SdsProtocolId::SimpleImmediateTextMessaging => write!(f, "SimpleImmediateTextMessaging"),
+            SdsProtocolId::SimpleImmediateTextMessaging => {
+                write!(f, "SimpleImmediateTextMessaging")
+            }
             SdsProtocolId::LocationInformationProtocol => write!(f, "LocationInformationProtocol"),
             SdsProtocolId::NetAssistProtocol2 => write!(f, "NetAssistProtocol2"),
             SdsProtocolId::ConcatenatedSdsMessage => write!(f, "ConcatenatedSdsMessage"),
@@ -117,8 +123,12 @@ impl core::fmt::Display for SdsProtocolId {
             SdsProtocolId::SimpleAgnssService => write!(f, "SimpleAgnssService"),
             SdsProtocolId::TextMessagingSdsTl => write!(f, "TextMessagingSdsTl"),
             SdsProtocolId::LocationSystemSdsTl => write!(f, "LocationSystemSdsTl"),
-            SdsProtocolId::WirelessDatagramProtocolSdsTl => write!(f, "WirelessDatagramProtocolSdsTl"),
-            SdsProtocolId::WirelessControlMessageProtocolSdsTl => write!(f, "WirelessControlMessageProtocolSdsTl"),
+            SdsProtocolId::WirelessDatagramProtocolSdsTl => {
+                write!(f, "WirelessDatagramProtocolSdsTl")
+            }
+            SdsProtocolId::WirelessControlMessageProtocolSdsTl => {
+                write!(f, "WirelessControlMessageProtocolSdsTl")
+            }
             SdsProtocolId::MDmoSdsTl => write!(f, "MDmoSdsTl"),
             SdsProtocolId::EteeMessageSdsTl => write!(f, "EteeMessageSdsTl"),
             SdsProtocolId::ImmediateTextMessagingSdsTl => write!(f, "ImmediateTextMessagingSdsTl"),

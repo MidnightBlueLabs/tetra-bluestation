@@ -62,7 +62,9 @@ impl MmPduTypeDl {
 }
 
 impl From<MmPduTypeDl> for u64 {
-    fn from(e: MmPduTypeDl) -> Self { e.into_raw() }
+    fn from(e: MmPduTypeDl) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MmPduTypeDl {
@@ -78,7 +80,9 @@ impl core::fmt::Display for MmPduTypeDl {
             MmPduTypeDl::DLocationUpdateReject => write!(f, "DLocationUpdateReject"),
             MmPduTypeDl::DLocationUpdateProceeding => write!(f, "DLocationUpdateProceeding"),
             MmPduTypeDl::DAttachDetachGroupIdentity => write!(f, "DAttachDetachGroupIdentity"),
-            MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement => write!(f, "DAttachDetachGroupIdentityAck"),
+            MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement => {
+                write!(f, "DAttachDetachGroupIdentityAck")
+            }
             MmPduTypeDl::DMmStatus => write!(f, "DMmStatus"),
             MmPduTypeDl::MmPduFunctionNotSupported => write!(f, "MmPduFunctionNotSupported"),
         }

@@ -3,19 +3,19 @@ use std::panic;
 
 use tetra_core::{BitBuffer, SsiType, TetraAddress, pdu_parse_error::PduParseErr};
 
-use crate::umac::{enums::mac_resource_addr_type::MacResourceAddrType, fields::{basic_slotgrant::BasicSlotgrant, channel_allocation::ChanAllocElement, EventLabel}};
-
-
+use crate::umac::{
+    enums::mac_resource_addr_type::MacResourceAddrType,
+    fields::{EventLabel, basic_slotgrant::BasicSlotgrant, channel_allocation::ChanAllocElement},
+};
 
 /// Clause 21.4.3.1 MAC-RESOURCE
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MacResource {
-    /// 1 bit, designates if SDU is followed by fill bits to obtain 8-bit alignment. 
+    /// 1 bit, designates if SDU is followed by fill bits to obtain 8-bit alignment.
     /// May be initially set to 0 and updated through MacResource::update_len_and_fill_ind
     /// Carries no meaning if Null PDU
     pub fill_bits: bool,
-    /// 1 bit, only relevant if slot granting element present. 
+    /// 1 bit, only relevant if slot granting element present.
     /// 0 -> current chan, 1 -> grant on allocated chan
     /// Carries no meaning if Null PDU
     pub pos_of_grant: u8,
@@ -28,8 +28,8 @@ pub struct MacResource {
     /// 6 bits, 0b111111 = FRAG START, 0b111110 = 2ND SLOT STOLEN
     /// May be left as 0 and updated through MacResource::update_len_and_fill_ind
     pub length_ind: u8,
-    
-    /// 3 bits. 
+
+    /// 3 bits.
     /// If not present, this is a null PDU
     pub addr: Option<TetraAddress>,
     // pub addr_type: MacResourceAddrType,
@@ -95,9 +95,9 @@ impl MacResource {
         // Parse address type and fields
         let bits = buf.read_field(3, "addr_type")?;
         let addr_type = MacResourceAddrType::try_from(bits).expect("invalid address type");
-        
+
         match addr_type {
-            MacResourceAddrType::NullPdu => { 
+            MacResourceAddrType::NullPdu => {
                 // Other fields don't carry meaning in null PDU, so for clarity we set them to defaults
                 // While this deviates from the truly received message, it may prevent a bug or two
                 s.fill_bits = false;
@@ -105,33 +105,33 @@ impl MacResource {
                 s.encryption_mode = 0;
                 s.random_access_flag = false;
             }
-                
-            MacResourceAddrType::Ssi => { 
-                s.addr = Some(TetraAddress{
+
+            MacResourceAddrType::Ssi => {
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
                 });
             }
-            MacResourceAddrType::EventLabel => { 
+            MacResourceAddrType::EventLabel => {
                 s.event_label = Some(buf.read_field(10, "event_label")? as u16);
             }
-            MacResourceAddrType::Ussi => { 
-                s.addr = Some(TetraAddress{
+            MacResourceAddrType::Ussi => {
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ussi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ussi,
                 });
             }
             MacResourceAddrType::Smi => {
-                s.addr = Some(TetraAddress{
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "smi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Smi,
                 });
             }
             MacResourceAddrType::SsiAndEventLabel => {
-                s.addr = Some(TetraAddress{
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
@@ -139,7 +139,7 @@ impl MacResource {
                 s.event_label = Some(buf.read_field(10, "event_label")? as u16);
             }
             MacResourceAddrType::SsiAndUsageMarker => {
-                s.addr = Some(TetraAddress{
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
@@ -147,7 +147,7 @@ impl MacResource {
                 s.usage_marker = Some(buf.read_field(6, "usage_marker")? as u8);
             }
             MacResourceAddrType::SmiAndEventLabel => {
-                s.addr = Some(TetraAddress{
+                s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "smi")? as u32,
                     encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Smi,
@@ -155,26 +155,25 @@ impl MacResource {
                 s.event_label = Some(buf.read_field(10, "event_label")? as u16);
             }
         }
-        
 
         if addr_type == MacResourceAddrType::NullPdu {
             s.encryption_mode = 0;
             return Ok(s);
-        } 
-        
-        let power_control_flag = buf.read_field(1, "power_control_flag")?;
-        if power_control_flag == 1 { 
-            s.power_control_element = Some(buf.read_field(4, "power_control_element")? as u8); 
         }
-        
+
+        let power_control_flag = buf.read_field(1, "power_control_flag")?;
+        if power_control_flag == 1 {
+            s.power_control_element = Some(buf.read_field(4, "power_control_element")? as u8);
+        }
+
         let slot_granting_flag = buf.read_field(1, "slot_granting_flag")?;
         if slot_granting_flag == 1 {
             // Read 8-bit BasicSlotgrant element
-            s.slot_granting_element = Some(BasicSlotgrant::from_bitbuf(buf)?); 
+            s.slot_granting_element = Some(BasicSlotgrant::from_bitbuf(buf)?);
         }
-        
+
         let chan_alloc_flag = buf.read_field(1, "chan_alloc_flag")?;
-        if chan_alloc_flag == 1 { 
+        if chan_alloc_flag == 1 {
             s.chan_alloc_element = Some(ChanAllocElement::from_bitbuf(buf)?);
         }
 
@@ -182,9 +181,8 @@ impl MacResource {
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
-
         assert!(self.length_ind > 0, "length_ind must be set before writing MacResource PDU");
-        
+
         buf.write_bits(0, 2);
         buf.write_bits(self.fill_bits as u8 as u64, 1);
         buf.write_bits(self.pos_of_grant as u64, 1);
@@ -199,7 +197,7 @@ impl MacResource {
             assert!(self.pos_of_grant == 0, "pos_of_grant carries no meaning for Null PDU");
             assert!(self.encryption_mode == 0, "encryption_mode carries no meaning for Null PDU");
             assert!(!self.random_access_flag, "random_access_flag carries no meaning for Null PDU");
-            
+
             addr_type = MacResourceAddrType::NullPdu;
         } else if let Some(addr) = self.addr {
             if addr.ssi_type == SsiType::Ssi || addr.ssi_type == SsiType::Gssi || addr.ssi_type == SsiType::Issi {
@@ -225,7 +223,6 @@ impl MacResource {
                 panic!("Invalid address type");
             }
         } else {
-
             assert!(self.usage_marker.is_none());
             assert!(self.event_label.is_some());
             if self.event_label.is_none() {
@@ -239,17 +236,14 @@ impl MacResource {
         buf.write_bits(addr_type as u64, 3);
         match addr_type {
             MacResourceAddrType::NullPdu => {}
-            MacResourceAddrType::Ssi |
-            MacResourceAddrType::Ussi |
-            MacResourceAddrType::Smi => {
+            MacResourceAddrType::Ssi | MacResourceAddrType::Ussi | MacResourceAddrType::Smi => {
                 assert!(self.addr.unwrap().encrypted == (self.encryption_mode != 0));
                 buf.write_bits(self.addr.unwrap().ssi as u64, 24);
             }
             MacResourceAddrType::EventLabel => {
                 buf.write_bits(self.event_label.unwrap() as u64, 10);
             }
-            MacResourceAddrType::SsiAndEventLabel |
-            MacResourceAddrType::SmiAndEventLabel => {
+            MacResourceAddrType::SsiAndEventLabel | MacResourceAddrType::SmiAndEventLabel => {
                 assert!(self.addr.unwrap().encrypted == (self.encryption_mode != 0));
                 buf.write_bits(self.addr.unwrap().ssi as u64, 24);
                 buf.write_bits(self.event_label.unwrap() as u64, 10);
@@ -266,21 +260,21 @@ impl MacResource {
             return;
         }
 
-        if let Some(v) = self.power_control_element { 
+        if let Some(v) = self.power_control_element {
             buf.write_bits(1, 1);
-            buf.write_bits(v as u64, 4); 
+            buf.write_bits(v as u64, 4);
         } else {
             buf.write_bits(0, 1);
         }
 
-        if let Some(v) = &self.slot_granting_element { 
+        if let Some(v) = &self.slot_granting_element {
             buf.write_bits(1, 1);
             v.to_bitbuf(buf); // 8-bit BasicSlotgrant element
         } else {
             buf.write_bits(0, 1);
         }
 
-        if let Some(v) = &self.chan_alloc_element { 
+        if let Some(v) = &self.chan_alloc_element {
             buf.write_bits(1, 1); // Chan alloc flag
             v.to_bitbuf(buf);
         } else {
@@ -297,27 +291,27 @@ impl MacResource {
         if self.is_null_pdu() {
             return ret;
         }
-        
-        if self.event_label.is_some() { 
-            ret += 10 
+
+        if self.event_label.is_some() {
+            ret += 10
         };
-        if self.usage_marker.is_some() { 
-            ret += 6 
+        if self.usage_marker.is_some() {
+            ret += 6
         };
         if self.addr.is_some() {
             ret += 24
         };
 
         ret += 1;
-        if self.power_control_element.is_some() { 
-            ret += 4 
+        if self.power_control_element.is_some() {
+            ret += 4
         };
         ret += 1;
-        if self.slot_granting_element.is_some() { 
-            ret += 8 
+        if self.slot_granting_element.is_some() {
+            ret += 8
         };
         ret += 1;
-        if let Some(chan_alloc) = self.chan_alloc_element.as_ref() { 
+        if let Some(chan_alloc) = self.chan_alloc_element.as_ref() {
             ret += chan_alloc.compute_len();
         };
 
@@ -331,12 +325,11 @@ impl MacResource {
         let total_len = hdr_len + sdu_len;
         let total_len_bytes = (total_len + 7) / 8;
         let num_fill_bits = (8 - (total_len % 8)) % 8;
-        
+
         self.length_ind = total_len_bytes as u8;
         self.fill_bits = num_fill_bits != 0;
         num_fill_bits
     }
-
 }
 
 impl fmt::Display for MacResource {
@@ -372,8 +365,6 @@ impl fmt::Display for MacResource {
         write!(f, " }}")
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

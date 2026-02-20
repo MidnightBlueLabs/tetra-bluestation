@@ -6,10 +6,7 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use super::stack_config::{
-    CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode,
-    StackState,
-};
+use super::stack_config::{CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
 use super::stack_config_soapy::{CfgSoapySdr, LimeSdrCfg, SXceiverCfg, UsrpB2xxCfg};
 
 /// Build `SharedConfig` from a TOML configuration file
@@ -26,51 +23,29 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
         .into());
     }
     if !root.extra.is_empty() {
-        return Err(format!(
-            "Unrecognized top-level fields: {:?}",
-            sorted_keys(&root.extra)
-        )
-        .into());
+        return Err(format!("Unrecognized top-level fields: {:?}", sorted_keys(&root.extra)).into());
     }
     if let Some(ref phy) = root.phy_io {
         if !phy.extra.is_empty() {
-            return Err(
-                format!("Unrecognized fields: phy_io::{:?}", sorted_keys(&phy.extra)).into(),
-            );
+            return Err(format!("Unrecognized fields: phy_io::{:?}", sorted_keys(&phy.extra)).into());
         }
         if let Some(ref soapy) = phy.soapysdr {
             if !soapy.extra.is_empty() {
-                return Err(format!(
-                    "Unrecognized fields: phy_io.soapysdr::{:?}",
-                    sorted_keys(&soapy.extra)
-                )
-                .into());
+                return Err(format!("Unrecognized fields: phy_io.soapysdr::{:?}", sorted_keys(&soapy.extra)).into());
             }
         }
     }
     if !root.net_info.extra.is_empty() {
-        return Err(format!(
-            "Unrecognized fields in net_info: {:?}",
-            sorted_keys(&root.net_info.extra)
-        )
-        .into());
+        return Err(format!("Unrecognized fields in net_info: {:?}", sorted_keys(&root.net_info.extra)).into());
     }
     if let Some(ref ci) = root.cell_info {
         if !ci.extra.is_empty() {
-            return Err(format!(
-                "Unrecognized fields in cell_info: {:?}",
-                sorted_keys(&ci.extra)
-            )
-            .into());
+            return Err(format!("Unrecognized fields in cell_info: {:?}", sorted_keys(&ci.extra)).into());
         }
     }
     if let Some(ref ss) = root.stack_state {
         if !ss.extra.is_empty() {
-            return Err(format!(
-                "Unrecognized fields in stack_state: {:?}",
-                sorted_keys(&ss.extra)
-            )
-            .into());
+            return Err(format!("Unrecognized fields in stack_state: {:?}", sorted_keys(&ss.extra)).into());
         }
     }
 

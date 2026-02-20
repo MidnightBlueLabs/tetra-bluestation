@@ -1,11 +1,11 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::call_timeout::CallTimeout;
 use crate::cmce::enums::transmission_grant::TransmissionGrant;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-CONNECT PDU (Clause 14.7.1.4).
 /// This PDU shall be the order to the calling MS to through-connect.
@@ -50,7 +50,7 @@ impl DConnect {
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DConnect)?;
-        
+
         // Type1
         let call_identifier = buffer.read_field(14, "call_identifier")? as u16;
         // Type1
@@ -82,33 +82,32 @@ impl DConnect {
         // Type2
         let notification_indicator = typed::parse_type2_generic(obit, buffer, 6, "notification_indicator")?;
 
-
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
 
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DConnect { 
-            call_identifier, 
-            call_time_out, 
-            hook_method_selection, 
-            simplex_duplex_selection, 
-            transmission_grant, 
-            transmission_request_permission, 
-            call_ownership, 
-            call_priority, 
-            basic_service_information, 
-            temporary_address, 
-            notification_indicator, 
-            facility, 
-            proprietary 
+        Ok(DConnect {
+            call_identifier,
+            call_time_out,
+            hook_method_selection,
+            simplex_duplex_selection,
+            transmission_grant,
+            transmission_request_permission,
+            call_ownership,
+            call_priority,
+            basic_service_information,
+            temporary_address,
+            notification_indicator,
+            facility,
+            proprietary,
         })
     }
 
@@ -132,9 +131,16 @@ impl DConnect {
         buffer.write_bits(self.call_ownership as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.call_priority.is_some() || self.basic_service_information.is_some() || self.temporary_address.is_some() || self.notification_indicator.is_some() || self.facility.is_some() || self.proprietary.is_some() ;
+        let obit = self.call_priority.is_some()
+            || self.basic_service_information.is_some()
+            || self.temporary_address.is_some()
+            || self.notification_indicator.is_some()
+            || self.facility.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.call_priority, 4);
@@ -153,7 +159,7 @@ impl DConnect {
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
-        
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -162,7 +168,9 @@ impl DConnect {
 
 impl fmt::Display for DConnect {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DConnect {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} transmission_grant: {:?} transmission_request_permission: {:?} call_ownership: {:?} call_priority: {:?} basic_service_information: {:?} temporary_address: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DConnect {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} transmission_grant: {:?} transmission_request_permission: {:?} call_ownership: {:?} call_priority: {:?} basic_service_information: {:?} temporary_address: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.call_time_out,
             self.hook_method_selection,

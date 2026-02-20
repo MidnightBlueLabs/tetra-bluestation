@@ -1,10 +1,9 @@
-use std::sync::{Arc, RwLock};
 use serde::Deserialize;
+use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
 use super::stack_config_soapy::CfgSoapySdr;
 use crate::timeslot_alloc::TimeslotAllocator;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -20,7 +19,7 @@ pub enum StackMode {
 pub enum PhyBackend {
     Undefined,
     None,
-    SoapySdr
+    SoapySdr,
 }
 
 /// PHY layer I/O configuration
@@ -28,7 +27,7 @@ pub enum PhyBackend {
 pub struct CfgPhyIo {
     /// Backend type: Soapysdr, File, or None
     pub backend: PhyBackend,
-    
+
     pub dl_tx_file: Option<String>,
     pub ul_rx_file: Option<String>,
     pub ul_input_file: Option<String>,
@@ -82,10 +81,10 @@ pub struct CfgCellInfo {
     #[serde(default)]
     pub freq_offset_hz: i16,
     /// Index in duplex setting table. Sent in SYSINFO. Maps to a specific duplex spacing in Hz.
-    /// Custom spacing can be provided optionally by setting 
+    /// Custom spacing can be provided optionally by setting
     #[serde(default)]
     pub duplex_spacing_id: u8,
-    /// Custom duplex spacing in Hz, for users that use a modified, non-standard duplex spacing table. 
+    /// Custom duplex spacing in Hz, for users that use a modified, non-standard duplex spacing table.
     #[serde(default)]
     pub custom_duplex_spacing: Option<u32>,
     /// 1 bits, from MAC SYSINFO
@@ -277,7 +276,6 @@ fn default_stack_mode() -> StackMode {
 }
 
 impl StackConfig {
-    
     pub fn new(mode: StackMode, mcc: u16, mnc: u16) -> Self {
         StackConfig {
             stack_mode: mode,
@@ -291,50 +289,58 @@ impl StackConfig {
 
     /// Validate that all required configuration fields are properly set.
     pub fn validate(&self) -> Result<(), &str> {
-
         // Check input device settings
         match self.phy_io.backend {
-
             PhyBackend::SoapySdr => {
                 let Some(ref soapy_cfg) = self.phy_io.soapysdr else {
                     return Err("soapysdr configuration must be provided for Soapysdr backend");
                 };
-                
+
                 // Validate that exactly one hardware configuration is present
                 let config_count = [
                     soapy_cfg.io_cfg.iocfg_usrpb2xx.is_some(),
                     soapy_cfg.io_cfg.iocfg_limesdr.is_some(),
                     soapy_cfg.io_cfg.iocfg_sxceiver.is_some(),
-                ].iter().filter(|&&x| x).count();
+                ]
+                .iter()
+                .filter(|&&x| x)
+                .count();
                 if config_count != 1 {
-                    return Err("soapysdr backend requires exactly one hardware configuration (iocfg_usrpb2xx, iocfg_limesdr, or iocfg_sxceiver)");
+                    return Err(
+                        "soapysdr backend requires exactly one hardware configuration (iocfg_usrpb2xx, iocfg_limesdr, or iocfg_sxceiver)",
+                    );
                 }
-            },
-            PhyBackend::None => {}, // For testing
+            }
+            PhyBackend::None => {} // For testing
             PhyBackend::Undefined => {
                 return Err("phy_io backend must be defined");
-            },
+            }
         };
 
         // Sanity check on main carrier property fields in SYSINFO
         if self.phy_io.backend == PhyBackend::SoapySdr {
-            let soapy_cfg = self.phy_io.soapysdr.as_ref().expect("SoapySdr config must be set for SoapySdr PhyIo");
+            let soapy_cfg = self
+                .phy_io
+                .soapysdr
+                .as_ref()
+                .expect("SoapySdr config must be set for SoapySdr PhyIo");
 
             // let Ok(freqinfo) = FreqInfo::from_dlul_freqs(soapy_cfg.dl_freq as u32, soapy_cfg.ul_freq as u32) else {
             //     return Err("Invalid PhyIo DL/UL frequencies (can't map to TETRA SYSINFO settings)");
             // };
-            let     Ok(freq_info) = FreqInfo::from_components(
-                    self.cell.freq_band, 
-                    self.cell.main_carrier, 
-                    self.cell.freq_offset_hz, 
-                    self.cell.reverse_operation,
-                    self.cell.duplex_spacing_id,
-                    self.cell.custom_duplex_spacing) else {
+            let Ok(freq_info) = FreqInfo::from_components(
+                self.cell.freq_band,
+                self.cell.main_carrier,
+                self.cell.freq_offset_hz,
+                self.cell.reverse_operation,
+                self.cell.duplex_spacing_id,
+                self.cell.custom_duplex_spacing,
+            ) else {
                 return Err("Invalid cell info frequency settings");
             };
 
             let (dlfreq, ulfreq) = freq_info.get_freqs();
-            
+
             println!("    {:?}", freq_info);
             println!("    Derived DL freq: {} Hz, UL freq: {} Hz\n", dlfreq, ulfreq);
 
@@ -351,13 +357,11 @@ impl StackConfig {
 }
 
 /// Mutable, stack-editable state (mutex-protected).
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StackState {
     pub cell_load_ca: u8,
     pub timeslot_alloc: TimeslotAllocator,
 }
-
 
 /// Global shared configuration: immutable config + mutable state.
 #[derive(Clone)]
@@ -378,7 +382,6 @@ impl SharedConfig {
     }
 
     pub fn from_parts(cfg: StackConfig, state: StackState) -> Self {
-        
         // Check config for validity before returning the SharedConfig object
         match cfg.validate() {
             Ok(_) => {}

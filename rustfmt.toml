@@ -1,0 +1,24 @@
+# rustfmt configuration
+# https://rust-lang.github.io/rustfmt/
+
+edition = "2024"
+
+# Line width before wrapping
+max_width = 140
+
+# Indentation width
+tab_spaces = 4
+hard_tabs = false
+
+# Reorder mod declarations and use statements
+reorder_modules = true
+reorder_imports = true
+
+# Wrap function parameters when they don't fit on one line
+fn_params_layout = "Tall"
+
+# Use field init shorthand  { x }  instead of  { x: x }
+use_field_init_shorthand = true
+
+# Use try-operator  ?  instead of  try!()
+use_try_shorthand = true

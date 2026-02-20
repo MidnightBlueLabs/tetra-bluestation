@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_ul::MlePduTypeUl;
 
@@ -37,18 +37,19 @@ pub struct UChannelClassAdvice {
 impl UChannelClassAdvice {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeUl::UChannelClassAdvice)?;
-        
+
         // Type1
         let number_of_channel_class_identifiers = buffer.read_field(2, "number_of_channel_class_identifiers")? as u8;
         // Conditional
-        unimplemented!(); let channel_class_identifier = if true { Some(0) } else { None };
+        unimplemented!();
+        let channel_class_identifier = if true { Some(0) } else { None };
         // Type1
         let discriminator_for_sdu_protocol_present = buffer.read_field(1, "discriminator_for_sdu_protocol_present")? != 0;
         // Conditional
-        unimplemented!(); let protocol_discriminator = if true { Some(0) } else { None };
+        unimplemented!();
+        let protocol_discriminator = if true { Some(0) } else { None };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -56,7 +57,8 @@ impl UChannelClassAdvice {
         // Type2
         let data_priority = typed::parse_type2_generic(obit, buffer, 3, "data_priority")?;
         // Conditional
-        unimplemented!(); let sdu = if obit { Some(0) } else { None };
+        unimplemented!();
+        let sdu = if obit { Some(0) } else { None };
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -64,13 +66,13 @@ impl UChannelClassAdvice {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UChannelClassAdvice { 
-            number_of_channel_class_identifiers, 
-            channel_class_identifier, 
-            discriminator_for_sdu_protocol_present, 
-            protocol_discriminator, 
-            data_priority, 
-            sdu
+        Ok(UChannelClassAdvice {
+            number_of_channel_class_identifiers,
+            channel_class_identifier,
+            discriminator_for_sdu_protocol_present,
+            protocol_discriminator,
+            data_priority,
+            sdu,
         })
     }
 
@@ -92,9 +94,11 @@ impl UChannelClassAdvice {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.data_priority.is_some() ;
+        let obit = self.data_priority.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.data_priority, 3);

@@ -1,7 +1,6 @@
-use bitcode::{Encode, Decode};
+use bitcode::{Decode, Encode};
 
-use crate::{network::transports::NetworkError, tnmm_net::test_pdu::{TnmmTestPduEnvelope}};
-
+use crate::{network::transports::NetworkError, tnmm_net::test_pdu::TnmmTestPduEnvelope};
 
 #[derive(Encode, Decode)]
 struct CompactMessage {
@@ -9,7 +8,6 @@ struct CompactMessage {
     sequence: u32,
     data: Vec<u8>,
 }
-
 
 /// Codec for Test networked service PDU types using bitcode for serialization
 #[derive(Default)]
@@ -20,27 +18,26 @@ impl TnmmTestCodec {
     pub fn encode(&self, pdu: &TnmmTestPduEnvelope) -> Result<Vec<u8>, NetworkError> {
         Ok(bitcode::encode(pdu))
     }
-    
+
     /// Decode bitcode to an TnmmTestPduEnvelope
     pub fn decode(&self, payload: &[u8]) -> Result<TnmmTestPduEnvelope, NetworkError> {
-        bitcode::decode(&payload)
-            .map_err(|e| NetworkError::SerializationError(format!("Failed to decode TestPdu: {}", e)))
+        bitcode::decode(&payload).map_err(|e| NetworkError::SerializationError(format!("Failed to decode TestPdu: {}", e)))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::tnmm_net::test_pdu::*;
     use super::*;
-    
+    use crate::tnmm_net::test_pdu::*;
+
     #[test]
     fn test_roundtrip_test_request() {
         let codec = TnmmTestCodec;
         let original = pack_test_pdu(TestPdu::TestRequest(TestRequest { handle: 42, ssi: 12345 }));
-        
+
         let encoded = codec.encode(&original).unwrap();
         let decoded = codec.decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.service_id, TEST_SERVICE_ID);
         assert_eq!(decoded.version, TEST_PDU_VERSION);
         match decoded.payload {
@@ -55,11 +52,15 @@ mod tests {
     #[test]
     fn test_roundtrip_test_response() {
         let codec = TnmmTestCodec;
-        let original = pack_test_pdu(TestPdu::TestResponse(TestResponse { handle: 1, ssi: 999, data: 0xDEADBEEF }));
-        
+        let original = pack_test_pdu(TestPdu::TestResponse(TestResponse {
+            handle: 1,
+            ssi: 999,
+            data: 0xDEADBEEF,
+        }));
+
         let encoded = codec.encode(&original).unwrap();
         let decoded = codec.decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.service_id, TEST_SERVICE_ID);
         assert_eq!(decoded.version, TEST_PDU_VERSION);
         match decoded.payload {
@@ -76,10 +77,10 @@ mod tests {
     fn test_roundtrip_heartbeat() {
         let codec = TnmmTestCodec;
         let original = pack_test_pdu(TestPdu::HeartbeatTick(HeartbeatTick { handle: 7 }));
-        
+
         let encoded = codec.encode(&original).unwrap();
         let decoded = codec.decode(&encoded).unwrap();
-        
+
         assert_eq!(decoded.service_id, TEST_SERVICE_ID);
         assert_eq!(decoded.version, TEST_PDU_VERSION);
         match decoded.payload {

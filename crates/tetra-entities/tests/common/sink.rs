@@ -23,16 +23,14 @@ impl Sink {
 }
 
 impl TetraEntityTrait for Sink {
-    
     fn entity(&self) -> TetraEntity {
         self.component
     }
 
     fn rx_prim(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
-        
         tracing::debug!("rx_prim: {:?}", message);
         // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
-        
+
         self.msgqueue.push(message);
     }
 }

@@ -1,7 +1,7 @@
-pub mod defrag;
-pub mod bs_frag;
 pub mod bs_defrag;
+pub mod bs_frag;
 pub mod bs_sched;
+pub mod defrag;
 
 pub mod circuit_mgr;
 

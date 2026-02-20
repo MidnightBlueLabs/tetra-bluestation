@@ -18,17 +18,15 @@ pub const RM_30_14_GEN: [[u8; 16]; 14] = [
 
 /// Static array with precomputed row masks
 pub static RM_30_14_ROWS_PRECOMPUTED: [u32; 14] = [
-    0x20009b60, 0x10002de0, 0x0800fc20, 0x0400e03c,
-    0x0200983a, 0x01005436, 0x00802c2e, 0x0040ffdf,
-    0x00208339, 0x001042b5, 0x000821ad, 0x00041273,
-    0x0002096b, 0x000104e7,
+    0x20009b60, 0x10002de0, 0x0800fc20, 0x0400e03c, 0x0200983a, 0x01005436, 0x00802c2e, 0x0040ffdf, 0x00208339, 0x001042b5, 0x000821ad,
+    0x00041273, 0x0002096b, 0x000104e7,
 ];
 
 /// Compute RM(30,14) codeword for a 14-bit input (upper 14 bits of codeword)
 pub fn tetra_rm3014_compute(input: u16) -> u32 {
     let mut val = 0u32;
-    
-    for i in 0 .. 14 {
+
+    for i in 0..14 {
         let bit = (input >> (13 - i)) & 1;
         if bit == 1 {
             val ^= RM_30_14_ROWS_PRECOMPUTED[i];
@@ -88,7 +86,6 @@ pub fn compute_syndrome(codeword: u32) -> u16 {
     syn
 }
 
-
 pub fn tetra_rm3014_decode_limited_ecc(codeword: u32) -> u16 {
     let syn = compute_syndrome(codeword);
     let mut corrected = codeword;
@@ -106,16 +103,10 @@ pub fn tetra_rm3014_decode_limited_ecc(codeword: u32) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_encode_decode_no_error() {
-        let messages = [
-            0u16,
-            1u16,
-            0x1FFFu16,
-            0x1234u16,
-            0x2A3Bu16,
-        ];
+        let messages = [0u16, 1u16, 0x1FFFu16, 0x1234u16, 0x2A3Bu16];
         for &msg in &messages {
             let code = tetra_rm3014_compute(msg);
             assert_eq!(tetra_rm3014_decode_naive(code), msg);
@@ -125,13 +116,7 @@ mod tests {
 
     #[test]
     fn test_single_bit_error_correction() {
-        let messages = [
-            0u16,
-            1u16,
-            0x1FFFu16,
-            0x1234u16,
-            0x2A3Bu16,
-        ];
+        let messages = [0u16, 1u16, 0x1FFFu16, 0x1234u16, 0x2A3Bu16];
 
         for &msg in &messages {
             let code = tetra_rm3014_compute(msg);

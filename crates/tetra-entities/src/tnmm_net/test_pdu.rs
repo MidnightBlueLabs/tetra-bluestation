@@ -1,4 +1,4 @@
-use bitcode::{Encode, Decode};
+use bitcode::{Decode, Encode};
 
 /// Service identifier for Test service: 0x54455354  = ASCII "TEST"
 /// Used to detect accidental cross-service message routing

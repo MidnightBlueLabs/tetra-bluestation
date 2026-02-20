@@ -71,7 +71,9 @@ impl LlcPduType {
 }
 
 impl From<LlcPduType> for u64 {
-    fn from(e: LlcPduType) -> Self { e.into_raw() }
+    fn from(e: LlcPduType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for LlcPduType {

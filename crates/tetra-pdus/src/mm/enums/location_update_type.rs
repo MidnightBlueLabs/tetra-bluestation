@@ -48,7 +48,9 @@ impl LocationUpdateType {
 }
 
 impl From<LocationUpdateType> for u64 {
-    fn from(e: LocationUpdateType) -> Self { e.into_raw() }
+    fn from(e: LocationUpdateType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for LocationUpdateType {
@@ -58,8 +60,12 @@ impl core::fmt::Display for LocationUpdateType {
             LocationUpdateType::TemporaryRegistration => write!(f, "TemporaryRegistration"),
             LocationUpdateType::PeriodicLocationUpdating => write!(f, "PeriodicLocationUpdating"),
             LocationUpdateType::ItsiAttach => write!(f, "ItsiAttach"),
-            LocationUpdateType::ServiceRestorationRoamingLocationUpdating => write!(f, "ServiceRestorationRoamingLocationUpdating"),
-            LocationUpdateType::ServiceRestorationMigratingLocationUpdating => write!(f, "ServiceRestorationMigratingLocationUpdating"),
+            LocationUpdateType::ServiceRestorationRoamingLocationUpdating => {
+                write!(f, "ServiceRestorationRoamingLocationUpdating")
+            }
+            LocationUpdateType::ServiceRestorationMigratingLocationUpdating => {
+                write!(f, "ServiceRestorationMigratingLocationUpdating")
+            }
             LocationUpdateType::DemandLocationUpdating => write!(f, "DemandLocationUpdating"),
             LocationUpdateType::DisabledMsUpdating => write!(f, "DisabledMsUpdating"),
         }

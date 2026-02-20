@@ -1,6 +1,6 @@
 /// Clause 21.5.4 Reservation requirement
 /// Bits: 4
-/// 
+///
 /// Clause 23.5.2.1:
 /// If the MS has further signalling to send for this address on this control channel, the MS-MAC shall include the
 /// "reservation requirement" element whenever it transmits an SCH MAC block (i.e. SCH/HU, SCH-P8/HU, SCH-Q/HU,
@@ -26,9 +26,9 @@ pub enum ReservationRequirement {
     Req51Slots = 13,
     Req68Slots = 14,
     /// Value 15, or, when encountered in MAC-U-BLCK, value 14
-    ReqOver68 = 15, 
-    // Value 15 when encountered in MAC-U-BLCK. 
-    // ReqNone, 
+    ReqOver68 = 15,
+    // Value 15 when encountered in MAC-U-BLCK.
+    // ReqNone,
 }
 
 impl std::convert::TryFrom<u64> for ReservationRequirement {
@@ -97,7 +97,7 @@ impl ReservationRequirement {
             25..=34 => ReservationRequirement::Req34Slots,
             35..=51 => ReservationRequirement::Req51Slots,
             52..=68 => ReservationRequirement::Req68Slots,
-            _ => ReservationRequirement::ReqOver68
+            _ => ReservationRequirement::ReqOver68,
         }
     }
 
@@ -132,7 +132,9 @@ impl ReservationRequirement {
 }
 
 impl From<ReservationRequirement> for u64 {
-    fn from(e: ReservationRequirement) -> Self { e.into_raw() }
+    fn from(e: ReservationRequirement) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for ReservationRequirement {

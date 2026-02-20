@@ -2,7 +2,6 @@
 #![allow(unused)]
 use tetra_core::{BitBuffer, MleHandle, TetraAddress, Todo};
 
-
 /// This shall be used as a request to initiate the selection of a cell for communications. The
 /// request shall always be made after power on and may be made at any time thereafter.
 #[derive(Debug)]
@@ -10,12 +9,12 @@ pub struct LmmMleActivateReq {
     pub mcc_list: Vec<u16>,
     pub mnc_list: Vec<u16>,
     pub la_list: Vec<u16>,
-    pub cell_type_prefs: Option<Todo>
+    pub cell_type_prefs: Option<Todo>,
 }
 
 #[derive(Debug)]
 pub struct LmmMleActivateInd {
-    pub cell_availability: Todo
+    pub cell_availability: Todo,
 }
 
 /// This shall be used as a confirmation to the MM entity that a cell has been selected with the
@@ -41,7 +40,7 @@ pub struct LmmMleCancelReq {
 }
 
 #[derive(Debug)]
-pub struct LmmMleCloseReq  {}
+pub struct LmmMleCloseReq {}
 #[derive(Debug)]
 pub struct LmmMleConfigureReq {
     pub periodic_reporting_timer: Todo,
@@ -71,7 +70,7 @@ pub struct LmmMleIdentitiesReq {
     pub detached_gssis: Vec<Todo>,
 }
 
-#[derive(Debug)] 
+#[derive(Debug)]
 pub struct LmmMleIdleReq {}
 
 #[derive(Debug)]
@@ -93,7 +92,7 @@ pub struct LmmMleInfoInd {
 pub struct LmmMleLinkReq {
     pub mcc: Todo,
     pub mnc: Todo,
-    pub la_list: Vec<u16>,  
+    pub la_list: Vec<u16>,
     pub cell_type_prefs: Option<Todo>,
 }
 
@@ -143,7 +142,7 @@ pub struct LmmMleUnitdataReq {
     pub stealing_permission: bool,
     pub stealing_repeats_flag: bool,
     pub encryption_flag: bool,
-    pub is_null_pdu: bool // Prio should be lowest and may not steal
+    pub is_null_pdu: bool, // Prio should be lowest and may not steal
 }
 
 #[derive(Debug)]
@@ -160,5 +159,5 @@ pub struct LmmMleUpdateReq {
     pub mnc: Todo,
     pub ra: Todo,
     pub cell_type_prefs: Option<Todo>,
-    pub registration_result: Todo
+    pub registration_result: Todo,
 }

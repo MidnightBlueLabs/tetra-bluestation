@@ -1,13 +1,12 @@
-use std::vec::Vec;
-use std::sync::Arc;
-use rustfft;
 use num::Zero;
+use rustfft;
+use std::sync::Arc;
+use std::vec::Vec;
 
 use super::dsp_types::*;
 
 pub type BlockCount = i64;
 type Weights = Arc<[RealSample]>;
-
 
 // ------------------------------------------------
 // Buffering helper for both analysis and synthesis
@@ -16,7 +15,7 @@ type Weights = Arc<[RealSample]>;
 #[derive(Copy, Clone)]
 pub struct InputBlockSize {
     /// Number of new input samples in each input block.
-    pub new:     usize,
+    pub new: usize,
     /// Number of overlapping samples between consecutive blocks.
     /// The first "overlap" samples of a block
     /// should be the same as the last samples of the previous block.
@@ -42,7 +41,7 @@ impl InputBuffer {
     /// Return a slice for writing new input samples.
     pub fn prepare_for_new_samples(&mut self) -> &mut [ComplexSample] {
         // Move overlapping part from the end of the previous block to the beginning
-        self.buffer.copy_within(self.size.new .. self.size.new + self.size.overlap, 0);
+        self.buffer.copy_within(self.size.new..self.size.new + self.size.overlap, 0);
         // Return slice for writing new samples
         self.buffer_in()
     }
@@ -55,10 +54,9 @@ impl InputBuffer {
     /// Return a slice for writing new samples into the buffer.
     /// This is the same as the one returned by the latest prepare_for_new_samples call.
     pub fn buffer_in(&mut self) -> &mut [ComplexSample] {
-        &mut self.buffer[self.size.overlap .. self.size.new + self.size.overlap]
+        &mut self.buffer[self.size.overlap..self.size.new + self.size.overlap]
     }
 }
-
 
 // -------------------------------------------
 // Common code for both analysis and synthesis
@@ -96,11 +94,11 @@ fn check_fft_size(fft_size: usize, overlap: Overlap) {
 fn input_block_size(fft_size: usize, overlap: Overlap) -> InputBlockSize {
     match overlap {
         Overlap::O1_2 => InputBlockSize {
-            new:     fft_size / 2,
+            new: fft_size / 2,
             overlap: fft_size / 2,
         },
         Overlap::O1_4 => InputBlockSize {
-            new:     fft_size / 4 * 3,
+            new: fft_size / 4 * 3,
             overlap: fft_size / 4,
         },
     }
@@ -112,7 +110,7 @@ fn slice_middle_samples(samples: &[ComplexSample], overlap: Overlap) -> &[Comple
         Overlap::O1_2 => ((len + 2) / 4, len / 2),
         Overlap::O1_4 => ((len + 4) / 8, len / 4 * 3),
     };
-    &samples[first_sample .. first_sample + n_samples]
+    &samples[first_sample..first_sample + n_samples]
 }
 
 /// Compute phase rotation for a given center bin number, block counter and overlap factor.
@@ -123,14 +121,13 @@ fn slice_middle_samples(samples: &[ComplexSample], overlap: Overlap) -> &[Comple
 /// 2 means 180° phase shift. Values are multipled by -1.
 /// 3 means 270° phase shift. Values are multipled by -i.
 fn get_phase_rotation(center_bin: isize, block_count: BlockCount, overlap: Overlap) -> i8 {
-    (
-        center_bin.rem_euclid(4) as i8 *
-        block_count.rem_euclid(4) as i8 *
-        match overlap {
+    (center_bin.rem_euclid(4) as i8
+        * block_count.rem_euclid(4) as i8
+        * match overlap {
             Overlap::O1_2 => 2,
             Overlap::O1_4 => 1,
-        }
-    ).rem_euclid(4)
+        })
+    .rem_euclid(4)
 }
 
 // ----------------------------------------
@@ -148,7 +145,6 @@ pub struct AnalysisInputParameters {
     pub overlap: Overlap,
 }
 
-
 pub struct AnalysisIntermediateResult {
     fft_result: Vec<ComplexSample>,
     /// Block counter to implement output phase rotation.
@@ -163,10 +159,7 @@ pub struct AnalysisInputProcessor {
 }
 
 impl AnalysisInputProcessor {
-    pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
-        parameters: AnalysisInputParameters,
-    ) -> Self {
+    pub fn new(fft_planner: &mut rustfft::FftPlanner<RealSample>, parameters: AnalysisInputParameters) -> Self {
         check_fft_size(parameters.fft_size, parameters.overlap);
         Self {
             parameters,
@@ -174,7 +167,7 @@ impl AnalysisInputProcessor {
             result: AnalysisIntermediateResult {
                 fft_result: vec![ComplexSample::ZERO; parameters.fft_size],
                 count: 0,
-            }
+            },
         }
     }
 
@@ -205,11 +198,7 @@ impl AnalysisInputProcessor {
     /// Passing it as a parameter allows input blocks to be skipped
     /// (for example, due to missing samples from a receiver)
     /// while keeping correct phase relationship between blocks.
-    pub fn process(
-        &mut self,
-        input: &[ComplexSample],
-        block_count: BlockCount,
-    ) -> &AnalysisIntermediateResult {
+    pub fn process(&mut self, input: &[ComplexSample], block_count: BlockCount) -> &AnalysisIntermediateResult {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
         self.result.count = block_count;
@@ -235,31 +224,22 @@ impl AnalysisOutputParameters {
         output_center_frequency: f64,
         bandwidth: Option<f64>,
     ) -> Self {
-        let ifft_size = (
-            output_sample_rate
-            * analysis_in_params.fft_size as f64
-            / analysis_in_params.sample_rate
-        ).round() as usize;
+        let ifft_size = (output_sample_rate * analysis_in_params.fft_size as f64 / analysis_in_params.sample_rate).round() as usize;
 
-        let center_bin = ((
-            (output_center_frequency - analysis_in_params.center_frequency)
-            * analysis_in_params.fft_size as f64
-            / analysis_in_params.sample_rate
-        ).round() as isize
-        ).rem_euclid(analysis_in_params.fft_size as isize);
+        let center_bin = (((output_center_frequency - analysis_in_params.center_frequency) * analysis_in_params.fft_size as f64
+            / analysis_in_params.sample_rate)
+            .round() as isize)
+            .rem_euclid(analysis_in_params.fft_size as isize);
 
         Self {
             center_bin,
             weights: raised_cosine_weights_default(
                 ifft_size,
-                bandwidth.map(|bandwidth|
-                    (bandwidth
-                     * analysis_in_params.fft_size as f64
-                     / analysis_in_params.sample_rate)
-                    .round() as usize
-                ),
+                bandwidth
+                    .map(|bandwidth| (bandwidth * analysis_in_params.fft_size as f64 / analysis_in_params.sample_rate).round() as usize),
                 None,
-                analysis_in_params.overlap),
+                analysis_in_params.overlap,
+            ),
         }
     }
 }
@@ -290,14 +270,10 @@ impl AnalysisOutputProcessor {
         }
     }
 
-    pub fn process(
-        &mut self,
-        intermediate_result: &AnalysisIntermediateResult,
-    ) -> &[ComplexSample] {
+    pub fn process(&mut self, intermediate_result: &AnalysisIntermediateResult) -> &[ComplexSample] {
         assert!(intermediate_result.fft_result.len() == self.input_parameters.fft_size);
 
-        let phasenum = get_phase_rotation(
-            self.parameters.center_bin, intermediate_result.count, self.input_parameters.overlap);
+        let phasenum = get_phase_rotation(self.parameters.center_bin, intermediate_result.count, self.input_parameters.overlap);
 
         // Convert to scaling factor and multiply_by_i value.
         let scaling = if phasenum >= 2 { -self.scaling } else { self.scaling };
@@ -312,21 +288,23 @@ impl AnalysisOutputProcessor {
             _ => panic!("Bug"),
         };*/
 
-
         let fft_size = self.input_parameters.fft_size;
         let ifft_size = self.buffer.len();
         let half_size = (ifft_size / 2) as isize;
 
         // This could probably be optimized a lot.
         // Now it computes each index using modulos which might be slow.
-        for bin_number in -half_size .. half_size {
+        for bin_number in -half_size..half_size {
             let bin_index_in = (self.parameters.center_bin + bin_number).rem_euclid(fft_size as isize) as usize;
             let bin_index_out = bin_number.rem_euclid(ifft_size as isize) as usize;
             // Apply weight
             let weighted = self.parameters.weights[bin_index_out] * intermediate_result.fft_result[bin_index_in] * scaling;
             // Apply 90° phase rotation if needed.
             self.buffer[bin_index_out] = if multiply_by_i {
-                ComplexSample { re: -weighted.im, im: weighted.re }
+                ComplexSample {
+                    re: -weighted.im,
+                    im: weighted.re,
+                }
             } else {
                 weighted
             }
@@ -354,9 +332,6 @@ impl AnalysisOutputProcessor {
         )
     }
 }
-
-
-
 
 // ----------------------------------------
 //          Synthesis filter bank
@@ -408,10 +383,7 @@ pub struct SynthesisIntermediateResult {
 }
 
 impl SynthesisOutputProcessor {
-    pub fn new(
-        fft_planner: &mut rustfft::FftPlanner<RealSample>,
-        parameters: SynthesisOutputParameters,
-    ) -> Self {
+    pub fn new(fft_planner: &mut rustfft::FftPlanner<RealSample>, parameters: SynthesisOutputParameters) -> Self {
         check_fft_size(parameters.ifft_size, parameters.overlap);
         Self {
             parameters,
@@ -428,10 +400,7 @@ impl SynthesisOutputProcessor {
         self.buffer_state = SynthesisBufferState::Clear;
     }
 
-    pub fn add(
-        &mut self,
-        intermediate_result: &SynthesisIntermediateResult,
-    ) {
+    pub fn add(&mut self, intermediate_result: &SynthesisIntermediateResult) {
         // If previous result is still in the buffer, clear it
         // before starting to add inputs.
         // This happens for the first input added to a block.
@@ -449,21 +418,19 @@ impl SynthesisOutputProcessor {
         self.buffer_state = SynthesisBufferState::Input;
     }
 
-    pub fn process(
-        &mut self,
-    ) -> &[ComplexSample] {
+    pub fn process(&mut self) -> &[ComplexSample] {
         match self.buffer_state {
             SynthesisBufferState::Clear => {
                 // No inputs have been added. Buffer is full of zeros.
                 // IFFT of zeros is still zeros, so we can skip processing
                 // and just return those zeros as the result.
-            },
+            }
             SynthesisBufferState::Input => {
                 // The usual case: buffer contains some inputs and
                 // now it is time to process them to get the result.
                 self.ifft_plan.process(&mut self.buffer);
                 self.buffer_state = SynthesisBufferState::Output;
-            },
+            }
             SynthesisBufferState::Output => {
                 // No inputs have been added since the last call to process.
                 // The buffer still contains the previous result though,
@@ -480,7 +447,6 @@ impl SynthesisOutputProcessor {
     }
 }
 
-
 #[derive(Clone)]
 pub struct SynthesisInputParameters {
     pub center_bin: isize,
@@ -496,35 +462,25 @@ impl SynthesisInputParameters {
         input_center_frequency: f64,
         bandwidth: Option<f64>,
     ) -> Self {
-        let fft_size = (
-            input_sample_rate
-            * output_parameters.ifft_size as f64
-            / output_parameters.sample_rate
-        ).round() as usize;
+        let fft_size = (input_sample_rate * output_parameters.ifft_size as f64 / output_parameters.sample_rate).round() as usize;
 
-        let center_bin = ((
-            (input_center_frequency - output_parameters.center_frequency)
-            * output_parameters.ifft_size as f64
-            / output_parameters.sample_rate
-        ).round() as isize
-        ).rem_euclid(output_parameters.ifft_size as isize);
+        let center_bin = (((input_center_frequency - output_parameters.center_frequency) * output_parameters.ifft_size as f64
+            / output_parameters.sample_rate)
+            .round() as isize)
+            .rem_euclid(output_parameters.ifft_size as isize);
 
         Self {
             center_bin,
             weights: raised_cosine_weights_default(
                 fft_size,
-                bandwidth.map(|bandwidth|
-                    (bandwidth
-                     * output_parameters.ifft_size as f64
-                     / output_parameters.sample_rate)
-                    .round() as usize
-                ),
+                bandwidth
+                    .map(|bandwidth| (bandwidth * output_parameters.ifft_size as f64 / output_parameters.sample_rate).round() as usize),
                 None,
-                output_parameters.overlap),
+                output_parameters.overlap,
+            ),
         }
     }
 }
-
 
 pub struct SynthesisInputProcessor {
     weights: Weights,
@@ -553,9 +509,7 @@ impl SynthesisInputProcessor {
             weights: parameters.weights,
             fft_plan: fft_planner.plan_fft_forward(fft_size),
             result: SynthesisIntermediateResult {
-                offset:
-                    (parameters.center_bin - (fft_size / 2) as isize)
-                    .rem_euclid(output_parameters.ifft_size as isize) as usize,
+                offset: (parameters.center_bin - (fft_size / 2) as isize).rem_euclid(output_parameters.ifft_size as isize) as usize,
                 fft_result: vec![ComplexSample::ZERO; fft_size],
             },
             center_bin: parameters.center_bin,
@@ -564,11 +518,7 @@ impl SynthesisInputProcessor {
         }
     }
 
-    pub fn process(
-        &mut self,
-        input: &[ComplexSample],
-        block_count: BlockCount,
-    ) -> &SynthesisIntermediateResult {
+    pub fn process(&mut self, input: &[ComplexSample], block_count: BlockCount) -> &SynthesisIntermediateResult {
         self.result.fft_result.copy_from_slice(input);
         self.fft_plan.process(&mut self.result.fft_result[..]);
 
@@ -583,14 +533,17 @@ impl SynthesisInputProcessor {
             *value = *value * weight * scaling;
             // Apply 90° phase rotation if needed.
             if multiply_by_i {
-                *value = ComplexSample { re: value.im, im: -value.re };
+                *value = ComplexSample {
+                    re: value.im,
+                    im: -value.re,
+                };
             }
         }
 
         // Swap halves for simpler indexing when results are added
         // to IFFT input. This might not be the most efficient way to do it.
         let fft_size_half = self.result.fft_result.len() / 2;
-        for i in 0 .. fft_size_half {
+        for i in 0..fft_size_half {
             self.result.fft_result.swap(i, fft_size_half + i);
         }
 
@@ -620,20 +573,13 @@ impl SynthesisInputProcessor {
     }
 }
 
-
-
 // ----------------------------------------
 //          Filter bank design
 // ----------------------------------------
 
-
 /// Design raised cosine weights for a given IFFT size,
 /// passband width and transition band width (given as number of bins).
-pub fn raised_cosine_weights(
-    ifft_size: usize,
-    passband_bins: usize,
-    transition_bins: usize,
-) -> Weights {
+pub fn raised_cosine_weights(ifft_size: usize, passband_bins: usize, transition_bins: usize) -> Weights {
     // I am not sure if it this would work correctly for an odd size,
     // but currently supported overlap factors needs an even IFFT size anyway.
     // Maybe returning an error instead of panicing with invalid values
@@ -642,17 +588,17 @@ pub fn raised_cosine_weights(
 
     let passband_half = passband_bins / 2 + 1;
 
-    assert!(passband_half + transition_bins <= ifft_size/2);
+    assert!(passband_half + transition_bins <= ifft_size / 2);
 
     let mut weights = vec![RealSample::zero(); ifft_size];
-    for i in 0 .. passband_half {
+    for i in 0..passband_half {
         weights[i] = 1.0;
         if i != 0 {
             weights[ifft_size - i] = 1.0;
         }
     }
-    for i in 0 .. transition_bins {
-        let v = 0.5 + 0.5 * (sample_consts::PI * (i+1) as RealSample / (transition_bins+1) as RealSample).cos();
+    for i in 0..transition_bins {
+        let v = 0.5 + 0.5 * (sample_consts::PI * (i + 1) as RealSample / (transition_bins + 1) as RealSample).cos();
         let j = passband_half + i;
         weights[j] = v;
         if j != 0 {
@@ -689,15 +635,17 @@ pub fn raised_cosine_weights_default(
 ) -> Weights {
     let (p, t) = match (passband_bins, transition_bins) {
         (Some(p), Some(t)) => (p, t),
-        (Some(p), None) => (p, (ifft_size - p/2*2) / 2 - 1),
+        (Some(p), None) => (p, (ifft_size - p / 2 * 2) / 2 - 1),
         (None, t) => {
-            let t = t.unwrap_or(match overlap {
-                Overlap::O1_2 => 15,
-                // Smaller overlap factor needs a wider transition band
-                // for similar level of spurious products.
-                Overlap::O1_4 => 31,
-            }).min(ifft_size/2 - 1);
-            (ifft_size - 2 - 2*t + 1, t)
+            let t = t
+                .unwrap_or(match overlap {
+                    Overlap::O1_2 => 15,
+                    // Smaller overlap factor needs a wider transition band
+                    // for similar level of spurious products.
+                    Overlap::O1_4 => 31,
+                })
+                .min(ifft_size / 2 - 1);
+            (ifft_size - 2 - 2 * t + 1, t)
         }
     };
 

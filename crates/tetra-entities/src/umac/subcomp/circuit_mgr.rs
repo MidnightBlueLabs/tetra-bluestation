@@ -3,8 +3,6 @@ use std::collections::VecDeque;
 use tetra_core::Direction;
 use tetra_saps::control::call_control::Circuit;
 
-
-
 pub struct CircuitMgr {
     pub dl: [Option<Circuit>; 4],
     pub ul: [Option<Circuit>; 4],
@@ -26,7 +24,7 @@ impl CircuitMgr {
         match dir {
             Direction::Dl => self.dl[ts as usize - 1].is_some(),
             Direction::Ul => self.ul[ts as usize - 1].is_some(),
-            _ => panic!("can only use with specific ul/dl direction")
+            _ => panic!("can only use with specific ul/dl direction"),
         }
     }
 
@@ -46,7 +44,7 @@ impl CircuitMgr {
                     None
                 }
             }
-            _ => panic!("can only use with specific ul/dl direction")
+            _ => panic!("can only use with specific ul/dl direction"),
         }
     }
 
@@ -57,10 +55,8 @@ impl CircuitMgr {
                 self.tx_data[ts as usize - 1].clear();
                 self.dl[ts as usize - 1].take()
             }
-            Direction::Ul => {
-                self.ul[ts as usize - 1].take()
-            }
-            _ => panic!("can only use with specific ul/dl direction")
+            Direction::Ul => self.ul[ts as usize - 1].take(),
+            _ => panic!("can only use with specific ul/dl direction"),
         }
     }
 
@@ -84,7 +80,7 @@ impl CircuitMgr {
                 self.dl[ts as usize - 1] = Some(circuit);
             }
             Direction::Ul => self.ul[ts as usize - 1] = Some(circuit),
-            _ => panic!("can only use with specific ul/dl direction")
+            _ => panic!("can only use with specific ul/dl direction"),
         }
     }
 

@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-RELEASE PDU (Clause 14.7.1.9).
 /// This PDU shall be a message from the infrastructure to the MS to inform that the connection has been released.
@@ -28,7 +27,6 @@ pub struct DRelease {
 impl DRelease {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DRelease)?;
 
@@ -43,26 +41,24 @@ impl DRelease {
         // Type2
         let notification_indicator = typed::parse_type2_generic(obit, buffer, 6, "notification_indicator")?;
 
-
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DRelease { 
-            call_identifier, 
-            disconnect_cause, 
-            notification_indicator, 
-            facility, 
-            proprietary 
+        Ok(DRelease {
+            call_identifier,
+            disconnect_cause,
+            notification_indicator,
+            facility,
+            proprietary,
         })
     }
 
@@ -76,16 +72,18 @@ impl DRelease {
         buffer.write_bits(self.disconnect_cause as u64, 5);
 
         // Check if any optional field present and place o-bit
-        let obit = self.notification_indicator.is_some() || self.facility.is_some() || self.proprietary.is_some() ;
+        let obit = self.notification_indicator.is_some() || self.facility.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
 
@@ -97,16 +95,13 @@ impl DRelease {
 
 impl fmt::Display for DRelease {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DRelease {{ call_identifier: {:?} disconnect_cause: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
-            self.call_identifier,
-            self.disconnect_cause,
-            self.notification_indicator,
-            self.facility,
-            self.proprietary,
+        write!(
+            f,
+            "DRelease {{ call_identifier: {:?} disconnect_cause: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
+            self.call_identifier, self.disconnect_cause, self.notification_indicator, self.facility, self.proprietary,
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -115,7 +110,6 @@ mod tests {
 
     #[test]
     fn test_parse_d_release() {
-
         debug::setup_logging_verbose();
         let bitstr = "0011000000011011001011010";
         let mut buffer = BitBuffer::from_bitstr(bitstr);

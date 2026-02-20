@@ -6,7 +6,6 @@ use tetra_core::pdu_parse_error::PduParseErr;
 use crate::umac::fields::basic_slotgrant::BasicSlotgrant;
 use crate::umac::fields::channel_allocation::ChanAllocElement;
 
-
 /// Clause 21.4.3.3 MAC-END (downlink)
 #[derive(Debug, Clone)]
 pub struct MacEndDl {
@@ -43,15 +42,15 @@ impl MacEndDl {
         s.fill_bits = buf.read_field(1, "fill_bits")? != 0;
         s.pos_of_grant = buf.read_field(1, "pos_of_grant")? as u8;
         s.length_ind = buf.read_field(6, "length_ind")? as u8;
-        
+
         let slot_granting_flag = buf.read_field(1, "slot_granting_flag")?;
-        if slot_granting_flag == 1 { 
+        if slot_granting_flag == 1 {
             // Read 8-bit BasicSlotgrant element
             s.slot_granting_element = Some(BasicSlotgrant::from_bitbuf(buf)?);
         }
 
         let chan_alloc_flag = buf.read_field(1, "chan_alloc_flag")?;
-        if chan_alloc_flag == 1 { 
+        if chan_alloc_flag == 1 {
             s.chan_alloc_element = Some(ChanAllocElement::from_bitbuf(buf)?);
         }
 
@@ -60,20 +59,19 @@ impl MacEndDl {
 
     pub fn compute_hdr_len(has_slotgrant: bool, has_chanalloc: bool) -> usize {
         assert!(!has_chanalloc, "unimplemented");
-        2+1+1+1+6+1+(if has_slotgrant {6} else {0})+1
+        2 + 1 + 1 + 1 + 6 + 1 + (if has_slotgrant { 6 } else { 0 }) + 1
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
-        
         // write required constant mac_pdu_type and pdu_subtype
         buf.write_bits(1, 2);
         buf.write_bits(1, 1);
-        
+
         buf.write_bits(self.fill_bits as u8 as u64, 1);
         buf.write_bits(self.pos_of_grant as u64, 1);
         buf.write_bits(self.length_ind as u64, 6);
 
-        if let Some(v) = &self.slot_granting_element { 
+        if let Some(v) = &self.slot_granting_element {
             buf.write_bits(1, 1);
             // Write 8-bit BasicSlotgrant element
             v.to_bitbuf(buf);
@@ -81,14 +79,13 @@ impl MacEndDl {
             buf.write_bits(0, 1);
         }
 
-        if let Some(v) = &self.chan_alloc_element { 
+        if let Some(v) = &self.chan_alloc_element {
             buf.write_bits(1, 1); // Chan alloc flag
             v.to_bitbuf(buf);
         } else {
             buf.write_bits(0, 1);
         }
     }
-
 }
 
 impl fmt::Display for MacEndDl {

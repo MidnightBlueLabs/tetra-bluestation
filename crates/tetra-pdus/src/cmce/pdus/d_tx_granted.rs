@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-TX GRANTED PDU (Clause 14.7.1.15).
 /// This PDU shall inform the MS concerned with a call that permission to transmit has been granted by the SwMI to a MS, and to inform that MS that it has been granted permission to transmit. This PDU shall also inform a MS that its request to transmit has been rejected or queued.
@@ -47,7 +46,6 @@ pub struct DTxGranted {
 impl DTxGranted {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DTxGranted)?;
 
@@ -70,27 +68,30 @@ impl DTxGranted {
         // Type2
         let transmitting_party_type_identifier = typed::parse_type2_generic(obit, buffer, 2, "transmitting_party_type_identifier")?;
         // Conditional
-        let transmitting_party_address_ssi = if obit && transmitting_party_type_identifier == Some(1) || transmitting_party_type_identifier == Some(2) { 
-            Some(buffer.read_field(24, "transmitting_party_address_ssi")?) 
-        } else { None };
+        let transmitting_party_address_ssi =
+            if obit && transmitting_party_type_identifier == Some(1) || transmitting_party_type_identifier == Some(2) {
+                Some(buffer.read_field(24, "transmitting_party_address_ssi")?)
+            } else {
+                None
+            };
         // Conditional
-        let transmitting_party_extension = if obit && transmitting_party_type_identifier == Some(2) { 
-            Some(buffer.read_field(24, "transmitting_party_extension")?) 
-        } else { None };
-
+        let transmitting_party_extension = if obit && transmitting_party_type_identifier == Some(2) {
+            Some(buffer.read_field(24, "transmitting_party_extension")?)
+        } else {
+            None
+        };
 
         // Type3
         let external_subscriber_number = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::ExtSubscriberNum)?;
-        
+
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let dm_ms_address = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -98,20 +99,20 @@ impl DTxGranted {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DTxGranted { 
-            call_identifier, 
-            transmission_grant, 
-            transmission_request_permission, 
-            encryption_control, 
-            reserved, 
-            notification_indicator, 
-            transmitting_party_type_identifier, 
-            transmitting_party_address_ssi, 
-            transmitting_party_extension, 
-            external_subscriber_number, 
-            facility, 
-            dm_ms_address, 
-            proprietary 
+        Ok(DTxGranted {
+            call_identifier,
+            transmission_grant,
+            transmission_request_permission,
+            encryption_control,
+            reserved,
+            notification_indicator,
+            transmitting_party_type_identifier,
+            transmitting_party_address_ssi,
+            transmitting_party_extension,
+            external_subscriber_number,
+            facility,
+            dm_ms_address,
+            proprietary,
         })
     }
 
@@ -131,9 +132,16 @@ impl DTxGranted {
         buffer.write_bits(self.reserved as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.notification_indicator.is_some() || self.transmitting_party_type_identifier.is_some() || self.external_subscriber_number.is_some() || self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some() ;
+        let obit = self.notification_indicator.is_some()
+            || self.transmitting_party_type_identifier.is_some()
+            || self.external_subscriber_number.is_some()
+            || self.facility.is_some()
+            || self.dm_ms_address.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
@@ -151,17 +159,17 @@ impl DTxGranted {
         }
         // Type3
         typed::write_type3_generic(obit, buffer, &self.external_subscriber_number, CmceType3ElemId::ExtSubscriberNum)?;
-        
+
         // Type3
-        
+
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
-        
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -170,7 +178,9 @@ impl DTxGranted {
 
 impl fmt::Display for DTxGranted {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DTxGranted {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} encryption_control: {:?} reserved: {:?} notification_indicator: {:?} transmitting_party_type_identifier: {:?} transmitting_party_address_ssi: {:?} transmitting_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DTxGranted {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} encryption_control: {:?} reserved: {:?} notification_indicator: {:?} transmitting_party_type_identifier: {:?} transmitting_party_address_ssi: {:?} transmitting_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.transmission_grant,
             self.transmission_request_permission,

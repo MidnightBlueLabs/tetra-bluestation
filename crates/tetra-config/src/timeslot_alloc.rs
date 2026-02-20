@@ -7,8 +7,13 @@ pub enum TimeslotOwner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimeslotAllocErr {
     InvalidTimeslot(u8),
-    InUse { ts: u8, owner: TimeslotOwner },
-    NotAllocated { ts: u8 },
+    InUse {
+        ts: u8,
+        owner: TimeslotOwner,
+    },
+    NotAllocated {
+        ts: u8,
+    },
     OwnerMismatch {
         ts: u8,
         owner: TimeslotOwner,

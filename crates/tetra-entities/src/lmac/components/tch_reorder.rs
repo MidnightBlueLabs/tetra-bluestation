@@ -9,22 +9,19 @@ const NUM_ACELP_BITS: usize = 137; // bits per subframe
 
 /// Class 0 positions (1-indexed within 137-bit subframe) from EN 300 395-2, Table 4.
 const CLASS0_POS: [u8; 51] = [
-    35, 36, 37, 38, 39, 40, 41, 42, 43, 47, 48, 56, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 74, 75,
-    83, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 101, 102, 110, 115, 116, 117, 118, 119, 120, 121,
-    122, 123, 124, 128, 129, 137,
+    35, 36, 37, 38, 39, 40, 41, 42, 43, 47, 48, 56, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 74, 75, 83, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+    97, 101, 102, 110, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 128, 129, 137,
 ];
 
 /// EN 300 395-2, Table 4 — Class 1 positions (1-indexed)
 const CLASS1_POS: [u8; 56] = [
-    58, 85, 112, 54, 81, 108, 135, 50, 77, 104, 131, 45, 72, 99, 126, 55, 82, 109, 136, 5, 13, 34,
-    8, 16, 17, 22, 23, 24, 25, 26, 6, 14, 7, 15, 60, 87, 114, 46, 73, 100, 127, 44, 71, 98, 125,
-    33, 49, 76, 103, 130, 59, 86, 113, 57, 84, 111,
+    58, 85, 112, 54, 81, 108, 135, 50, 77, 104, 131, 45, 72, 99, 126, 55, 82, 109, 136, 5, 13, 34, 8, 16, 17, 22, 23, 24, 25, 26, 6, 14, 7,
+    15, 60, 87, 114, 46, 73, 100, 127, 44, 71, 98, 125, 33, 49, 76, 103, 130, 59, 86, 113, 57, 84, 111,
 ];
 
 /// EN 300 395-2, Table 4 — Class 2 positions (1-indexed)
 const CLASS2_POS: [u8; 30] = [
-    18, 19, 20, 21, 31, 32, 53, 80, 107, 134, 1, 2, 3, 4, 9, 10, 11, 12, 27, 28, 29, 30, 52, 79,
-    106, 133, 51, 78, 105, 132,
+    18, 19, 20, 21, 31, 32, 53, 80, 107, 134, 1, 2, 3, 4, 9, 10, 11, 12, 27, 28, 29, 30, 52, 79, 106, 133, 51, 78, 105, 132,
 ];
 
 /// Convert 274 ACELP bits from codec order (STE format) to channel order (type-1 bits). One-bit-per-byte.
@@ -108,10 +105,7 @@ mod tests {
         let channel = codec_to_channel(&codec_bits);
         let recovered = channel_to_codec(&channel);
 
-        assert_eq!(
-            codec_bits, recovered,
-            "roundtrip codec→channel→codec failed"
-        );
+        assert_eq!(codec_bits, recovered, "roundtrip codec→channel→codec failed");
     }
 
     #[test]
@@ -123,22 +117,14 @@ mod tests {
         }
 
         let channel = codec_to_channel(&codec_bits);
-        assert_ne!(
-            codec_bits[..],
-            channel[..],
-            "reordering should change the bit order"
-        );
+        assert_ne!(codec_bits[..], channel[..], "reordering should change the bit order");
     }
 
     #[test]
     fn position_tables_cover_all_bits() {
         // Verify that every bit position 1-137 is covered exactly once
         let mut covered = [false; 137];
-        for &p in CLASS0_POS
-            .iter()
-            .chain(CLASS1_POS.iter())
-            .chain(CLASS2_POS.iter())
-        {
+        for &p in CLASS0_POS.iter().chain(CLASS1_POS.iter()).chain(CLASS2_POS.iter()) {
             let idx = (p - 1) as usize;
             assert!(!covered[idx], "position {} is duplicated", p);
             covered[idx] = true;

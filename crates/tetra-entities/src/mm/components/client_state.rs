@@ -3,7 +3,7 @@ pub enum ClientMgrErr {
     ClientNotFound { issi: u32 },
     GroupNotFound { gssi: u32 },
     IssiInGroupRange { issi: u32 },
-    GssiInClientRange { gssi: u32 },    
+    GssiInClientRange { gssi: u32 },
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -32,14 +32,21 @@ impl MmClientProperties {
 }
 
 /// Stub function, to be replaced with checks based on configuration file
-fn is_individual(_issi: u32) -> bool { return true; }
+fn is_individual(_issi: u32) -> bool {
+    return true;
+}
 /// Stub function, to be replaced with checks based on configuration file
-fn in_group_range(_gssi: u32) -> bool { return true; }
+fn in_group_range(_gssi: u32) -> bool {
+    return true;
+}
 /// Stub function, to be replaced with checks based on configuration file
-fn is_group(_gssi: u32) -> bool { return true; }
+fn is_group(_gssi: u32) -> bool {
+    return true;
+}
 /// Stub function, to be replaced with checks based on configuration file
-fn may_attach(_issi: u32, _gssi: u32) -> bool { return true; }
-
+fn may_attach(_issi: u32, _gssi: u32) -> bool {
+    return true;
+}
 
 pub struct MmClientMgr {
     clients: std::collections::HashMap<u32, MmClientProperties>,
@@ -70,21 +77,24 @@ impl MmClientMgr {
     }
 
     /// Registers a fresh state for a client, based on ssi
-    /// If client is already registered, previous state is discarded. 
-    pub fn try_register_client(&mut self, issi: u32, attached: bool) -> Result <bool, ClientMgrErr> {
-        
+    /// If client is already registered, previous state is discarded.
+    pub fn try_register_client(&mut self, issi: u32, attached: bool) -> Result<bool, ClientMgrErr> {
         if !is_individual(issi) {
             return Err(ClientMgrErr::IssiInGroupRange { issi });
         };
-        
+
         // discard previous state if any
-        self.clients.remove(&issi); 
-        
+        self.clients.remove(&issi);
+
         // Create and insert new client state
         let mut elem = MmClientProperties::new(issi);
-        elem.state = if attached { MmClientState::Attached } else { MmClientState::Unknown };
+        elem.state = if attached {
+            MmClientState::Attached
+        } else {
+            MmClientState::Unknown
+        };
         self.clients.insert(issi, elem);
-        
+
         Ok(true)
     }
 
@@ -105,7 +115,6 @@ impl MmClientMgr {
 
     /// Attaches or detaches a client from a group
     pub fn client_group_attach(&mut self, issi: u32, gssi: u32, do_attach: bool) -> Result<bool, ClientMgrErr> {
-
         // Checks
         if !in_group_range(gssi) {
             return Err(ClientMgrErr::GssiInClientRange { gssi });

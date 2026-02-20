@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-TX CEASED PDU (Clause 14.7.1.13).
 /// This PDU shall be the PDU from the SwMI to all MS within a call that a transmission has ceased.
@@ -31,7 +30,6 @@ pub struct DTxCeased {
 impl DTxCeased {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DTxCeased)?;
 
@@ -46,7 +44,6 @@ impl DTxCeased {
         // Type2
         let notification_indicator = typed::parse_type2_generic(obit, buffer, 6, "notification_indicator")?;
 
-
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
 
@@ -55,7 +52,6 @@ impl DTxCeased {
 
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -63,13 +59,13 @@ impl DTxCeased {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DTxCeased { 
-            call_identifier, 
-            transmission_request_permission, 
-            notification_indicator, 
-            facility, 
-            dm_ms_address, 
-            proprietary 
+        Ok(DTxCeased {
+            call_identifier,
+            transmission_request_permission,
+            notification_indicator,
+            facility,
+            dm_ms_address,
+            proprietary,
         })
     }
 
@@ -83,22 +79,25 @@ impl DTxCeased {
         buffer.write_bits(self.transmission_request_permission as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.notification_indicator.is_some() || self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some() ;
+        let obit =
+            self.notification_indicator.is_some() || self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
-        
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -107,7 +106,9 @@ impl DTxCeased {
 
 impl fmt::Display for DTxCeased {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DTxCeased {{ call_identifier: {:?} transmission_request_permission: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DTxCeased {{ call_identifier: {:?} transmission_request_permission: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.transmission_request_permission,
             self.notification_indicator,

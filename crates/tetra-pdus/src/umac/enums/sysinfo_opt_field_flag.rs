@@ -39,7 +39,9 @@ impl SysinfoOptFieldFlag {
 }
 
 impl From<SysinfoOptFieldFlag> for u64 {
-    fn from(e: SysinfoOptFieldFlag) -> Self { e.into_raw() }
+    fn from(e: SysinfoOptFieldFlag) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for SysinfoOptFieldFlag {

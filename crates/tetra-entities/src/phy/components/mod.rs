@@ -1,4 +1,3 @@
-
 pub mod burst_consts;
 pub mod train_consts;
 

@@ -47,7 +47,9 @@ impl MacResourceAddrType {
 }
 
 impl From<MacResourceAddrType> for u64 {
-    fn from(e: MacResourceAddrType) -> Self { e.into_raw() }
+    fn from(e: MacResourceAddrType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MacResourceAddrType {

@@ -56,7 +56,9 @@ impl MmType34ElemIdDl {
 }
 
 impl From<MmType34ElemIdDl> for u64 {
-    fn from(e: MmType34ElemIdDl) -> Self { e.into_raw() }
+    fn from(e: MmType34ElemIdDl) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MmType34ElemIdDl {
@@ -66,11 +68,15 @@ impl core::fmt::Display for MmType34ElemIdDl {
             MmType34ElemIdDl::NewRegisteredArea => write!(f, "NewRegisteredArea"),
             MmType34ElemIdDl::SecurityDownlink => write!(f, "SecurityDownlink"),
             MmType34ElemIdDl::GroupReportResponse => write!(f, "GroupReportResponse"),
-            MmType34ElemIdDl::GroupIdentityLocationAccept => write!(f, "GroupIdentityLocationAccept"),
+            MmType34ElemIdDl::GroupIdentityLocationAccept => {
+                write!(f, "GroupIdentityLocationAccept")
+            }
             MmType34ElemIdDl::DmMsAddress => write!(f, "DmMsAddress"),
             MmType34ElemIdDl::GroupIdentityDownlink => write!(f, "GroupIdentityDownlink"),
             MmType34ElemIdDl::AuthenticationDownlink => write!(f, "AuthenticationDownlink"),
-            MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation => write!(f, "GroupIdentitySecurityRelatedInformation"),
+            MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation => {
+                write!(f, "GroupIdentitySecurityRelatedInformation")
+            }
             MmType34ElemIdDl::CellTypeControl => write!(f, "CellTypeControl"),
             MmType34ElemIdDl::Proprietary => write!(f, "Proprietary"),
         }

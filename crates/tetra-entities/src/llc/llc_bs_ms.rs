@@ -47,19 +47,13 @@ impl Llc {
 
     /// Schedule an ACK to be sent at a later time
     pub fn schedule_outgoing_ack(&mut self, t: TdmaTime, addr: TetraAddress, n: u8) {
-        self.scheduled_out_acks.push(AckData {
-            t_start: t,
-            n,
-            addr,
-        });
+        self.scheduled_out_acks.push(AckData { t_start: t, n, addr });
     }
 
     /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number
     fn get_out_ack_n_if_any(&mut self, tn: u8, addr: TetraAddress) -> Option<u8> {
         for i in 0..self.scheduled_out_acks.len() {
-            if self.scheduled_out_acks[i].t_start.t == tn
-                && self.scheduled_out_acks[i].addr.ssi == addr.ssi
-            {
+            if self.scheduled_out_acks[i].t_start.t == tn && self.scheduled_out_acks[i].addr.ssi == addr.ssi {
                 let n = self.scheduled_out_acks[i].n;
                 self.scheduled_out_acks.remove(i);
                 return Some(n);
@@ -79,21 +73,14 @@ impl Llc {
 
     /// Register that we expect an ACK for this link (acknowledged mode only)
     fn register_expected_ack(&mut self, t: TdmaTime, addr: TetraAddress, n: u8) {
-        self.expected_in_acks.push(AckData {
-            t_start: t,
-            n,
-            addr,
-        });
+        self.expected_in_acks.push(AckData { t_start: t, n, addr });
     }
 
     fn format_ack_list(ack_list: &Vec<AckData>) -> String {
         let mut ret = String::new();
         ret.push_str("Expected in acks:\n");
         for ack in ack_list {
-            ret.push_str(&format!(
-                "  t: {}, ssi: {}, n: {}\n",
-                ack.t_start.t, ack.addr.ssi, ack.n
-            ));
+            ret.push_str(&format!("  t: {}, ssi: {}, n: {}\n", ack.t_start.t, ack.addr.ssi, ack.n));
         }
         ret
     }
@@ -101,9 +88,7 @@ impl Llc {
     /// Process incoming ACK. Remove outstanding ACK expectation. We ignore unexpected ones, might be a retransmission
     fn process_incoming_ack(&mut self, tn: u8, addr: TetraAddress, n: u8) {
         for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].t_start.t == tn
-                && self.expected_in_acks[i].addr.ssi == addr.ssi
-            {
+            if self.expected_in_acks[i].t_start.t == tn && self.expected_in_acks[i].addr.ssi == addr.ssi {
                 if self.expected_in_acks[i].n != n {
                     tracing::warn!(
                         "Received unexpected ACK for t: {} ssi: {} got n {}, expected {}",
@@ -394,11 +379,7 @@ impl Llc {
                 endpoint_id: prim.endpoint_id,
                 new_endpoint_id: prim.new_endpoint_id,
                 css_endpoint_id: prim.css_endpoint_id,
-                tl_sdu: if pdu.get_len_remaining() > 0 {
-                    Some(pdu)
-                } else {
-                    None
-                },
+                tl_sdu: if pdu.get_len_remaining() > 0 { Some(pdu) } else { None },
                 scrambling_code: prim.scrambling_code,
                 fcs_flag: has_fcs,
                 air_interface_encryption: prim.air_interface_encryption,
@@ -423,11 +404,7 @@ impl Llc {
                 endpoint_id: prim.endpoint_id,
                 new_endpoint_id: prim.new_endpoint_id,
                 css_endpoint_id: prim.css_endpoint_id,
-                tl_sdu: if pdu.get_len_remaining() > 0 {
-                    Some(pdu)
-                } else {
-                    None
-                },
+                tl_sdu: if pdu.get_len_remaining() > 0 { Some(pdu) } else { None },
                 scrambling_code: prim.scrambling_code,
                 fcs_flag: has_fcs,
                 air_interface_encryption: prim.air_interface_encryption,
@@ -487,10 +464,7 @@ impl TetraEntityTrait for Llc {
             tracing::debug!("tick_end: auto-ack for ssi: {}, n: {}", ack.addr.ssi, ack.n);
 
             let mut pdu_buf = BitBuffer::new_autoexpand(5);
-            let pdu = BlAck {
-                has_fcs: false,
-                nr: ack.n,
-            };
+            let pdu = BlAck { has_fcs: false, nr: ack.n };
             pdu.to_bitbuf(&mut pdu_buf);
             pdu_buf.seek(0);
             tracing::debug!("-> {:?} {}", pdu, pdu_buf.dump_bin());

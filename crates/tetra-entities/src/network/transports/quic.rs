@@ -31,10 +31,7 @@ pub struct QuicTransportConfig {
 
 impl QuicTransportConfig {
     /// Create a new QUIC transport configuration
-    pub fn new(
-        server_addr: NetworkAddress,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
+    pub fn new(server_addr: NetworkAddress, runtime: tokio::runtime::Handle) -> Self {
         Self {
             server_addr,
             connect_timeout: Duration::from_secs(5),
@@ -42,12 +39,9 @@ impl QuicTransportConfig {
             runtime,
         }
     }
-    
+
     /// Create an insecure QUIC transport configuration (for testing)
-    pub fn insecure(
-        server_addr: NetworkAddress,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
+    pub fn insecure(server_addr: NetworkAddress, runtime: tokio::runtime::Handle) -> Self {
         Self {
             server_addr,
             connect_timeout: Duration::from_secs(5),
@@ -55,7 +49,7 @@ impl QuicTransportConfig {
             runtime,
         }
     }
-    
+
     /// Set connection timeout
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
@@ -80,7 +74,7 @@ pub struct QuicTransport {
 
 impl QuicTransport {
     /// Create a new QUIC transport
-    /// 
+    ///
     /// # Arguments
     /// * `server_addr` - Server address to connect to
     /// * `connect_timeout` - Connection timeout duration
@@ -93,7 +87,7 @@ impl QuicTransport {
         runtime: tokio::runtime::Runtime,
     ) -> Result<Self, NetworkError> {
         let socket_addr = Self::parse_socket_addr(&server_addr)?;
-        
+
         // Create endpoint within the runtime context
         let endpoint = runtime.block_on(async {
             // Configure QUIC client
@@ -102,29 +96,29 @@ impl QuicTransport {
             } else {
                 Self::configure_client()
             }?;
-            
+
             let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
-            
+
             // Configure transport for low latency
             let mut transport_config = quinn::TransportConfig::default();
-            
+
             // Reduce keep-alive interval for faster detection of disconnects
             transport_config.keep_alive_interval(Some(Duration::from_secs(5)));
-            
+
             // Lower max idle timeout
             transport_config.max_idle_timeout(Some(VarInt::from_u32(30_000).into()));
-            
+
             client_config.transport_config(Arc::new(transport_config));
-            
+
             // Create endpoint
             let mut endpoint = Endpoint::client("[::]:0".parse().unwrap())
                 .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to create endpoint: {}", e)))?;
-            
+
             endpoint.set_default_client_config(client_config);
-            
+
             Ok::<_, NetworkError>(endpoint)
         })?;
-        
+
         Ok(Self {
             endpoint: Some(endpoint),
             connection: None,
@@ -136,85 +130,83 @@ impl QuicTransport {
             runtime,
         })
     }
-    
+
     /// Parse NetworkAddress to SocketAddr
     fn parse_socket_addr(addr: &NetworkAddress) -> Result<SocketAddr, NetworkError> {
         match addr {
-            NetworkAddress::Tcp { host, port } | NetworkAddress::Udp { host, port } => {
-                format!("{}:{}", host, port)
-                    .parse()
-                    .map_err(|e| NetworkError::ConnectionFailed(format!("Invalid address: {}", e)))
-            }
-            NetworkAddress::Custom { .. } => {
-                Err(NetworkError::ConnectionFailed("Custom addresses not supported for QUIC".to_string()))
-            }
+            NetworkAddress::Tcp { host, port } | NetworkAddress::Udp { host, port } => format!("{}:{}", host, port)
+                .parse()
+                .map_err(|e| NetworkError::ConnectionFailed(format!("Invalid address: {}", e))),
+            NetworkAddress::Custom { .. } => Err(NetworkError::ConnectionFailed(
+                "Custom addresses not supported for QUIC".to_string(),
+            )),
         }
     }
-    
+
     /// Configure client with certificate verification (production)
     fn configure_client() -> Result<quinn::crypto::rustls::QuicClientConfig, NetworkError> {
         let mut roots = rustls::RootCertStore::empty();
-        
+
         // Add system certificates
         for cert in rustls_native_certs::load_native_certs()
-            .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to load native certs: {}", e)))? 
+            .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to load native certs: {}", e)))?
         {
-            roots.add(cert).map_err(|e| 
-                NetworkError::ConnectionFailed(format!("Failed to add cert: {}", e))
-            )?;
+            roots
+                .add(cert)
+                .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to add cert: {}", e)))?;
         }
-        
-        let mut crypto = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        
+
+        let mut crypto = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+
         // Set ALPN protocol for QUIC
         crypto.alpn_protocols = vec![b"hq-29".to_vec()];
-        
+
         Ok(quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to build QUIC config: {}", e)))?)
     }
-    
+
     /// Configure insecure client (skip certificate verification - testing only)
     fn configure_insecure_client() -> Result<quinn::crypto::rustls::QuicClientConfig, NetworkError> {
         let mut crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
             .with_no_client_auth();
-        
+
         // Set ALPN protocol for QUIC
         crypto.alpn_protocols = vec![b"hq-29".to_vec()];
-        
+
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to build insecure QUIC config: {}", e)))
     }
-    
+
     /// Send data on a specific channel type
-    pub async fn send_on_channel(
-        &mut self,
-        payload: &[u8],
-        channel: QuicChannelType,
-    ) -> Result<(), NetworkError> {
-        let conn = self.connection.as_ref()
+    pub async fn send_on_channel(&mut self, payload: &[u8], channel: QuicChannelType) -> Result<(), NetworkError> {
+        let conn = self
+            .connection
+            .as_ref()
             .ok_or_else(|| NetworkError::SendFailed("No active connection".to_string()))?;
-        
+
         match channel {
             QuicChannelType::Reliable => {
                 // Use cached bidirectional stream for signalling
                 if self.reliable_send.is_none() {
-                    let (send, recv) = conn.open_bi().await
+                    let (send, recv) = conn
+                        .open_bi()
+                        .await
                         .map_err(|e| NetworkError::SendFailed(format!("Failed to open stream: {}", e)))?;
                     self.reliable_send = Some(send);
                     self.reliable_recv = Some(recv);
                 }
-                
+
                 let send = self.reliable_send.as_mut().unwrap();
-                
+
                 // Send length-prefixed message
                 let len = (payload.len() as u32).to_be_bytes();
-                send.write_all(&len).await
+                send.write_all(&len)
+                    .await
                     .map_err(|e| NetworkError::SendFailed(format!("Failed to send length: {}", e)))?;
-                send.write_all(payload).await
+                send.write_all(payload)
+                    .await
                     .map_err(|e| NetworkError::SendFailed(format!("Failed to send payload: {}", e)))?;
             }
             QuicChannelType::Unreliable => {
@@ -223,18 +215,17 @@ impl QuicTransport {
                     .map_err(|e| NetworkError::SendFailed(format!("Failed to send datagram: {}", e)))?;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Receive data from a specific channel type (non-blocking)
-    pub async fn receive_from_channel(
-        &mut self,
-        channel: QuicChannelType,
-    ) -> Result<Option<Vec<u8>>, NetworkError> {
-        let conn = self.connection.as_ref()
+    pub async fn receive_from_channel(&mut self, channel: QuicChannelType) -> Result<Option<Vec<u8>>, NetworkError> {
+        let conn = self
+            .connection
+            .as_ref()
             .ok_or_else(|| NetworkError::ReceiveFailed("No active connection".to_string()))?;
-        
+
         match channel {
             QuicChannelType::Reliable => {
                 if let Some(ref mut recv) = self.reliable_recv {
@@ -243,11 +234,11 @@ impl QuicTransport {
                     match recv.read_exact(&mut len_buf).await {
                         Ok(()) => {
                             let len = u32::from_be_bytes(len_buf) as usize;
-                            
+
                             if len > 1024 * 1024 {
                                 return Err(NetworkError::ReceiveFailed("Message too large".to_string()));
                             }
-                            
+
                             let mut payload = vec![0u8; len];
                             match recv.read_exact(&mut payload).await {
                                 Ok(()) => Ok(Some(payload)),
@@ -270,7 +261,7 @@ impl QuicTransport {
             }
         }
     }
-    
+
     /// Close reliable stream
     pub fn close_reliable_stream(&mut self) {
         if let Some(mut send) = self.reliable_send.take() {
@@ -281,97 +272,90 @@ impl QuicTransport {
 }
 
 impl NetworkTransport for QuicTransport {
-
     fn connect(&mut self) -> Result<(), NetworkError> {
         tracing::debug!("QuicTransport connecting to {:?}", self.server_addr);
-        
+
         // Close existing connection
         if let Some(conn) = self.connection.take() {
             conn.close(VarInt::from_u32(0), b"reconnecting");
         }
         self.close_reliable_stream();
-        
-        let endpoint = self.endpoint.as_ref()
+
+        let endpoint = self
+            .endpoint
+            .as_ref()
             .ok_or_else(|| NetworkError::ConnectionFailed("No endpoint".to_string()))?;
-        
+
         // Extract server name for SNI
         let server_name = match &self.server_addr {
             NetworkAddress::Tcp { host, .. } | NetworkAddress::Udp { host, .. } => host.clone(),
-            _ => return Err(NetworkError::ConnectionFailed("Invalid address type".to_string())),
+            _ => {
+                return Err(NetworkError::ConnectionFailed("Invalid address type".to_string()));
+            }
         };
-        
+
         // Connect with timeout
         let runtime = self.runtime.handle().clone();
         let connection = runtime.block_on(async {
-            let connecting = endpoint.connect(self.socket_addr, &server_name)
+            let connecting = endpoint
+                .connect(self.socket_addr, &server_name)
                 .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to initiate connection: {}", e)))?;
-            
-            tokio::time::timeout(
-                self.connect_timeout,
-                connecting
-            )
-            .await
-            .map_err(|_| NetworkError::Timeout)?
-            .map_err(|e| NetworkError::ConnectionFailed(format!("Connection failed: {}", e)))
+
+            tokio::time::timeout(self.connect_timeout, connecting)
+                .await
+                .map_err(|_| NetworkError::Timeout)?
+                .map_err(|e| NetworkError::ConnectionFailed(format!("Connection failed: {}", e)))
         })?;
-        
+
         self.connection = Some(connection);
-        
+
         Ok(())
     }
-    
+
     fn send_reliable(&mut self, payload: &[u8]) -> Result<(), NetworkError> {
         // Synchronous wrapper around async send_on_channel
         let runtime = self.runtime.handle().clone();
-        runtime.block_on(async {
-            self.send_on_channel(payload, QuicChannelType::Reliable).await
-        })
+        runtime.block_on(async { self.send_on_channel(payload, QuicChannelType::Reliable).await })
     }
-    
+
     fn send_unreliable(&mut self, payload: &[u8]) -> Result<(), NetworkError> {
         // Synchronous wrapper around async send_on_channel
         let runtime = self.runtime.handle().clone();
-        runtime.block_on(async {
-            self.send_on_channel(payload, QuicChannelType::Unreliable).await
-        })
+        runtime.block_on(async { self.send_on_channel(payload, QuicChannelType::Unreliable).await })
     }
-    
+
     fn receive_reliable(&mut self) -> Vec<NetworkMessage> {
         // Non-blocking receive from reliable channel
         let mut messages = Vec::new();
-        
+
         let runtime = self.runtime.handle().clone();
-        if let Ok(Some(payload)) = runtime.block_on(async {
-            self.receive_from_channel(QuicChannelType::Reliable).await
-        }) {
+        if let Ok(Some(payload)) = runtime.block_on(async { self.receive_from_channel(QuicChannelType::Reliable).await }) {
             messages.push(NetworkMessage {
                 source: self.server_addr.clone(),
                 payload,
                 timestamp: Instant::now(),
             });
         }
-        
+
         messages
     }
-    
+
     fn receive_unreliable(&mut self) -> Vec<NetworkMessage> {
         // Non-blocking receive from unreliable channel (datagrams)
         let mut messages = Vec::new();
-        
+
         let runtime = self.runtime.handle().clone();
-        if let Ok(Some(payload)) = runtime.block_on(async {
-            self.receive_from_channel(QuicChannelType::Unreliable).await
-        }) {
+        if let Ok(Some(payload)) = runtime.block_on(async { self.receive_from_channel(QuicChannelType::Unreliable).await }) {
             messages.push(NetworkMessage {
                 source: self.server_addr.clone(),
                 payload,
                 timestamp: Instant::now(),
             });
         }
-        
+
         messages
     }
-    
+
     fn wait_for_response_reliable(&mut self) -> Result<NetworkMessage, NetworkError> {
         // Blocking receive from reliable channel
         let runtime = self.runtime.handle().clone();

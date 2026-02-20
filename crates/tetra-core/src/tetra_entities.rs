@@ -2,18 +2,18 @@
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
 pub enum TetraEntity {
     /// Physical layer
-    Phy, 
+    Phy,
     /// Lower MAC layer
-    Lmac, 
+    Lmac,
     /// Upper MAC layer
-    Umac, 
+    Umac,
     /// Logical link control
-    Llc,  
+    Llc,
     /// Mobile Link Entity
     Mle,
     /// Mobility Management
     Mm,
-    /// Circuit Mode Control Entity 
+    /// Circuit Mode Control Entity
     Cmce,
     /// SubNetwork Dependent Convergence Protocol
     Sndcp,

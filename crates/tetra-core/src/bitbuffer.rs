@@ -1,13 +1,16 @@
-use std::{cmp::{max, min}, fmt};
+use std::{
+    cmp::{max, min},
+    fmt,
+};
 
 use crate::pdu_parse_error::PduParseErr;
 
 pub struct BitBuffer {
     buffer: Vec<u8>,
-    start: usize,       // bits before this are out of window
-    pos: usize,         // next bit offset for read/write (absolute)
-    end: usize,         // bits at or after this are out of window
-    flag_autoexpand: bool,   // if true, ignores end pointer on writes and reallocates buffer if insufficient capacity
+    start: usize,          // bits before this are out of window
+    pos: usize,            // next bit offset for read/write (absolute)
+    end: usize,            // bits at or after this are out of window
+    flag_autoexpand: bool, // if true, ignores end pointer on writes and reallocates buffer if insufficient capacity
 }
 
 impl BitBuffer {
@@ -37,7 +40,7 @@ impl BitBuffer {
     }
 
     /// Wrap an existing byte-vector as a BitBuffer (all bits initially readable/writeable).
-    /// No new allocation is needed here. 
+    /// No new allocation is needed here.
     pub fn from_vec(data: Vec<u8>) -> Self {
         let len_bits = data.len() * 8;
         BitBuffer {
@@ -62,7 +65,7 @@ impl BitBuffer {
 
     /// Determines whether the buffer is expanded when a write is done that goes beyond the capacity of the buffer
     /// WARNING: Best to use BitBuffer::new_autoexpand() instead of calling this method, as the end pointer behaves
-    /// differently. 
+    /// differently.
     pub fn set_auto_expand(mut self, do_auto_expand: bool) {
         self.flag_autoexpand = do_auto_expand;
     }
@@ -86,20 +89,19 @@ impl BitBuffer {
 
     /// Construct a BitBuffer directly from a byte array of '0'/'1' bytes.
     pub fn from_bitarr(data: &[u8]) -> Self {
-        
         let mut buf = BitBuffer::new(data.len());
         buf.copy_bits_from_bitarr(data);
-        
+
         // Reset pos back to start
         buf.pos = buf.start;
-        
+
         buf
     }
 
     /// Construct a BitBuffer from another bitbuffer, starting at `start` and ending at `end`.
     /// The copy will be performed efficiently as bytes, as such, `start` may not be 0 and heading/trailing data may be present.
     pub fn from_bitbuffer(bitbuffer: &BitBuffer) -> Self {
-        // Compute how many bits to copy when we want to perform byte-wise copy. 
+        // Compute how many bits to copy when we want to perform byte-wise copy.
         let start_byte = bitbuffer.start / 8;
         let end_byte = (bitbuffer.end + 7) / 8;
         let alloc_bits = (end_byte - start_byte) * 8;
@@ -116,7 +118,7 @@ impl BitBuffer {
     /// Construct a BitBuffer from another bitbuffer, starting at `pos` and ending at `end`.
     /// The copy will be performed efficiently as bytes, as such, `start` may not be 0 and heading/trailing data may be present.
     pub fn from_bitbuffer_pos(bitbuffer: &BitBuffer) -> Self {
-        // Compute how many bits to copy when we want to perform byte-wise copy. 
+        // Compute how many bits to copy when we want to perform byte-wise copy.
         let start_byte = bitbuffer.pos / 8;
         let end_byte = (bitbuffer.end + 7) / 8;
         let alloc_bits = (end_byte - start_byte) * 8;
@@ -131,7 +133,7 @@ impl BitBuffer {
     }
 
     /// Takes slice as parameter for output. Reads slice.len() bits from bitbuf[pos], and writes to output slice. 1 bit per byte.
-    pub fn to_bitarr(&mut self, buf: &mut[u8]) {
+    pub fn to_bitarr(&mut self, buf: &mut [u8]) {
         // TODO bounds check here, optimize performance
         let num_bits = buf.len();
         let mut bits_remaining = num_bits;
@@ -176,7 +178,6 @@ impl BitBuffer {
     /// Peek `num_bits` with offset from window start, without advancing.
     /// Returns None on overflow or if `num_bits>64`.
     pub fn peek_bits_startoffset(&self, offset: usize, num_bits: usize) -> Option<u64> {
-        
         let abs_pos = self.start + offset;
         if num_bits > 64 || self.start + offset + num_bits > self.end {
             return None;
@@ -195,7 +196,8 @@ impl BitBuffer {
 
     /// Similar to read_bits, but returns a ParseError::BufferEnded with the given error_string if not enough bits are available.
     pub fn read_field(&mut self, num_bits: usize, error_string: &'static str) -> Result<u64, PduParseErr> {
-        self.read_bits(num_bits).ok_or(PduParseErr::BufferEnded { field: Some(error_string) })
+        self.read_bits(num_bits)
+            .ok_or(PduParseErr::BufferEnded { field: Some(error_string) })
     }
 
     pub fn read_bit(&mut self) -> Option<u8> {
@@ -206,7 +208,10 @@ impl BitBuffer {
 
     fn _realloc_tail(&mut self, new_cap_bits: usize) {
         let new_cap_bytes = (new_cap_bits + 7) / 8;
-        assert!(new_cap_bytes >= self.buffer.len(), "new capacity must be larger than current buffer size");
+        assert!(
+            new_cap_bytes >= self.buffer.len(),
+            "new capacity must be larger than current buffer size"
+        );
 
         // tracing::info!("BitBuffer: reallocating to {} bits {} bytes", new_cap_bits, new_cap_bytes);
         self.buffer.resize(new_cap_bytes, 0);
@@ -227,19 +232,17 @@ impl BitBuffer {
     //     }
     // }
 
-    /// When a write would exceed the end, but the BitBuffer is set to automatically expand, 
-    /// this function is called to increase `end` and if needed, allocate more space in the buffer. 
+    /// When a write would exceed the end, but the BitBuffer is set to automatically expand,
+    /// this function is called to increase `end` and if needed, allocate more space in the buffer.
     fn _move_end(&mut self, needed_extra_bits: usize) {
-
         // Check if realloc needed, perform if needed
         let free_cap_bits = self.buffer.len() * 8 - self.end;
         let needed_total_bits = self.end + needed_extra_bits;
 
         if needed_extra_bits > free_cap_bits {
-
             let double_cap_bits = self.buffer.len() * 8 * 2;
             let new_cap_bits = max(needed_total_bits, double_cap_bits);
-            
+
             // Reallocate buffer to at least `end` bits
             // tracing::info!("BitBuffer: reallocating to {} bits", new_cap_bits);
             self._realloc_tail(new_cap_bits);
@@ -254,10 +257,10 @@ impl BitBuffer {
         self.buffer[index] ^= value << (7 - (self.pos % 8)) as u8;
         self.pos += 1;
     }
-    
+
     /// Xors bytearray into a bitbuffer, starting at pos, for num_bits.
     /// Advances pos by num_bits.
-    pub fn xor_bytearr(&mut self, data: &[u8], num_bits: usize) -> Option<()>{
+    pub fn xor_bytearr(&mut self, data: &[u8], num_bits: usize) -> Option<()> {
         let mut bits_remaining = num_bits;
         let mut data_pos = 0;
         while bits_remaining > 0 {
@@ -269,7 +272,7 @@ impl BitBuffer {
 
             // Convert bytes from data array to u64 and xor with read val
             let mut xor_data = 0u64;
-            let db_chunk_bytes = (chunk_bits +7) / 8;
+            let db_chunk_bytes = (chunk_bits + 7) / 8;
             for _ in 0..db_chunk_bytes {
                 xor_data <<= 8;
                 xor_data |= data[data_pos] as u64;
@@ -283,7 +286,7 @@ impl BitBuffer {
             // Seek back to where we were before reading
             self.seek_rel(-1 * chunk_bits as isize);
             self.write_bits(xorred_data, chunk_bits);
-        };
+        }
         Some(())
     }
 
@@ -297,16 +300,16 @@ impl BitBuffer {
             } else {
                 assert!(false, "write_bit would exceed buffer end");
             }
-        }        
+        }
 
         let index = self.pos / 8;
         let mask = 1 << (7 - (self.pos % 8)) as u8;
-        
+
         self.buffer[index] &= !mask;
         self.buffer[index] |= value << (7 - (self.pos % 8)) as u8;
         self.pos += 1;
     }
-    
+
     /// Write an arbitrary amount of zero-bits
     pub fn write_zeroes(&mut self, num_bits: usize) {
         let mut bits_remaining = num_bits;
@@ -328,15 +331,19 @@ impl BitBuffer {
         }
     }
 
-    /// Write up to 64 bits, advancing pos. 
+    /// Write up to 64 bits, advancing pos.
     /// If autoexpand is enabled, will advance end as well and/or realloc if buffer full
-    /// If disables, panics if exceeds end. 
+    /// If disables, panics if exceeds end.
     pub fn write_bits(&mut self, value: u64, num_bits: usize) {
-
         // tracing::debug!("write_bits: <{} ^{} >{}, write[{}..{}] ({} bits)", self.start, self.pos, self.end, self.pos, self.pos + num_bits, num_bits);
         assert!(num_bits <= 64, "can only write up to 64 bits");
-        assert!(num_bits == 64 || value >> num_bits == 0, "value exceeds num_bits {} {}", value, num_bits);
-        
+        assert!(
+            num_bits == 64 || value >> num_bits == 0,
+            "value exceeds num_bits {} {}",
+            value,
+            num_bits
+        );
+
         // Check if exceeding end, to either fail or expand
         if self.pos + num_bits > self.end {
             if self.flag_autoexpand {
@@ -348,13 +355,9 @@ impl BitBuffer {
 
         let mut remaining = num_bits;
         let mut cur = self.pos;
-        
+
         // mask to lower `num_bits` bits
-        let v = if num_bits == 64 {
-            value
-        } else {
-            value & ((1 << num_bits) - 1)
-        };
+        let v = if num_bits == 64 { value } else { value & ((1 << num_bits) - 1) };
 
         // 1) head bits
         let head_offset = cur % 8;
@@ -412,7 +415,11 @@ impl BitBuffer {
         // TODO optimize performance
         for i in 0..buf.len() {
             let bit = buf[i];
-            assert!(bit == 0 || bit == 1, "copy_bits_from_bitarr: invalid byte `{}`; only '0' or '1' allowed", bit);
+            assert!(
+                bit == 0 || bit == 1,
+                "copy_bits_from_bitarr: invalid byte `{}`; only '0' or '1' allowed",
+                bit
+            );
             self.write_bit(bit);
         }
     }
@@ -445,7 +452,7 @@ impl BitBuffer {
     pub fn get_len_written(&self) -> usize {
         self.pos - self.start
     }
-    
+
     /// Get the current position, relative to window
     pub fn get_pos(&self) -> usize {
         self.pos - self.start
@@ -454,7 +461,13 @@ impl BitBuffer {
     /// Seek `pos` to `offset` (relative to window start).
     pub fn seek(&mut self, offset: usize) {
         let abs = self.start + offset;
-        assert!(abs <= self.end, "seek out of window: got {}, allowed [{},{}]", abs, self.start, self.end);
+        assert!(
+            abs <= self.end,
+            "seek out of window: got {}, allowed [{},{}]",
+            abs,
+            self.start,
+            self.end
+        );
         self.pos = abs;
     }
 
@@ -465,7 +478,10 @@ impl BitBuffer {
         assert!(
             new_pos >= self.start && new_pos <= self.end,
             "seek out of window: got {}, allowed [{},{}]",
-            new_pos, self.start, self.end);
+            new_pos,
+            self.start,
+            self.end
+        );
         self.pos = new_pos;
     }
 
@@ -503,7 +519,7 @@ impl BitBuffer {
     /// Move pos to absolute location, irrespective of window. Ensure start <= pos <= end
     pub fn set_raw_pos(&mut self, p: usize) {
         assert!(self.start <= p, "pos must not be before start");
-        assert!(p <= self.end,   "pos must not exceed end");
+        assert!(p <= self.end, "pos must not exceed end");
         self.pos = p;
     }
 
@@ -534,13 +550,13 @@ impl BitBuffer {
     pub fn dump_bin_unformatted(&self) -> String {
         self.raw_dump_bin(false, false, self.start, self.end)
     }
-    
+
     /// Dump bits in window [start, end) as a binary string of '0'/'1'.
     /// Adds a ^ marker before the current pos.
     pub fn dump_bin(&self) -> String {
         self.raw_dump_bin(false, true, self.start, self.end)
     }
-    
+
     /// Dump entire buffer (also outside of window) as a binary string
     /// Optionally adding markers:
     ///  - '<' just before bit `start`
@@ -552,23 +568,32 @@ impl BitBuffer {
     }
 
     pub fn raw_dump_bin(&self, print_window: bool, print_pos: bool, start: usize, end: usize) -> String {
-        
         let len = end - start;
-        let mut s = String::with_capacity(len + 
-            if print_window { 2 } else { 0 } + 
-            if print_pos { 1 } else { 0 });
+        let mut s = String::with_capacity(len + if print_window { 2 } else { 0 } + if print_pos { 1 } else { 0 });
 
         for i in start..end {
-            if print_window && i == self.start  { s.push('<'); }
-            if print_pos && i == self.pos       { s.push('^'); }
-            if print_window && i == self.end    { s.push('>'); }
+            if print_window && i == self.start {
+                s.push('<');
+            }
+            if print_pos && i == self.pos {
+                s.push('^');
+            }
+            if print_window && i == self.end {
+                s.push('>');
+            }
             let bit = self.read_bits_at_unchecked(i, 1) != 0;
             s.push(if bit { '1' } else { '0' });
         }
         // markers at the very end if needed
-        if print_window && self.start == end    { s.push('<'); }
-        if print_pos && self.pos == end         { s.push('^'); }
-        if print_window && self.end == end      { s.push('>'); }
+        if print_window && self.start == end {
+            s.push('<');
+        }
+        if print_pos && self.pos == end {
+            s.push('^');
+        }
+        if print_window && self.end == end {
+            s.push('>');
+        }
         s
     }
 
@@ -616,7 +641,6 @@ impl BitBuffer {
         result
     }
 
-
     /// --- Low‐level unsafe reader: no bounds checks! ---
     /// Reads 1 bit at absolute `bit_pos`,
     /// **Caller must ensure** `bit_pos + num_bits <= end`.
@@ -625,13 +649,11 @@ impl BitBuffer {
     }
 }
 
-
 impl fmt::Debug for BitBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BitBuffer {{ <{} ^{} >{} {} }}", self.start, self.pos, self.end, self.dump_bin())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -650,9 +672,9 @@ mod tests {
     #[test]
     fn test_partial_boundary_read_write() {
         let mut bb = BitBuffer::new(16);
-        bb.write_bits(0xA, 4);   // 1010
-        bb.write_bits(0x5, 4);   // 0101
-        bb.write_bits(0xFF, 8);  // 11111111
+        bb.write_bits(0xA, 4); // 1010
+        bb.write_bits(0x5, 4); // 0101
+        bb.write_bits(0xFF, 8); // 11111111
         bb.seek(0);
         assert_eq!(bb.read_bits(4).unwrap(), 0xA);
         assert_eq!(bb.read_bits(4).unwrap(), 0x5);
@@ -770,8 +792,6 @@ mod tests {
         assert_eq!(bb.dump_bin_full(false), "10100000");
         assert_eq!(bb.dump_bin(), "1^000");
         assert_eq!(bb.dump_bin_unformatted(), "1000");
-
-        
     }
 
     #[test]
@@ -830,7 +850,7 @@ mod tests {
         let mut bb = BitBuffer::from_bitstr("10110011");
         let mut arr = vec![0u8; 8];
         bb.to_bitarr(&mut arr);
-        assert_eq!(arr, vec![1,0,1,1,0,0,1,1]);
+        assert_eq!(arr, vec![1, 0, 1, 1, 0, 0, 1, 1]);
     }
 
     #[test]
@@ -838,7 +858,7 @@ mod tests {
         let mut bb = BitBuffer::from_bitstr("10110000");
         // XOR first bit (1) with 0 -> should remain 1
         bb.xor_bit(0);
-        // XOR second bit (0) with 1 -> should become 1  
+        // XOR second bit (0) with 1 -> should become 1
         bb.xor_bit(1);
         // XOR third bit (1) with 1 -> should become 0
         bb.xor_bit(1);
@@ -851,7 +871,7 @@ mod tests {
     fn test_xor_bits() {
         let mut bb = BitBuffer::from_bitstr("0000000000000000");
         let xor_buf = vec![0b11000000, 0b11110000]; // Two bits are set OUTSIDE the xor area
-        bb.seek(2); 
+        bb.seek(2);
         bb.xor_bytearr(&xor_buf, 10).unwrap();
         println!("{}", bb.dump_bin());
         assert_eq!(bb.to_bitstr(), "0011000000110000");
@@ -860,10 +880,15 @@ mod tests {
     #[test]
     fn test_xor_bits_twochunks() {
         let mut bb = BitBuffer::from_bitstr("000000000000000000000000000000000000000000000000000000000000000000000000");
-        let xor_buf = vec![0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b00111100]; // Two bits are set OUTSIDE the xor area
-        bb.seek(2); 
+        let xor_buf = vec![
+            0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b11000000, 0b00111100,
+        ]; // Two bits are set OUTSIDE the xor area
+        bb.seek(2);
         bb.xor_bytearr(&xor_buf, 68).unwrap();
         println!("{}", bb.dump_bin());
-        assert_eq!(bb.to_bitstr(), "001100000011000000110000001100000011000000110000001100000011000000001100");
+        assert_eq!(
+            bb.to_bitstr(),
+            "001100000011000000110000001100000011000000110000001100000011000000001100"
+        );
     }
 }

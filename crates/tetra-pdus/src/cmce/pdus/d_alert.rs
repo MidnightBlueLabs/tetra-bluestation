@@ -1,10 +1,9 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-ALERT PDU (Clause 14.7.1.1).
 /// This PDU shall be an information to the originating MS that the call is proceeding and the connecting party has been alerted.
@@ -39,7 +38,6 @@ pub struct DAlert {
 impl DAlert {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DAlert)?;
 
@@ -59,32 +57,32 @@ impl DAlert {
 
         // Type2
         let basic_service_information = typed::parse_type2_struct(obit, buffer, BasicServiceInformation::from_bitbuf)?;
-        
+
         // Type2
         let notification_indicator = typed::parse_type2_generic(obit, buffer, 6, "notification_indicator")?;
 
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DAlert { 
-            call_identifier, 
-            call_time_out_set_up_phase, 
-            reserved, 
-            simplex_duplex_selection, 
-            call_queued, 
-            basic_service_information, 
-            notification_indicator, 
-            facility, 
-            proprietary 
+        Ok(DAlert {
+            call_identifier,
+            call_time_out_set_up_phase,
+            reserved,
+            simplex_duplex_selection,
+            call_queued,
+            basic_service_information,
+            notification_indicator,
+            facility,
+            proprietary,
         })
     }
 
@@ -104,19 +102,24 @@ impl DAlert {
         buffer.write_bits(self.call_queued as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.basic_service_information.is_some() || self.notification_indicator.is_some() || self.facility.is_some() || self.proprietary.is_some() ;
+        let obit = self.basic_service_information.is_some()
+            || self.notification_indicator.is_some()
+            || self.facility.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_struct(obit, buffer, &self.basic_service_information, BasicServiceInformation::to_bitbuf)?;
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
 
@@ -124,13 +127,13 @@ impl DAlert {
         delimiters::write_mbit(buffer, 0);
         Ok(())
     }
-
 }
 
 impl fmt::Display for DAlert {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-        "DAlert {{ call_identifier: {:?} call_time_out_set_up_phase: {:?} reserved: {:?} simplex_duplex_selection: {:?} call_queued: {:?} basic_service_information: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DAlert {{ call_identifier: {:?} call_time_out_set_up_phase: {:?} reserved: {:?} simplex_duplex_selection: {:?} call_queued: {:?} basic_service_information: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.call_time_out_set_up_phase,
             self.reserved,

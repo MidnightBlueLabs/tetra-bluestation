@@ -1,7 +1,6 @@
 // use tetra_core::Todo;
 // use tetra_saps::{lcmc::{CallId, control::Circuit, enums::circuit_mode_type::CircuitModeType}, tmv::enums::logical_chans::LogicalChannel};
 
-
 // pub struct UmacCircuit {
 //     /// Timeslot in which this circuit exists
 //     pub ts: u8,
@@ -23,7 +22,7 @@
 //             ts: circuit.ts,
 //             call_id: circuit.call_id,
 //             circuit_mode: circuit.circuit_mode,
-//             usage: circuit.usage, 
+//             usage: circuit.usage,
 //             encryption: circuit.encryption,
 //         }
 //     }

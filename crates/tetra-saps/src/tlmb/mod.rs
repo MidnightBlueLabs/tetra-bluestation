@@ -1,6 +1,5 @@
 use tetra_core::{BitBuffer, EndpointId, Todo};
 
-
 /// BS only
 /// TL-SAP and TMB-SAP merged into TLMB-SAP
 #[derive(Debug)]
@@ -17,8 +16,6 @@ pub struct TlmbSyncInd {
     pub endpoint_id: EndpointId,
     pub tl_sdu: BitBuffer,
 }
-
-
 
 /// BS only
 /// TL-SAP and TMB-SAP merged into TLMB-SAP

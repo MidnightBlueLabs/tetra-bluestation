@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_ul::MlePduTypeUl;
 
@@ -24,10 +24,9 @@ pub struct UPrepare {
 impl UPrepare {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeUl::UPrepare)?;
-        
+
         // obit designates presence of any further type2, type3 or type4 fields
         let obit = delimiters::read_obit(buffer)?;
 
@@ -35,7 +34,8 @@ impl UPrepare {
         let cell_identifier_ca = typed::parse_type2_generic(obit, buffer, 5, "cell_identifier_ca")?;
 
         // Conditional
-        unimplemented!(); let sdu = if obit { Some(0) } else { None };
+        unimplemented!();
+        let sdu = if obit { Some(0) } else { None };
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -43,10 +43,7 @@ impl UPrepare {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UPrepare { 
-            cell_identifier_ca, 
-            sdu
-        })
+        Ok(UPrepare { cell_identifier_ca, sdu })
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -55,9 +52,11 @@ impl UPrepare {
         buffer.write_bits(MlePduTypeUl::UPrepare.into_raw(), 3);
 
         // Check if any optional field present and place o-bit
-        let obit = self.cell_identifier_ca.is_some() ;
+        let obit = self.cell_identifier_ca.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.cell_identifier_ca, 5);
@@ -78,8 +77,7 @@ impl fmt::Display for UPrepare {
         write!(
             f,
             "UPrepare {{ cell_identifier_ca: {:?} sdu: {:?} }}",
-            self.cell_identifier_ca,
-            self.sdu,
+            self.cell_identifier_ca, self.sdu,
         )
     }
 }

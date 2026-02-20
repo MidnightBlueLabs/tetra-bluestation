@@ -5,7 +5,6 @@ use tetra_core::pdu_parse_error::PduParseErr;
 
 use crate::umac::fields::basic_slotgrant::BasicSlotgrant;
 
-
 /// Clause 21.4.3.4 MAC-D-BLCK
 #[derive(Debug, Clone)]
 pub struct MacDBlck {
@@ -43,18 +42,17 @@ impl MacDBlck {
         s.encryption_mode = buf.read_field(2, "encryption_mode")? as u8;
         s.event_label = buf.read_field(10, "event_label")? as u16;
         s.imm_napping_permission = buf.read_field(1, "imm_napping_permission")? != 0;
-        
+
         let slot_granting_flag = buf.read_field(1, "slot_granting_flag")?;
-        if slot_granting_flag == 1 { 
+        if slot_granting_flag == 1 {
             // 8-bit BasicSlotgrant element
-            s.slot_granting_element = Some(BasicSlotgrant::from_bitbuf(buf)?); 
+            s.slot_granting_element = Some(BasicSlotgrant::from_bitbuf(buf)?);
         }
 
         Ok(s)
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
-
         // write required constant mac_pdu_type and pdu_subtype
         buf.write_bits(3, 2);
         buf.write_bits(0, 1);
@@ -64,7 +62,7 @@ impl MacDBlck {
         buf.write_bits(self.event_label as u64, 10);
         buf.write_bits(self.imm_napping_permission as u8 as u64, 1);
 
-        if let Some(v) = &self.slot_granting_element { 
+        if let Some(v) = &self.slot_granting_element {
             buf.write_bits(1, 1);
             v.to_bitbuf(buf); // 8-bit BasicSlotgrant element
         } else {
@@ -79,8 +77,8 @@ impl fmt::Display for MacDBlck {
         write!(f, " encryption_mode: {}", self.encryption_mode)?;
         write!(f, " event_label: {}", self.event_label)?;
         write!(f, " imm_napping_permission: {}", self.imm_napping_permission)?;
-        if let Some(v) = &self.slot_granting_element { 
-            write!(f, "  slot_granting_element: {}", v)?; 
+        if let Some(v) = &self.slot_granting_element {
+            write!(f, "  slot_granting_element: {}", v)?;
         }
         write!(f, " }}")
     }

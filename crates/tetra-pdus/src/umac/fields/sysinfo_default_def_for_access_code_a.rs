@@ -2,7 +2,6 @@ use core::fmt::Display;
 
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
-
 /// Clause 21.4.4.1 SYSINFO -> Default definition for access code A information element contents
 #[derive(Debug, Clone)]
 pub struct SysinfoDefaultDefForAccessCodeA {

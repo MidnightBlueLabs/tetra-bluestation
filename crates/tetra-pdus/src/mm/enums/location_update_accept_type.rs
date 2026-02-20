@@ -47,18 +47,28 @@ impl LocationUpdateAcceptType {
 }
 
 impl From<LocationUpdateAcceptType> for u64 {
-    fn from(e: LocationUpdateAcceptType) -> Self { e.into_raw() }
+    fn from(e: LocationUpdateAcceptType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for LocationUpdateAcceptType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            LocationUpdateAcceptType::RoamingLocationUpdating => write!(f, "RoamingLocationUpdating"),
+            LocationUpdateAcceptType::RoamingLocationUpdating => {
+                write!(f, "RoamingLocationUpdating")
+            }
             LocationUpdateAcceptType::TemporaryRegistration => write!(f, "TemporaryRegistration"),
-            LocationUpdateAcceptType::PeriodicLocationUpdating => write!(f, "PeriodicLocationUpdating"),
+            LocationUpdateAcceptType::PeriodicLocationUpdating => {
+                write!(f, "PeriodicLocationUpdating")
+            }
             LocationUpdateAcceptType::ItsiAttach => write!(f, "ItsiAttach"),
-            LocationUpdateAcceptType::ServiceRestorationRoamingLocationUpdating => write!(f, "ServiceRestorationRoamingLocationUpdating"),
-            LocationUpdateAcceptType::MigratingOrServiceRestorationMigratingLocationUpdating => write!(f, "MigratingOrServiceRestorationMigratingLocationUpdating"),
+            LocationUpdateAcceptType::ServiceRestorationRoamingLocationUpdating => {
+                write!(f, "ServiceRestorationRoamingLocationUpdating")
+            }
+            LocationUpdateAcceptType::MigratingOrServiceRestorationMigratingLocationUpdating => {
+                write!(f, "MigratingOrServiceRestorationMigratingLocationUpdating")
+            }
             LocationUpdateAcceptType::DemandLocationUpdating => write!(f, "DemandLocationUpdating"),
             LocationUpdateAcceptType::DisabledMsUpdating => write!(f, "DisabledMsUpdating"),
         }

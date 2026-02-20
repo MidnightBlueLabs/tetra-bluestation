@@ -3,11 +3,11 @@ use tetra_core::{BitBuffer, TdmaTime, TetraAddress, Todo};
 use crate::umac::subcomp::defrag::{DefragBuffer, DefragBufferState};
 
 const DEFRAG_BUF_MAX_LEN: usize = 4096;
-const DEFRAG_TS_BEFORE_TIMEOUT: i32 = 10*4; // TODO check documentation. 10 frames.
+const DEFRAG_TS_BEFORE_TIMEOUT: i32 = 10 * 4; // TODO check documentation. 10 frames.
 
 /// Simple defragmenter suitable for MS use
 /// Only maintains a single DefragBuffer per timeslot, as only the SwMI will
-/// be sending data. 
+/// be sending data.
 pub struct MsDefrag {
     pub buffers: [DefragBuffer; 4],
 }
@@ -15,12 +15,7 @@ pub struct MsDefrag {
 impl MsDefrag {
     pub fn new() -> Self {
         Self {
-            buffers: [
-                DefragBuffer::new(),
-                DefragBuffer::new(),
-                DefragBuffer::new(),
-                DefragBuffer::new(),
-            ],
+            buffers: [DefragBuffer::new(), DefragBuffer::new(), DefragBuffer::new(), DefragBuffer::new()],
         }
     }
 
@@ -41,7 +36,6 @@ impl MsDefrag {
 
     /// Inserts a first fragment into a fragbuffer.
     pub fn insert_first(&mut self, bitbuffer: &mut BitBuffer, t: TdmaTime, addr: TetraAddress, aie_info: Option<Todo>) {
-
         // Reset target buffer if needed
         let ts = (t.t - 1) as usize;
         if self.buffers[ts].state != DefragBufferState::Inactive {
@@ -60,14 +54,18 @@ impl MsDefrag {
         // Copy the bitbuffer data from pos to end into our fragbuffer
         self.buffers[ts].buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());
 
-        tracing::debug!("Defrag buffer {} first: ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
-            ts, self.buffers[ts].addr.ssi, self.buffers[ts].t_first, self.buffers[ts].t_last, 
-            self.buffers[ts].num_frags, self.buffers[ts].buffer.dump_bin());
-
+        tracing::debug!(
+            "Defrag buffer {} first: ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
+            ts,
+            self.buffers[ts].addr.ssi,
+            self.buffers[ts].t_first,
+            self.buffers[ts].t_last,
+            self.buffers[ts].num_frags,
+            self.buffers[ts].buffer.dump_bin()
+        );
     }
 
     pub fn insert_next(&mut self, bitbuffer: &mut BitBuffer, t: TdmaTime) {
-        
         let ts = (t.t - 1) as usize;
         if self.buffers[ts].state != DefragBufferState::Active {
             tracing::warn!("Defrag buffer {} is not active", ts);
@@ -86,14 +84,18 @@ impl MsDefrag {
         // Copy the bitbuffer data from pos to end into our fragbuffer
         self.buffers[ts].buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());
 
-        tracing::debug!("Defrag buffer {} next:  ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
-            ts, self.buffers[ts].addr.ssi, self.buffers[ts].t_first, self.buffers[ts].t_last, 
-            self.buffers[ts].num_frags, self.buffers[ts].buffer.dump_bin());
-
+        tracing::debug!(
+            "Defrag buffer {} next:  ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
+            ts,
+            self.buffers[ts].addr.ssi,
+            self.buffers[ts].t_first,
+            self.buffers[ts].t_last,
+            self.buffers[ts].num_frags,
+            self.buffers[ts].buffer.dump_bin()
+        );
     }
 
     pub fn insert_last(&mut self, bitbuffer: &mut BitBuffer, t: TdmaTime) {
-
         let ts = (t.t - 1) as usize;
         if self.buffers[ts].state != DefragBufferState::Active {
             tracing::warn!("Defrag buffer {} is not active", ts);
@@ -111,11 +113,17 @@ impl MsDefrag {
         self.buffers[ts].num_frags += 1;
 
         // Copy the bitbuffer data from pos to end into our fragbuffer
-        self.buffers[ts].buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());  
+        self.buffers[ts].buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());
 
-        tracing::debug!("Defrag buffer {} last:  ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
-            ts, self.buffers[ts].addr.ssi, self.buffers[ts].t_first, self.buffers[ts].t_last, 
-            self.buffers[ts].num_frags, self.buffers[ts].buffer.dump_bin());
+        tracing::debug!(
+            "Defrag buffer {} last:  ssi: {}, t_first: {}, t_last: {}, num_frags: {}: {}",
+            ts,
+            self.buffers[ts].addr.ssi,
+            self.buffers[ts].t_first,
+            self.buffers[ts].t_last,
+            self.buffers[ts].num_frags,
+            self.buffers[ts].buffer.dump_bin()
+        );
     }
 
     /// Retrieves a reference to the AIE info associated with a defrag buffer
@@ -128,9 +136,8 @@ impl MsDefrag {
         self.buffers[ts].aie_info.as_ref()
     }
 
-    /// Transfers finalized defragbuf to caller, setting bitbuffer slot pos to start. 
+    /// Transfers finalized defragbuf to caller, setting bitbuffer slot pos to start.
     pub fn take_defragged_buf(&mut self, t: TdmaTime) -> Option<DefragBuffer> {
-        
         let ts = (t.t - 1) as usize;
         if self.buffers[ts].state != DefragBufferState::Complete {
             tracing::warn!("Defrag buffer {} is not complete", ts);
@@ -147,17 +154,15 @@ impl MsDefrag {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tetra_core::{address::SsiType, bitbuffer::BitBuffer, debug};
 
-
     #[test]
-    fn test_3_chunks() { 
+    fn test_3_chunks() {
         debug::setup_logging_verbose();
-        
+
         let mut buf1 = BitBuffer::from_bitstr("000");
         let t1 = TdmaTime::default().add_timeslots(2); // UL time 0
         let mut buf2 = BitBuffer::from_bitstr("111");
@@ -167,10 +172,14 @@ mod tests {
 
         let mut defragger = MsDefrag::new();
         defragger.insert_first(
-            &mut buf1, 
-            t1, 
-            TetraAddress { ssi: 1234, ssi_type: SsiType::Issi, encrypted: false},
-            None
+            &mut buf1,
+            t1,
+            TetraAddress {
+                ssi: 1234,
+                ssi_type: SsiType::Issi,
+                encrypted: false,
+            },
+            None,
         );
         defragger.insert_next(&mut buf2, t2);
         defragger.insert_last(&mut buf3, t3);

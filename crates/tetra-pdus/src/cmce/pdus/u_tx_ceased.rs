@@ -1,8 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-TX CEASED PDU (Clause 14.7.2.11).
 /// This PDU shall be the message to the SwMI that a transmission has ceased.
@@ -25,7 +25,6 @@ pub struct UTxCeased {
 impl UTxCeased {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::UTxCeased)?;
 
@@ -35,27 +34,26 @@ impl UTxCeased {
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
 
-
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let dm_ms_address = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UTxCeased { 
-            call_identifier, 
-            facility, 
-            dm_ms_address, 
-            proprietary 
+        Ok(UTxCeased {
+            call_identifier,
+            facility,
+            dm_ms_address,
+            proprietary,
         })
     }
 
@@ -67,13 +65,15 @@ impl UTxCeased {
         buffer.write_bits(self.call_identifier as u64, 14);
 
         // Check if any optional field present and place o-bit
-        let obit = self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some() ;
+        let obit = self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;
 
@@ -88,11 +88,10 @@ impl UTxCeased {
 
 impl fmt::Display for UTxCeased {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "UTxCeased {{ call_identifier: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
-            self.call_identifier,
-            self.facility,
-            self.dm_ms_address,
-            self.proprietary,
+        write!(
+            f,
+            "UTxCeased {{ call_identifier: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            self.call_identifier, self.facility, self.dm_ms_address, self.proprietary,
         )
     }
 }

@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 
@@ -21,16 +21,14 @@ pub struct DRestoreFail {
 impl DRestoreFail {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeDl::DRestoreFail)?;
-        
+
         // Type1
         let fail_cause = buffer.read_field(2, "fail_cause")? as u8;
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
-
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -38,9 +36,7 @@ impl DRestoreFail {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DRestoreFail { 
-            fail_cause
-        })
+        Ok(DRestoreFail { fail_cause })
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -53,7 +49,6 @@ impl DRestoreFail {
         delimiters::write_mbit(buffer, 0);
         Ok(())
     }
-
 }
 
 impl fmt::Display for DRestoreFail {

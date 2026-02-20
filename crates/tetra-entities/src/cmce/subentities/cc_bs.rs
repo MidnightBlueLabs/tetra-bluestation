@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 
 use tetra_config::{SharedConfig, TimeslotOwner};
-use tetra_core::{
-    BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity,
-    unimplemented_log,
-};
+use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::{
     enums::{
-        call_timeout::CallTimeout, call_timeout_setup_phase::CallTimeoutSetupPhase,
-        cmce_pdu_type_ul::CmcePduTypeUl, transmission_grant::TransmissionGrant,
+        call_timeout::CallTimeout, call_timeout_setup_phase::CallTimeoutSetupPhase, cmce_pdu_type_ul::CmcePduTypeUl,
+        transmission_grant::TransmissionGrant,
     },
     fields::basic_service_information::BasicServiceInformation,
     pdus::{
-        d_call_proceeding::DCallProceeding, d_connect::DConnect, d_release::DRelease,
-        d_setup::DSetup, d_tx_ceased::DTxCeased, d_tx_granted::DTxGranted, u_release::URelease,
-        u_setup::USetup, u_tx_ceased::UTxCeased, u_tx_demand::UTxDemand,
+        d_call_proceeding::DCallProceeding, d_connect::DConnect, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased,
+        d_tx_granted::DTxGranted, u_release::URelease, u_setup::USetup, u_tx_ceased::UTxCeased, u_tx_demand::UTxDemand,
     },
     structs::cmce_circuit::CmceCircuit,
 };
@@ -99,12 +95,10 @@ impl CcBsSubentity {
         // Build D-SETUP PDU and send down the stack
         let dest_addr = TetraAddress::new(26, SsiType::Gssi);
         let pdu_d_setup = Self::build_d_setup_pdu_from_circuit(&circuit);
-        self.cached_setups
-            .insert(circuit.call_id, (pdu_d_setup, dest_addr));
+        self.cached_setups.insert(circuit.call_id, (pdu_d_setup, dest_addr));
         let (pdu_ref, _) = self.cached_setups.get(&circuit.call_id).unwrap();
 
-        let (pdu, chan_alloc) =
-            Self::build_d_setup_prim(pdu_ref, circuit.usage, circuit.ts, UlDlAssignment::Dl);
+        let (pdu, chan_alloc) = Self::build_d_setup_prim(pdu_ref, circuit.usage, circuit.ts, UlDlAssignment::Dl);
         let prim = Self::build_sapmsg(pdu, Some(chan_alloc), dltime, dest_addr);
         queue.push_back(prim);
     }
@@ -136,12 +130,7 @@ impl CcBsSubentity {
         }
     }
 
-    fn build_d_setup_prim(
-        pdu: &DSetup,
-        usage: u8,
-        ts: u8,
-        ul_dl: UlDlAssignment,
-    ) -> (BitBuffer, CmceChanAllocReq) {
+    fn build_d_setup_prim(pdu: &DSetup, usage: u8, ts: u8, ul_dl: UlDlAssignment) -> (BitBuffer, CmceChanAllocReq) {
         tracing::debug!("-> {:?}", pdu);
 
         let mut sdu = BitBuffer::new_autoexpand(80);
@@ -161,20 +150,15 @@ impl CcBsSubentity {
         (sdu, chan_alloc)
     }
 
-    fn build_sapmsg(
-        sdu: BitBuffer,
-        chan_alloc: Option<CmceChanAllocReq>,
-        dltime: TdmaTime,
-        address: TetraAddress,
-    ) -> SapMsg {
+    fn build_sapmsg(sdu: BitBuffer, chan_alloc: Option<CmceChanAllocReq>, dltime: TdmaTime, address: TetraAddress) -> SapMsg {
         // Construct prim
         SapMsg {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime: dltime,
+            dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: sdu,
+                sdu,
                 handle: 0,
                 endpoint_id: 0,
                 link_id: 0,
@@ -194,9 +178,9 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime: dltime,
+            dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: sdu,
+                sdu,
                 handle: 0,
                 endpoint_id: 0,
                 link_id: 0,
@@ -222,19 +206,12 @@ impl CcBsSubentity {
         tracing::info!("-> {:?}", pdu);
 
         let mut sdu = BitBuffer::new_autoexpand(32);
-        pdu.to_bitbuf(&mut sdu)
-            .expect("Failed to serialize DRelease");
+        pdu.to_bitbuf(&mut sdu).expect("Failed to serialize DRelease");
         sdu.seek(0);
         sdu
     }
 
-    fn send_d_call_proceeding(
-        &mut self,
-        queue: &mut MessageQueue,
-        message: &SapMsg,
-        pdu_request: &USetup,
-        call_id: u16,
-    ) {
+    fn send_d_call_proceeding(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu_request: &USetup, call_id: u16) {
         tracing::trace!("send_d_call_proceeding");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
@@ -254,15 +231,9 @@ impl CcBsSubentity {
         };
 
         let mut sdu = BitBuffer::new_autoexpand(25);
-        pdu_response
-            .to_bitbuf(&mut sdu)
-            .expect("Failed to serialize DCallProceeding");
+        pdu_response.to_bitbuf(&mut sdu).expect("Failed to serialize DCallProceeding");
         sdu.seek(0);
-        tracing::debug!(
-            "send_d_call_proceeding: -> {:?} sdu {}",
-            pdu_response,
-            sdu.dump_bin()
-        );
+        tracing::debug!("send_d_call_proceeding: -> {:?} sdu {}", pdu_response, sdu.dump_bin());
 
         let msg = SapMsg {
             sap: Sap::LcmcSap,
@@ -270,7 +241,7 @@ impl CcBsSubentity {
             dest: TetraEntity::Mle,
             dltime: message.dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: sdu,
+                sdu,
                 handle: prim.handle,
                 endpoint_id: prim.endpoint_id,
                 link_id: prim.link_id,
@@ -288,13 +259,7 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
-    fn send_d_connect(
-        &mut self,
-        queue: &mut MessageQueue,
-        message: &SapMsg,
-        pdu_request: &USetup,
-        call_id: u16,
-    ) {
+    fn send_d_connect(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu_request: &USetup, call_id: u16) {
         tracing::trace!("send_d_connect");
 
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
@@ -318,15 +283,9 @@ impl CcBsSubentity {
         };
 
         let mut sdu = BitBuffer::new_autoexpand(30);
-        pdu_response
-            .to_bitbuf(&mut sdu)
-            .expect("Failed to serialize DConnect");
+        pdu_response.to_bitbuf(&mut sdu).expect("Failed to serialize DConnect");
         sdu.seek(0);
-        tracing::debug!(
-            "send_d_connect: -> {:?} sdu {}",
-            pdu_response,
-            sdu.dump_bin()
-        );
+        tracing::debug!("send_d_connect: -> {:?} sdu {}", pdu_response, sdu.dump_bin());
 
         let msg = SapMsg {
             sap: Sap::LcmcSap,
@@ -334,7 +293,7 @@ impl CcBsSubentity {
             dest: TetraEntity::Mle,
             dltime: message.dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu: sdu,
+                sdu,
                 handle: prim.handle,
                 endpoint_id: prim.endpoint_id,
                 link_id: prim.link_id,
@@ -430,7 +389,7 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime: dltime,
+            dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::Open(circuit)),
         };
         queue.push_back(cmd);
@@ -441,7 +400,7 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime: dltime,
+            dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::Close(circuit.direction, circuit.ts)),
         };
         queue.push_back(cmd);
@@ -548,9 +507,7 @@ impl CcBsSubentity {
 
         tracing::info!("-> {:?}", d_connect);
         let mut connect_sdu = BitBuffer::new_autoexpand(30);
-        d_connect
-            .to_bitbuf(&mut connect_sdu)
-            .expect("Failed to serialize DConnect");
+        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
         connect_sdu.seek(0);
 
         let connect_msg = SapMsg {
@@ -602,14 +559,11 @@ impl CcBsSubentity {
         };
 
         // Cache for late-entry re-sends
-        self.cached_setups
-            .insert(circuit.call_id, (d_setup, dest_addr));
+        self.cached_setups.insert(circuit.call_id, (d_setup, dest_addr));
         let (d_setup_ref, _) = self.cached_setups.get(&circuit.call_id).unwrap();
 
-        let (setup_sdu, setup_chan_alloc) =
-            Self::build_d_setup_prim(d_setup_ref, circuit.usage, circuit.ts, UlDlAssignment::Both);
-        let setup_msg =
-            Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), message.dltime, dest_addr);
+        let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, circuit.usage, circuit.ts, UlDlAssignment::Both);
+        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), message.dltime, dest_addr);
         queue.push_back(setup_msg);
 
         // Track the active local call — caller is granted the floor, so tx_active = true
@@ -707,10 +661,8 @@ impl CcBsSubentity {
                             return;
                         };
                         let dest_addr = *dest_addr;
-                        let (sdu, chan_alloc) =
-                            Self::build_d_setup_prim(pdu, usage, ts, UlDlAssignment::Both);
-                        let prim =
-                            Self::build_sapmsg(sdu, Some(chan_alloc), self.dltime, dest_addr);
+                        let (sdu, chan_alloc) = Self::build_d_setup_prim(pdu, usage, ts, UlDlAssignment::Both);
+                        let prim = Self::build_sapmsg(sdu, Some(chan_alloc), self.dltime, dest_addr);
                         queue.push_back(prim);
                     }
 
@@ -767,11 +719,7 @@ impl CcBsSubentity {
     fn release_timeslot(&mut self, ts: u8) {
         let mut state = self.config.state_write();
         if let Err(err) = state.timeslot_alloc.release(TimeslotOwner::Cmce, ts) {
-            tracing::warn!(
-                "CcBsSubentity: failed to release timeslot ts={} err={:?}",
-                ts,
-                err
-            );
+            tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
         }
     }
 
@@ -830,17 +778,11 @@ impl CcBsSubentity {
             supported = false;
         };
         if pdu.hook_method_selection == true {
-            unimplemented_log!(
-                "Hook method selection not supported: {}",
-                pdu.hook_method_selection
-            );
+            unimplemented_log!("Hook method selection not supported: {}", pdu.hook_method_selection);
             supported = false;
         };
         if pdu.simplex_duplex_selection != false {
-            unimplemented_log!(
-                "Only simplex calls supported: {}",
-                pdu.simplex_duplex_selection
-            );
+            unimplemented_log!("Only simplex calls supported: {}", pdu.simplex_duplex_selection);
             supported = false;
         };
         // if pdu.basic_service_information != 0xFC {
@@ -853,10 +795,7 @@ impl CcBsSubentity {
         if pdu.clir_control != 0 {
             unimplemented_log!("clir_control not supported: {}", pdu.clir_control);
         };
-        if pdu.called_party_ssi.is_none()
-            || pdu.called_party_short_number_address.is_some()
-            || pdu.called_party_extension.is_some()
-        {
+        if pdu.called_party_ssi.is_none() || pdu.called_party_short_number_address.is_some() || pdu.called_party_extension.is_some() {
             unimplemented_log!("we only support ssi-based calling");
         };
         // Then, we warn about some other unhandled/unsupported fields
@@ -902,10 +841,7 @@ impl CcBsSubentity {
             return;
         };
 
-        tracing::info!(
-            "U-TX CEASED: PTT released on call_id={}, entering hangtime",
-            call_id
-        );
+        tracing::info!("U-TX CEASED: PTT released on call_id={}, entering hangtime", call_id);
 
         call.tx_active = false;
         call.hangtime_start = Some(self.dltime);
@@ -929,9 +865,7 @@ impl CcBsSubentity {
 
         tracing::info!("-> {:?}", d_tx_ceased);
         let mut sdu = BitBuffer::new_autoexpand(25);
-        d_tx_ceased
-            .to_bitbuf(&mut sdu)
-            .expect("Failed to serialize DTxCeased");
+        d_tx_ceased.to_bitbuf(&mut sdu).expect("Failed to serialize DTxCeased");
         sdu.seek(0);
 
         // Send via FACCH (stealing channel) so radios on the traffic channel hear the beep
@@ -942,10 +876,8 @@ impl CcBsSubentity {
         // then re-send on MCCH so all radios see the floor is free.
         pdu.transmission_grant = TransmissionGrant::NotGranted;
         pdu.transmission_request_permission = true;
-        let (setup_sdu, setup_chan_alloc) =
-            Self::build_d_setup_prim(pdu, call.usage, call.ts, UlDlAssignment::Both);
-        let setup_msg =
-            Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), self.dltime, dest_addr);
+        let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(pdu, call.usage, call.ts, UlDlAssignment::Both);
+        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), self.dltime, dest_addr);
         queue.push_back(setup_msg);
 
         // Notify Brew that this local talkspurt has ended so it can send GROUP_IDLE
@@ -954,10 +886,7 @@ impl CcBsSubentity {
             src: TetraEntity::Cmce,
             dest: TetraEntity::Brew,
             dltime: self.dltime,
-            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd {
-                call_id,
-                ts: call.ts,
-            }),
+            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts: call.ts }),
         };
         queue.push_back(notify);
 
@@ -967,10 +896,7 @@ impl CcBsSubentity {
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
             dltime: self.dltime,
-            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd {
-                call_id,
-                ts: call.ts,
-            }),
+            msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts: call.ts }),
         };
         queue.push_back(notify_umac);
     }
@@ -1001,11 +927,7 @@ impl CcBsSubentity {
             return;
         };
 
-        tracing::info!(
-            "U-TX DEMAND: ISSI {} requests floor on call_id={}",
-            requesting_party.ssi,
-            call_id
-        );
+        tracing::info!("U-TX DEMAND: ISSI {} requests floor on call_id={}", requesting_party.ssi, call_id);
 
         // Grant the floor to the requesting MS
         call.tx_active = true;
@@ -1071,9 +993,7 @@ impl CcBsSubentity {
 
         tracing::info!("-> {:?}", d_tx_granted);
         let mut sdu = BitBuffer::new_autoexpand(50);
-        d_tx_granted
-            .to_bitbuf(&mut sdu)
-            .expect("Failed to serialize DTxGranted");
+        d_tx_granted.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
         sdu.seek(0);
 
         let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr);
@@ -1098,11 +1018,7 @@ impl CcBsSubentity {
         };
 
         let call_id = pdu.call_identifier;
-        tracing::info!(
-            "U-RELEASE: call_id={} cause={}",
-            call_id,
-            pdu.disconnect_cause
-        );
+        tracing::info!("U-RELEASE: call_id={} cause={}", call_id, pdu.disconnect_cause);
         self.release_call(queue, call_id);
     }
 }

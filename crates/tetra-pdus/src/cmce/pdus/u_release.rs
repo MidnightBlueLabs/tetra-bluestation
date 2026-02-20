@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-RELEASE PDU (Clause 14.7.2.9).
 /// This PDU shall be the acknowledgement to a disconnection.
@@ -26,7 +25,6 @@ pub struct URelease {
 impl URelease {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::URelease)?;
 
@@ -40,21 +38,21 @@ impl URelease {
 
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(URelease { 
-            call_identifier, 
-            disconnect_cause, 
-            facility, 
-            proprietary 
+        Ok(URelease {
+            call_identifier,
+            disconnect_cause,
+            facility,
+            proprietary,
         })
     }
 
@@ -68,9 +66,11 @@ impl URelease {
         buffer.write_bits(self.disconnect_cause as u64, 5);
 
         // Check if any optional field present and place o-bit
-        let obit = self.facility.is_some() || self.proprietary.is_some() ;
+        let obit = self.facility.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
@@ -86,11 +86,10 @@ impl URelease {
 
 impl fmt::Display for URelease {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "URelease {{ call_identifier: {:?} disconnect_cause: {:?} facility: {:?} proprietary: {:?} }}",
-            self.call_identifier,
-            self.disconnect_cause,
-            self.facility,
-            self.proprietary,
+        write!(
+            f,
+            "URelease {{ call_identifier: {:?} disconnect_cause: {:?} facility: {:?} proprietary: {:?} }}",
+            self.call_identifier, self.disconnect_cause, self.facility, self.proprietary,
         )
     }
 }

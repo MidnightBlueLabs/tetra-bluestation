@@ -6,7 +6,7 @@ pub enum AccessAssignDlUsage {
     AssignedControl,
     CommonControl,
     CommonAndAssigned,
-    Traffic(u8)
+    Traffic(u8),
 }
 
 impl AccessAssignDlUsage {
@@ -16,17 +16,17 @@ impl AccessAssignDlUsage {
             1 => AccessAssignDlUsage::AssignedControl,
             2 => AccessAssignDlUsage::CommonControl,
             3 => AccessAssignDlUsage::CommonAndAssigned,
-            _ => AccessAssignDlUsage::Traffic(field)
+            _ => AccessAssignDlUsage::Traffic(field),
         }
     }
 
     pub fn to_usage_marker(&self) -> u8 {
         match self {
-            AccessAssignDlUsage::Unallocated         => 0,
-            AccessAssignDlUsage::AssignedControl     => 1,
-            AccessAssignDlUsage::CommonControl       => 2,
-            AccessAssignDlUsage::CommonAndAssigned   => 3,
-            AccessAssignDlUsage::Traffic(chan)       => *chan,
+            AccessAssignDlUsage::Unallocated => 0,
+            AccessAssignDlUsage::AssignedControl => 1,
+            AccessAssignDlUsage::CommonControl => 2,
+            AccessAssignDlUsage::CommonAndAssigned => 3,
+            AccessAssignDlUsage::Traffic(chan) => *chan,
         }
     }
 

@@ -1,8 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::cmce_pdu_type_dl::CmcePduTypeDl;
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the CMCE FUNCTION NOT SUPPORTED PDU (Clause 14.7.3.2).
 /// This PDU may be sent by the MS or SwMI to indicate that the received PDU is not supported.
@@ -35,29 +35,34 @@ pub struct CmceFunctionNotSupported {
 impl CmceFunctionNotSupported {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::CmceFunctionNotSupported)?;
-        
+
         // Type1
         let not_supported_pdu_type = buffer.read_field(5, "not_supported_pdu_type")? as u8;
         // Type1
         let call_identifier_present = buffer.read_field(1, "call_identifier_present")? != 0;
         // Conditional
-        let call_identifier = if call_identifier_present { 
+        let call_identifier = if call_identifier_present {
             Some(buffer.read_field(14, "call_identifier")?)
-        } else { None };
+        } else {
+            None
+        };
         // Type1
         let function_not_supported_pointer = buffer.read_field(8, "function_not_supported_pointer")? as u8;
         // Conditional
-        let length_of_received_pdu_extract = if function_not_supported_pointer != 0 { 
-            Some(buffer.read_field(8, "length_of_received_pdu_extract")?) 
-        } else { None };
+        let length_of_received_pdu_extract = if function_not_supported_pointer != 0 {
+            Some(buffer.read_field(8, "length_of_received_pdu_extract")?)
+        } else {
+            None
+        };
         // Conditional
-        let received_pdu_extract = if function_not_supported_pointer != 0 { 
+        let received_pdu_extract = if function_not_supported_pointer != 0 {
             unimplemented!();
-            Some(buffer.read_field(999, "received_pdu_extract")?) 
-        } else { None };
+            Some(buffer.read_field(999, "received_pdu_extract")?)
+        } else {
+            None
+        };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -68,15 +73,15 @@ impl CmceFunctionNotSupported {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(CmceFunctionNotSupported { 
-            not_supported_pdu_type, 
-            call_identifier_present, 
-            call_identifier, 
-            function_not_supported_pointer, 
-            length_of_received_pdu_extract, 
-            received_pdu_extract 
+        Ok(CmceFunctionNotSupported {
+            not_supported_pdu_type,
+            call_identifier_present,
+            call_identifier,
+            function_not_supported_pointer,
+            length_of_received_pdu_extract,
+            received_pdu_extract,
         })
-    } 
+    }
 
     /// Serialize this PDU into the given BitBuffer.
     pub fn to_bitbuf(&self, buffer: &mut BitBuffer) -> Result<(), PduParseErr> {
@@ -109,8 +114,9 @@ impl CmceFunctionNotSupported {
 
 impl fmt::Display for CmceFunctionNotSupported {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-        "CmceFunctionNotSupported {{ not_supported_pdu_type: {:?} call_identifier_present: {:?} call_identifier: {:?} function_not_supported_pointer: {:?} length_of_received_pdu_extract: {:?} received_pdu_extract: {:?} }}",
+        write!(
+            f,
+            "CmceFunctionNotSupported {{ not_supported_pdu_type: {:?} call_identifier_present: {:?} call_identifier: {:?} function_not_supported_pointer: {:?} length_of_received_pdu_extract: {:?} received_pdu_extract: {:?} }}",
             self.not_supported_pdu_type,
             self.call_identifier_present,
             self.call_identifier,

@@ -2,11 +2,10 @@ use core::fmt;
 
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
-
 /// 16.10.19 Group Identity Attachment
 #[derive(Debug, Clone)]
 pub struct GroupIdentityAttachment {
-    /// 2 bits. 
+    /// 2 bits.
     /// 0: Attachment not needed
     /// 1: Attachment for next ITSI attach required
     /// 2: Attachment not allowed for next ITSI attach
@@ -37,8 +36,10 @@ impl GroupIdentityAttachment {
 
 impl fmt::Display for GroupIdentityAttachment {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "group_identity_attachment {{ group_identity_attachment_lifetime: {} class_of_usage: {} }}", 
-            self.group_identity_attachment_lifetime, 
-            self.class_of_usage)
+        write!(
+            f,
+            "group_identity_attachment {{ group_identity_attachment_lifetime: {} class_of_usage: {} }}",
+            self.group_identity_attachment_lifetime, self.class_of_usage
+        )
     }
 }

@@ -41,13 +41,13 @@ impl MleRouter {
     }
 
     /// Resolve a handle, returning its associated address, link ID and endpoint ID
-    /// Internally, the router updates the element's last_used timestamp. 
+    /// Internally, the router updates the element's last_used timestamp.
     pub fn use_handle(&mut self, handle: u32, ts: TdmaTime) -> (TetraAddress, u32, u32) {
         if let Some(conn) = self.states.get_mut(&handle) {
             conn.ts_last_used = ts; // Update last used timestamp
             (conn.addr.clone(), conn.link_id, conn.endpoint_id)
         } else {
-            self.dump_mappings();   
+            self.dump_mappings();
             tracing::warn!("Unknown MLE handle: {}", handle);
             (TetraAddress::issi(0), 0, 0)
         }
@@ -60,8 +60,15 @@ impl MleRouter {
     pub fn dump_mappings(&self) {
         tracing::info!("MLE Router mappings:");
         for (handle, conn) in &self.states {
-            tracing::info!("Handle {} -> Addr: {}, Link ID: {}, Endpoint ID: {}, Created: {}, Last Used: {}", 
-                handle, conn.addr, conn.link_id, conn.endpoint_id, conn.ts_created, conn.ts_last_used);
+            tracing::info!(
+                "Handle {} -> Addr: {}, Link ID: {}, Endpoint ID: {}, Created: {}, Last Used: {}",
+                handle,
+                conn.addr,
+                conn.link_id,
+                conn.endpoint_id,
+                conn.ts_created,
+                conn.ts_last_used
+            );
         }
     }
 }

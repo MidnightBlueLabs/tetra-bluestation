@@ -1,11 +1,10 @@
 use core::fmt;
 
-use tetra_core::{expect_pdu_type, unimplemented_log};
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
+use tetra_core::{expect_pdu_type, unimplemented_log};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
-
 
 /// Representation of the MM PDU/FUNCTION NOT SUPPORTED PDU (Clause 16.9.4.1).
 /// This PDU may be sent by the MS/LS or SwMI to indicate that the received MM PDU or the function indicated in the PDU is not supported.
@@ -33,10 +32,9 @@ pub struct MmPduFunctionNotSupported {
 impl MmPduFunctionNotSupported {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::MmPduFunctionNotSupported)?;
-        
+
         // Type1
         let not_supported_pdu_type = buffer.read_field(4, "not_supported_pdu_type")? as u8;
 
@@ -45,14 +43,16 @@ impl MmPduFunctionNotSupported {
 
         // Type2
         if !obit {
-            return Ok(MmPduFunctionNotSupported { 
-                not_supported_pdu_type, 
+            return Ok(MmPduFunctionNotSupported {
+                not_supported_pdu_type,
                 not_supported_sub_pdu_type: None,
             });
         }
 
         unimplemented_log!("MmPduFunctionNotSupported parsing not fully implemented - please report to developers");
-        Err(PduParseErr::NotImplemented{field: Some("MmPduFunctionNotSupported")})
+        Err(PduParseErr::NotImplemented {
+            field: Some("MmPduFunctionNotSupported"),
+        })
         // let not_supported_sub_pdu_type = typed::parse_type2_generic(obit, buffer, 999, "not_supported_sub_pdu_type")?;
         // // Type2
         // let length_of_the_copied_pdu = typed::parse_type2_generic(obit, buffer, 8, "length_of_the_copied_pdu")?;
@@ -65,13 +65,12 @@ impl MmPduFunctionNotSupported {
         //     return Err(PduParseErr::InvalidTrailingMbitValue);
         // }
 
-        // Ok(MmPduFunctionNotSupported { 
-        //     not_supported_pdu_type, 
-        //     not_supported_sub_pdu_type, 
-        //     length_of_the_copied_pdu, 
+        // Ok(MmPduFunctionNotSupported {
+        //     not_supported_pdu_type,
+        //     not_supported_sub_pdu_type,
+        //     length_of_the_copied_pdu,
         //     received_pdu_contents
         // })
-
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -84,7 +83,9 @@ impl MmPduFunctionNotSupported {
         // Check if any optional field present and place o-bit
         let obit = self.not_supported_sub_pdu_type.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
 
@@ -117,7 +118,9 @@ impl MmPduFunctionNotSupported {
 impl fmt::Display for MmPduFunctionNotSupported {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // write!(f, "MmPduFunctionNotSupported {{ not_supported_pdu_type: {:?} not_supported_sub_pdu_type: {:?} length_of_the_copied_pdu: {:?} received_pdu_contents: {:?} }}",
-        write!(f, "MmPduFunctionNotSupported {{ not_supported_pdu_type: {:?} not_supported_sub_pdu_type: {:?} }}",
+        write!(
+            f,
+            "MmPduFunctionNotSupported {{ not_supported_pdu_type: {:?} not_supported_sub_pdu_type: {:?} }}",
             self.not_supported_pdu_type,
             self.not_supported_sub_pdu_type,
             // self.length_of_the_copied_pdu,
@@ -125,7 +128,6 @@ impl fmt::Display for MmPduFunctionNotSupported {
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -137,7 +139,6 @@ mod tests {
 
     #[test]
     fn test_mm_pdu_function_not_supported_parse() {
-
         // Self-generated vec!!!
         debug::setup_logging_verbose();
         let test_vec = "11110011110000010";
@@ -146,7 +147,7 @@ mod tests {
 
         tracing::info!("Parsed: {:?}", pdu);
         tracing::info!("Buf at end: {}", buf_in.dump_bin());
-        
+
         assert!(buf_in.get_len_remaining() == 0, "Buffer not fully consumed");
 
         let mut buf_out = BitBuffer::new_autoexpand(32);
@@ -157,7 +158,6 @@ mod tests {
 
     #[test]
     fn test_mm_pdu_function_not_support_write() {
-
         // Self-generated vec!!!
         // 1111 0011 1 10000010
         // |--|                     pdu type
@@ -167,9 +167,9 @@ mod tests {
         //                     |    trailing obit
 
         debug::setup_logging_verbose();
-        let pdu= MmPduFunctionNotSupported {
-            not_supported_pdu_type: MmPduTypeUl::UMmStatus as u8, 
-            not_supported_sub_pdu_type: Some((6, StatusUplink::ChangeOfEnergySavingModeRequest.into()))
+        let pdu = MmPduFunctionNotSupported {
+            not_supported_pdu_type: MmPduTypeUl::UMmStatus as u8,
+            not_supported_sub_pdu_type: Some((6, StatusUplink::ChangeOfEnergySavingModeRequest.into())),
         };
         let mut test_buf = BitBuffer::new_autoexpand(32);
         pdu.to_bitbuf(&mut test_buf).unwrap();

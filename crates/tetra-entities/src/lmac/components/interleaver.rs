@@ -59,13 +59,12 @@ mod tests {
     fn test_matrix_interleave_roundtrip() {
         let lines = 4;
         let columns = 3;
-        let data: Vec<u8> = (0..(lines*columns) as u8).collect();
-        let mut tmp = vec![0u8; lines*columns];
-        let mut out = vec![0u8; lines*columns];
+        let data: Vec<u8> = (0..(lines * columns) as u8).collect();
+        let mut tmp = vec![0u8; lines * columns];
+        let mut out = vec![0u8; lines * columns];
 
         matrix_interleave(lines, columns, &data, &mut tmp);
         matrix_deinterleave(lines, columns, &tmp, &mut out);
         assert_eq!(data, out);
     }
 }
-

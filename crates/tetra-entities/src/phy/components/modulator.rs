@@ -1,13 +1,10 @@
-
 use tetra_core::TdmaTime;
 
 use tetra_pdus::phy::traits::rxtx_dev::TxSlotBits;
 
-use crate::phy::components::fir;
 use crate::phy::components::dsp_types::*;
+use crate::phy::components::fir;
 use crate::phy::components::modem_common::*;
-
-
 
 /// Samples per symbol
 const SPS: SampleCount = 4;
@@ -17,7 +14,6 @@ const SAMPLES_SLOT: SampleCount = SPS * 255;
 
 /// Output sample rate
 pub const SAMPLE_RATE: f64 = 18000.0 * SPS as f64;
-
 
 #[derive(PartialEq)]
 pub enum Mode {
@@ -76,10 +72,7 @@ impl Modulator {
                 } else if let Some(bits) = tx_slot.slot {
                     if sample_in_slot % SPS == 0 {
                         let symbol_i = (sample_in_slot / SPS) as usize;
-                        sample = self.dqpsk.symbol(
-                            bits[symbol_i*2]   != 0,
-                            bits[symbol_i*2+1] != 0,
-                        );
+                        sample = self.dqpsk.symbol(bits[symbol_i * 2] != 0, bits[symbol_i * 2 + 1] != 0);
                     }
                 }
             }
@@ -87,8 +80,6 @@ impl Modulator {
         Ok(self.filter.sample(&CHANNEL_FILTER_TAPS, sample))
     }
 }
-
-
 
 struct DqpskMapper {
     pub phase: i8,
@@ -105,25 +96,51 @@ impl DqpskMapper {
     }
 
     pub fn symbol(&mut self, bit0: bool, bit1: bool) -> ComplexSample {
-        self.phase = (self.phase + match (bit0, bit1) {
-            (true,  true)  => -3,
-            (true,  false) => -1,
-            (false, false) =>  1,
-            (false, true)  =>  3,
-        }) & 7;
+        self.phase = (self.phase
+            + match (bit0, bit1) {
+                (true, true) => -3,
+                (true, false) => -1,
+                (false, false) => 1,
+                (false, true) => 3,
+            })
+            & 7;
         // Look-up table to map phase (in multiples of pi/4)
         // to constellation points. Generated in Python with:
         // import numpy as np
         // print(",\n".join("ComplexSample{ re: %9.6f, im: %9.6f }" % (v.real, v.imag) for v in np.exp(1j*np.linspace(0, np.pi*2, 8, endpoint=False))))
         const CONSTELLATION: [ComplexSample; 8] = [
-            ComplexSample{ re:  1.000000, im:  0.000000 },
-            ComplexSample{ re:  0.707107, im:  0.707107 },
-            ComplexSample{ re:  0.000000, im:  1.000000 },
-            ComplexSample{ re: -0.707107, im:  0.707107 },
-            ComplexSample{ re: -1.000000, im:  0.000000 },
-            ComplexSample{ re: -0.707107, im: -0.707107 },
-            ComplexSample{ re: -0.000000, im: -1.000000 },
-            ComplexSample{ re:  0.707107, im: -0.707107 }
+            ComplexSample {
+                re: 1.000000,
+                im: 0.000000,
+            },
+            ComplexSample {
+                re: 0.707107,
+                im: 0.707107,
+            },
+            ComplexSample {
+                re: 0.000000,
+                im: 1.000000,
+            },
+            ComplexSample {
+                re: -0.707107,
+                im: 0.707107,
+            },
+            ComplexSample {
+                re: -1.000000,
+                im: 0.000000,
+            },
+            ComplexSample {
+                re: -0.707107,
+                im: -0.707107,
+            },
+            ComplexSample {
+                re: -0.000000,
+                im: -1.000000,
+            },
+            ComplexSample {
+                re: 0.707107,
+                im: -0.707107,
+            },
         ];
         CONSTELLATION[self.phase as usize]
     }

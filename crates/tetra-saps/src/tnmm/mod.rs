@@ -8,4 +8,3 @@ pub struct TnmmTestResponse {
     pub issi: u32,
     pub data: u32,
 }
-

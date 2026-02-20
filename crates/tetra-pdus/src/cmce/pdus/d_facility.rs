@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
+use crate::cmce::enums::cmce_pdu_type_dl::CmcePduTypeDl;
 use tetra_core::typed_pdu_fields::*;
-use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl};
-
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-FACILITY PDU (Clause 14.7.1.7).
 /// This PDU shall be used to send call unrelated SS information.
@@ -12,17 +11,14 @@ use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl};
 
 // note 1: Contents of this PDU shall be defined by SS protocols.
 #[derive(Debug)]
-pub struct DFacility {
-}
+pub struct DFacility {}
 
 #[allow(unreachable_code)] // TODO FIXME review, finalize and remove this
 impl DFacility {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DFacility)?;
-
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -33,7 +29,7 @@ impl DFacility {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DFacility {  })
+        Ok(DFacility {})
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -48,7 +44,6 @@ impl DFacility {
 
 impl fmt::Display for DFacility {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DFacility {{ }}",
-        )
+        write!(f, "DFacility {{ }}",)
     }
 }

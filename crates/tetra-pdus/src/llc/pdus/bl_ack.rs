@@ -17,7 +17,6 @@ pub struct BlAck {
 
 impl BlAck {
     pub fn from_bitbuf(buf: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         // Parse 4-bit type, perform sanity checks
         let_field!(buf, llc_link_type, 1);
         expect_value!(llc_link_type, 0)?;
@@ -28,7 +27,7 @@ impl BlAck {
         // Parse sequence number
         let_field!(buf, nr, 1);
 
-        Ok(BlAck{
+        Ok(BlAck {
             has_fcs: has_fcs != 0,
             nr: nr as u8,
         })

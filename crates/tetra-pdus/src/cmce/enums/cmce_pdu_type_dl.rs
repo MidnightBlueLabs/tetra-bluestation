@@ -77,7 +77,9 @@ impl CmcePduTypeDl {
 }
 
 impl From<CmcePduTypeDl> for u64 {
-    fn from(e: CmcePduTypeDl) -> Self { e.into_raw() }
+    fn from(e: CmcePduTypeDl) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for CmcePduTypeDl {

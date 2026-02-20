@@ -3,7 +3,6 @@
 #![allow(unused)]
 use tetra_core::{BitBuffer, EndpointId, LinkId, TetraAddress, Todo};
 
-
 #[derive(Debug)]
 pub struct LtpdMleActivityReq {
     pub sleep_mode: bool,
@@ -226,4 +225,3 @@ pub struct LtpdMleUnitdataInd {
     pub chan_change_resp_req: bool,
     pub chan_change_handle: Option<Todo>,
 }
-

@@ -1,10 +1,9 @@
-
 #[allow(dead_code)]
 #[derive(Copy, Debug, Clone, PartialEq)]
 pub enum SsiType {
     Unknown,
     /// Generic type when specific type unknown. Avoid using where possible.
-    Ssi, 
+    Ssi,
     /// Individual Short Subscriber Identity
     Issi,
     /// Group Short Subscriber Identity
@@ -12,7 +11,7 @@ pub enum SsiType {
     Ussi,
     Smi,
     /// Only usable in Umac, needs to be replaced with true SSI
-    EventLabel, 
+    EventLabel,
 }
 
 impl core::fmt::Display for SsiType {
@@ -35,11 +34,10 @@ pub struct TetraAddress {
     pub ssi_type: SsiType,
     /// Set to true if the address is an ESI (Encrypted Subscriber Identity)
     /// We maintain this field to allow us to pass still-encrypted SSIs up the stack if we want to
-    pub encrypted: bool, 
+    pub encrypted: bool,
 }
 
 impl TetraAddress {
-
     pub fn new(ssi: u32, ssi_type: SsiType) -> Self {
         Self {
             ssi,
@@ -63,4 +61,3 @@ impl core::fmt::Display for TetraAddress {
         }
     }
 }
-

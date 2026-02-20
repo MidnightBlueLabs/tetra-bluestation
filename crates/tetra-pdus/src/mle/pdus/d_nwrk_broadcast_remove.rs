@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 
@@ -45,10 +45,9 @@ pub struct DNwrkBroadcastRemove {
 impl DNwrkBroadcastRemove {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeDl::ExtPdu)?;
-        
+
         // Type1
         let pdu_type_extension = buffer.read_field(4, "pdu_type_extension")? as u8;
 
@@ -58,13 +57,16 @@ impl DNwrkBroadcastRemove {
         // Type2
         let number_of_ca_cells_for_removal = typed::parse_type2_generic(obit, buffer, 5, "number_of_ca_cells_for_removal")?;
         // Conditional
-        unimplemented!(); let removal_data_for_ca_cell = if obit { Some(0) } else { None };
+        unimplemented!();
+        let removal_data_for_ca_cell = if obit { Some(0) } else { None };
         // Type2
         let number_of_da_cells_for_removal = typed::parse_type2_generic(obit, buffer, 8, "number_of_da_cells_for_removal")?;
         // Conditional
-        unimplemented!(); let removal_data_for_da_cell = if obit { Some(0) } else { None };
+        unimplemented!();
+        let removal_data_for_da_cell = if obit { Some(0) } else { None };
         // Conditional
-        unimplemented!(); let removal_data_for_serving_cell = if obit { Some(0) } else { None };
+        unimplemented!();
+        let removal_data_for_serving_cell = if obit { Some(0) } else { None };
         // Type2
         let reserved1 = typed::parse_type2_generic(obit, buffer, 8, "reserved1")?;
         // Type2
@@ -80,17 +82,17 @@ impl DNwrkBroadcastRemove {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DNwrkBroadcastRemove { 
-            pdu_type_extension, 
-            number_of_ca_cells_for_removal, 
-            removal_data_for_ca_cell, 
-            number_of_da_cells_for_removal, 
-            removal_data_for_da_cell, 
-            removal_data_for_serving_cell, 
-            reserved1, 
-            reserved2, 
-            reserved3, 
-            reserved4
+        Ok(DNwrkBroadcastRemove {
+            pdu_type_extension,
+            number_of_ca_cells_for_removal,
+            removal_data_for_ca_cell,
+            number_of_da_cells_for_removal,
+            removal_data_for_da_cell,
+            removal_data_for_serving_cell,
+            reserved1,
+            reserved2,
+            reserved3,
+            reserved4,
         })
     }
 
@@ -102,9 +104,16 @@ impl DNwrkBroadcastRemove {
         buffer.write_bits(self.pdu_type_extension as u64, 4);
 
         // Check if any optional field present and place o-bit
-        let obit = self.number_of_ca_cells_for_removal.is_some() || self.number_of_da_cells_for_removal.is_some() || self.reserved1.is_some() || self.reserved2.is_some() || self.reserved3.is_some() || self.reserved4.is_some() ;
+        let obit = self.number_of_ca_cells_for_removal.is_some()
+            || self.number_of_da_cells_for_removal.is_some()
+            || self.reserved1.is_some()
+            || self.reserved2.is_some()
+            || self.reserved3.is_some()
+            || self.reserved4.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.number_of_ca_cells_for_removal, 5);

@@ -69,7 +69,6 @@ impl BasicSlotgrantCapAlloc {
         }
     }
 
-
     /// Pass 0 when the first subslot should be granted
     /// Pass 99 when the second subslot should be granted
     pub fn from_req_slotcount(req: usize) -> Self {
@@ -90,7 +89,7 @@ impl BasicSlotgrantCapAlloc {
             35..=51 => BasicSlotgrantCapAlloc::Grant51Slots,
             52..=68 => BasicSlotgrantCapAlloc::Grant68Slots,
             99 => BasicSlotgrantCapAlloc::SecondSubslotGranted,
-            _ => panic!()
+            _ => panic!(),
         }
     }
 
@@ -125,7 +124,9 @@ impl BasicSlotgrantCapAlloc {
 }
 
 impl From<BasicSlotgrantCapAlloc> for u64 {
-    fn from(e: BasicSlotgrantCapAlloc) -> Self { e.into_raw() }
+    fn from(e: BasicSlotgrantCapAlloc) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for BasicSlotgrantCapAlloc {

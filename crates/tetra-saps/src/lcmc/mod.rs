@@ -1,6 +1,6 @@
 use tetra_core::{BitBuffer, EndpointId, LinkId, MleHandle, TetraAddress, Todo};
 
-use crate::{control::enums::circuit_mode_type::CircuitModeType, lcmc::{fields::chan_alloc_req::CmceChanAllocReq}};
+use crate::{control::enums::circuit_mode_type::CircuitModeType, lcmc::fields::chan_alloc_req::CmceChanAllocReq};
 
 pub mod enums;
 pub mod fields;
@@ -22,7 +22,7 @@ pub struct LcmcMleActivityReq {
 /// service degradation mode this primitive indicates which services can access communication resources.
 #[derive(Debug)]
 pub struct LcmcMleBreakInd {
-    pub permitted_services_in_ms_graceful_service_degradation_mode: Todo
+    pub permitted_services_in_ms_graceful_service_degradation_mode: Todo,
 }
 
 /// MLE-BUSY indication: this shall be used by the MLE to inform the CMCE that a MM protocol exchange is in
@@ -45,7 +45,7 @@ pub struct LcmcMleCloseInd {}
 
 /// MLE-CONFIGURE request: this primitive shall be used to pass inter layer management information relating to
 /// circuit mode calls, e.g. whether Tx grant has been given, type of traffic, etc.
-/// Contents not fully standardized. 
+/// Contents not fully standardized.
 #[derive(Debug)]
 pub struct LcmcMleConfigureReq {
     pub endpoint_id: EndpointId,
@@ -55,14 +55,14 @@ pub struct LcmcMleConfigureReq {
     pub encryption_flag: bool,
     pub circuit_mode_type: CircuitModeType,
     pub add_temp_gssi: Option<Todo>,
-    pub del_temp_gssi: Option<Todo>,   
+    pub del_temp_gssi: Option<Todo>,
 
     // These three fields are related. Only four valid combos (14.5.1.4.0):
     /// switch_u_plane      tx_grant    simplex_duplex
     /// 1                   1           simplex         MS is authorized to transmit traffic
     /// 1                   0           simplex         MS is authorized to receive traffic
     /// 0                   1           duplex          MS is authorized to transmit and receive traffic.
-    /// 0                   _           _               withdraws previous authorization to transmit and/or receive traffic 
+    /// 0                   _           _               withdraws previous authorization to transmit and/or receive traffic
     pub simplex_duplex: bool,
     /// Whether lower mac is allowed to transmit. See also tx_grant, simplex_duplex, switch_u_plane
     pub tx_grant: bool,
@@ -97,7 +97,7 @@ pub struct LcmcMleEnableInd {}
 /// the list of group identities.
 #[derive(Debug)]
 pub struct LcmcMleIdentitiesReq {
-    pub gssi_list: Vec<Todo>
+    pub gssi_list: Vec<Todo>,
 }
 
 /// MLE-IDLE indication: this shall be used by the MLE to inform the CMCE that a MM protocol exchange has
@@ -184,7 +184,6 @@ pub struct LcmcMleUnitdataReq {
     /// We use this to indicate it may be retransmitted
     /// This may differ from what ETSI envisioned
     // pub eligible_for_graceful_degradation: bool,
-    
 
     /// Custom field to allow for creating circuits
     pub main_address: TetraAddress,
@@ -192,7 +191,6 @@ pub struct LcmcMleUnitdataReq {
     // Transmit 4 times (if capacity allows)
     // pub redundant_transmission: u8,
 }
-
 
 /// MLE-UNITDATA indication: this primitive shall be used by the MLE to pass to the CMCE entity data which has
 /// been received from a peer entity on the TETRA infrastructure side.

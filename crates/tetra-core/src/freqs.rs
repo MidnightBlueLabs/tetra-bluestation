@@ -2,14 +2,120 @@ use serde::Deserialize;
 
 /// ETSI TS 100 392-15 V1.5.1 (2011-02), clause 6: Duplex spacing
 const TETRA_DUPLEX_SPACING: [[Option<u32>; 16]; 8] = [
-    [ None,    Some(1600), Some(10000), Some(10000), Some(10000), Some(10000), Some(10000), None,        None,        None,        None,    None,    None,    None,    None,    None ],
-    [ None,    Some(4500), None,        Some(36000), Some(7000),  None,        None,        None,        Some(45000), Some(45000), None,    None,    None,    None,    None,    None ],
-    [ Some(0), Some(0),    Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0),     Some(0), Some(0), Some(0), Some(0), Some(0), Some(0)],
-    [ None,    None,       None,        Some(8000),  Some(8000),  None,        None,        None,        Some(18000), Some(18000), None,    None,    None,    None,    None,    None ],
-    [ None,    None,       None,        Some(18000), Some(5000),  None,        Some(30000), Some(30000), None,        Some(39000), None,    None,    None,    None,    None,    None ],
-    [ None,    None,       None,        None,        Some(9500),  None,        None,        None,        None,        None,        None,    None,    None,    None,    None,    None ],
-    [ None,    None,       None,        None,        None,        None,        None,        None,        None,        None,        None,    None,    None,    None,    None,    None ],
-    [ None,    None,       None,        None,        None,        None,        None,        None,        None,        None,        None,    None,    None,    None,    None,    None ],
+    [
+        None,
+        Some(1600),
+        Some(10000),
+        Some(10000),
+        Some(10000),
+        Some(10000),
+        Some(10000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ],
+    [
+        None,
+        Some(4500),
+        None,
+        Some(36000),
+        Some(7000),
+        None,
+        None,
+        None,
+        Some(45000),
+        Some(45000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ],
+    [
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+        Some(0),
+    ],
+    [
+        None,
+        None,
+        None,
+        Some(8000),
+        Some(8000),
+        None,
+        None,
+        None,
+        Some(18000),
+        Some(18000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ],
+    [
+        None,
+        None,
+        None,
+        Some(18000),
+        Some(5000),
+        None,
+        Some(30000),
+        Some(30000),
+        None,
+        Some(39000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ],
+    [
+        None,
+        None,
+        None,
+        None,
+        Some(9500),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ],
+    [
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+    ],
+    [
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+    ],
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,15 +128,14 @@ pub struct FreqInfo {
     pub freq_offset_hz: i16,
     /// Duplex spacing setting (index in duplex spacing table)
     pub duplex_spacing_id: u8,
-    /// Duplex spacing in Hz. Usually taken from duplex spacing table, 
-    /// but can be overridden if clients use a custom duplex spacing table. 
+    /// Duplex spacing in Hz. Usually taken from duplex spacing table,
+    /// but can be overridden if clients use a custom duplex spacing table.
     pub duplex_spacing_val: u32,
     /// Reverse operation flag, if true, UL is above DL frequency
     pub reverse_operation: bool,
 }
 
 impl FreqInfo {
-
     pub fn freq_offset_id_to_hz(offset_index: u8) -> Option<i16> {
         match offset_index {
             0 => Some(0),
@@ -53,14 +158,26 @@ impl FreqInfo {
 
     /// Construct FreqInfo from band, carrier, frequency offset, duplex spacing index and reverse operation flag.
     /// Optionally accepts a custom duplex spacing value in Hz, if a duplex spacing table is used by the radios.
-    pub fn from_components(band: u8, carrier: u16, freq_offset_val: i16, reverse_operation: bool, duplex_index: u8, custom_duplex_spacing: Option<u32>) -> Result<Self, String> {
+    pub fn from_components(
+        band: u8,
+        carrier: u16,
+        freq_offset_val: i16,
+        reverse_operation: bool,
+        duplex_index: u8,
+        custom_duplex_spacing: Option<u32>,
+    ) -> Result<Self, String> {
         assert!(band <= 8, "Invalid frequency band {}", band);
         assert!(carrier < 4000, "Invalid carrier number {}", carrier);
-        assert!(freq_offset_val == 0 || freq_offset_val == 6250 || freq_offset_val == -6250 || freq_offset_val == 12500, "Invalid frequency offset {}", freq_offset_val);
+        assert!(
+            freq_offset_val == 0 || freq_offset_val == 6250 || freq_offset_val == -6250 || freq_offset_val == 12500,
+            "Invalid frequency offset {}",
+            freq_offset_val
+        );
         let duplex_spacing_val = if let Some(cds) = custom_duplex_spacing {
             cds
         } else {
-            Self::get_default_duplex_spacing(band, duplex_index).ok_or_else(|| format!("Invalid duplex spacing for band {}, duplex index {}", band, duplex_index))?
+            Self::get_default_duplex_spacing(band, duplex_index)
+                .ok_or_else(|| format!("Invalid duplex spacing for band {}, duplex index {}", band, duplex_index))?
         };
 
         Ok(Self {
@@ -73,7 +190,7 @@ impl FreqInfo {
         })
     }
 
-    /// Get the standardized duplex spacing in hz for the current frequency band and a given 
+    /// Get the standardized duplex spacing in hz for the current frequency band and a given
     /// duplex spacing table index, as given in the Sysinfo message
     pub fn get_default_duplex_spacing(band: u8, duplex_setting: u8) -> Option<u32> {
         assert!(duplex_setting < 8, "Invalid duplex setting {}", duplex_setting);
@@ -87,7 +204,7 @@ impl FreqInfo {
         let mut dl_freq = 100000000 * self.band as i32;
         dl_freq += self.carrier as i32 * 25000;
         dl_freq += self.freq_offset_hz as i32;
-        let dl_freq = dl_freq as u32;        
+        let dl_freq = dl_freq as u32;
 
         // Derive ulfreq
         let ul_freq = if !self.reverse_operation {
@@ -98,7 +215,6 @@ impl FreqInfo {
         (dl_freq, ul_freq)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -113,7 +229,7 @@ mod tests {
         let band = 4;
         let carrier = 1001;
         let freq_offset = 0;
-        
+
         let f1 = FreqInfo::from_components(band, carrier, freq_offset, reverse_operation, duplex_index, None).unwrap();
         let (dlfreq, ulfreq) = f1.get_freqs();
 

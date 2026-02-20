@@ -3,7 +3,6 @@ use core::fmt;
 use tetra_core::BitBuffer;
 use tetra_core::pdu_parse_error::PduParseErr;
 
-
 /// Clause 21.4.2.4 MAC-FRAG (uplink)
 #[derive(Debug, Clone)]
 pub struct MacFragUl {
@@ -21,9 +20,7 @@ impl MacFragUl {
         assert!(pdu_subtype == 0);
         let fill_bits = buf.read_field(1, "fill_bits")? != 0;
 
-        Ok(MacFragUl {
-            fill_bits,
-        })
+        Ok(MacFragUl { fill_bits })
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
@@ -33,7 +30,6 @@ impl MacFragUl {
         buf.write_bits(0, 1);
         buf.write_bits(self.fill_bits as u8 as u64, 1);
     }
-
 }
 
 impl fmt::Display for MacFragUl {

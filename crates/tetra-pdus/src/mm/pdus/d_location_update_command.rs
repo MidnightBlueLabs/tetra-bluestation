@@ -1,11 +1,10 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
-
 
 /// Representation of the D-LOCATION UPDATE COMMAND PDU (Clause 16.9.2.8).
 /// The infrastructure sends this message to the MS to initiate a location update demand in the MS.
@@ -34,16 +33,16 @@ pub struct DLocationUpdateCommand {
 impl DLocationUpdateCommand {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::DLocationUpdateCommand)?;
-        
+
         // Type1
         let group_identity_report = buffer.read_field(1, "group_identity_report")? != 0;
         // Type1
         let cipher_control = buffer.read_field(1, "cipher_control")? != 0;
         // Conditional
-        unimplemented!(); let ciphering_parameters = if true { Some(0) } else { None };
+        unimplemented!();
+        let ciphering_parameters = if true { Some(0) } else { None };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -51,9 +50,11 @@ impl DLocationUpdateCommand {
         // Type2
         let address_extension = typed::parse_type2_generic(obit, buffer, 24, "address_extension")?;
         // Conditional
-        unimplemented!(); let cell_type_control = if obit { Some(0) } else { None };
+        unimplemented!();
+        let cell_type_control = if obit { Some(0) } else { None };
         // Conditional
-        unimplemented!(); let proprietary = if obit { Some(0) } else { None };
+        unimplemented!();
+        let proprietary = if obit { Some(0) } else { None };
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -61,13 +62,13 @@ impl DLocationUpdateCommand {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DLocationUpdateCommand { 
-            group_identity_report, 
-            cipher_control, 
-            ciphering_parameters, 
-            address_extension, 
-            cell_type_control, 
-            proprietary
+        Ok(DLocationUpdateCommand {
+            group_identity_report,
+            cipher_control,
+            ciphering_parameters,
+            address_extension,
+            cell_type_control,
+            proprietary,
         })
     }
 
@@ -85,9 +86,11 @@ impl DLocationUpdateCommand {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.address_extension.is_some() ;
+        let obit = self.address_extension.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.address_extension, 24);
@@ -108,7 +111,9 @@ impl DLocationUpdateCommand {
 
 impl fmt::Display for DLocationUpdateCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DLocationUpdateCommand {{ group_identity_report: {:?} cipher_control: {:?} ciphering_parameters: {:?} address_extension: {:?} cell_type_control: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DLocationUpdateCommand {{ group_identity_report: {:?} cipher_control: {:?} ciphering_parameters: {:?} address_extension: {:?} cell_type_control: {:?} proprietary: {:?} }}",
             self.group_identity_report,
             self.cipher_control,
             self.ciphering_parameters,

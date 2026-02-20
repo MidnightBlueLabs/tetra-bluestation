@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 
@@ -31,10 +31,9 @@ pub struct DNwrkBroadcast {
 impl DNwrkBroadcast {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeDl::DNwrkBroadcast)?;
-        
+
         // Type1
         let cell_re_select_parameters = buffer.read_field(16, "cell_re_select_parameters")? as u16;
         // Type1
@@ -49,10 +48,12 @@ impl DNwrkBroadcast {
         let number_of_ca_neighbour_cells = typed::parse_type2_generic(obit, buffer, 3, "number_of_ca_neighbour_cells")?;
 
         // Conditional
-        let neighbour_cell_information_for_ca = if obit && number_of_ca_neighbour_cells > Some(0) { 
+        let neighbour_cell_information_for_ca = if obit && number_of_ca_neighbour_cells > Some(0) {
             unimplemented!();
-            Some(buffer.read_field(999, "neighbour_cell_information_for_ca")?) 
-        } else { None };
+            Some(buffer.read_field(999, "neighbour_cell_information_for_ca")?)
+        } else {
+            None
+        };
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -60,12 +61,12 @@ impl DNwrkBroadcast {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DNwrkBroadcast { 
-            cell_re_select_parameters, 
-            cell_load_ca, 
-            tetra_network_time, 
-            number_of_ca_neighbour_cells, 
-            neighbour_cell_information_for_ca
+        Ok(DNwrkBroadcast {
+            cell_re_select_parameters,
+            cell_load_ca,
+            tetra_network_time,
+            number_of_ca_neighbour_cells,
+            neighbour_cell_information_for_ca,
         })
     }
 
@@ -79,9 +80,11 @@ impl DNwrkBroadcast {
         buffer.write_bits(self.cell_load_ca as u64, 2);
 
         // Check if any optional field present and place o-bit
-        let obit = self.tetra_network_time.is_some() || self.number_of_ca_neighbour_cells.is_some() ;
+        let obit = self.tetra_network_time.is_some() || self.number_of_ca_neighbour_cells.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.tetra_network_time, 48);

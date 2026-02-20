@@ -1,15 +1,14 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::energy_saving_mode::EnergySavingMode;
 use crate::mm::enums::location_update_type::LocationUpdateType;
 use crate::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
 use crate::mm::enums::type34_elem_id_ul::MmType34ElemIdUl;
 use crate::mm::fields::group_identity_location_demand::GroupIdentityLocationDemand;
-
 
 /// Representation of the U-LOCATION UPDATE DEMAND PDU (Clause 16.9.3.4).
 /// The MS sends this message to the infrastructure to request update of its location registration.
@@ -54,16 +53,20 @@ pub struct ULocationUpdateDemand {
 impl ULocationUpdateDemand {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeUl::ULocationUpdateDemand)?;
-        
+
         // Type1
         let val: u64 = buffer.read_field(3, "location_update_type")?;
         let result = LocationUpdateType::try_from(val);
         let location_update_type = match result {
             Ok(x) => x,
-            Err(_) => return Err(PduParseErr::InvalidValue{field: "location_update_type", value: val})
+            Err(_) => {
+                return Err(PduParseErr::InvalidValue {
+                    field: "location_update_type",
+                    value: val,
+                });
+            }
         };
 
         // Type1
@@ -71,9 +74,9 @@ impl ULocationUpdateDemand {
         // Type1
         let cipher_control = buffer.read_field(1, "cipher_control")? != 0;
         // Conditional
-        let ciphering_parameters = if cipher_control { 
+        let ciphering_parameters = if cipher_control {
             Some(buffer.read_field(10, "ciphering_parameters")?)
-        } else { 
+        } else {
             None
         };
 
@@ -86,7 +89,7 @@ impl ULocationUpdateDemand {
         let val = typed::parse_type2_generic(obit, buffer, 3, "energy_saving_mode")?;
         let energy_saving_mode = match val {
             Some(v) => Some(EnergySavingMode::try_from(v).unwrap()), // Never fails
-            None => None
+            None => None,
         };
         // Type2
         let la_information = typed::parse_type2_generic(obit, buffer, 15, "la_information")?;
@@ -95,8 +98,8 @@ impl ULocationUpdateDemand {
                 // Most likely, this is 14-bits for the LA, then one zero-bit
                 tracing::warn!("LA Information parsing not implemented/validated fully");
                 Some(v / 2) // Remove trailing zero bit
-            },
-            None => None
+            }
+            None => None,
         };
 
         // Type2
@@ -105,10 +108,15 @@ impl ULocationUpdateDemand {
         let address_extension = typed::parse_type2_generic(obit, buffer, 24, "address_extension")?;
 
         // Type3
-        let group_identity_location_demand = typed::parse_type3_struct(obit, buffer, MmType34ElemIdUl::GroupIdentityLocationDemand, GroupIdentityLocationDemand::from_bitbuf)?;
+        let group_identity_location_demand = typed::parse_type3_struct(
+            obit,
+            buffer,
+            MmType34ElemIdUl::GroupIdentityLocationDemand,
+            GroupIdentityLocationDemand::from_bitbuf,
+        )?;
 
         // Type3
-        let group_report_response = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::GroupReportResponse)?;        
+        let group_report_response = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::GroupReportResponse)?;
 
         // Type3
         let authentication_uplink = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::AuthenticationUplink)?;
@@ -117,7 +125,7 @@ impl ULocationUpdateDemand {
         let extended_capabilities = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::ExtendedCapabilities)?;
 
         // Type3
-        let proprietary = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::Proprietary)?;    
+        let proprietary = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::Proprietary)?;
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -125,21 +133,21 @@ impl ULocationUpdateDemand {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(ULocationUpdateDemand { 
-            location_update_type, 
-            request_to_append_la, 
-            cipher_control, 
-            ciphering_parameters, 
-            class_of_ms, 
-            energy_saving_mode, 
+        Ok(ULocationUpdateDemand {
+            location_update_type,
+            request_to_append_la,
+            cipher_control,
+            ciphering_parameters,
+            class_of_ms,
+            energy_saving_mode,
             la_information,
-            ssi, 
-            address_extension, 
-            group_identity_location_demand, 
-            group_report_response, 
-            authentication_uplink, 
-            extended_capabilities, 
-            proprietary
+            ssi,
+            address_extension,
+            group_identity_location_demand,
+            group_report_response,
+            authentication_uplink,
+            extended_capabilities,
+            proprietary,
         })
     }
 
@@ -159,9 +167,20 @@ impl ULocationUpdateDemand {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.class_of_ms.is_some() || self.energy_saving_mode.is_some() || self.la_information.is_some() || self.ssi.is_some() || self.address_extension.is_some() || self.group_identity_location_demand.is_some() || self.group_report_response.is_some() || self.authentication_uplink.is_some() || self.extended_capabilities.is_some() || self.proprietary.is_some() ;
+        let obit = self.class_of_ms.is_some()
+            || self.energy_saving_mode.is_some()
+            || self.la_information.is_some()
+            || self.ssi.is_some()
+            || self.address_extension.is_some()
+            || self.group_identity_location_demand.is_some()
+            || self.group_report_response.is_some()
+            || self.authentication_uplink.is_some()
+            || self.extended_capabilities.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.class_of_ms, 24);
@@ -186,22 +205,28 @@ impl ULocationUpdateDemand {
         typed::write_type2_generic(obit, buffer, self.address_extension, 24);
 
         // Type3
-        typed::write_type3_struct(obit, buffer, &self.group_identity_location_demand, MmType34ElemIdUl::GroupIdentityLocationDemand, GroupIdentityLocationDemand::to_bitbuf)?;
+        typed::write_type3_struct(
+            obit,
+            buffer,
+            &self.group_identity_location_demand,
+            MmType34ElemIdUl::GroupIdentityLocationDemand,
+            GroupIdentityLocationDemand::to_bitbuf,
+        )?;
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.group_report_response, MmType34ElemIdUl::GroupReportResponse)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.authentication_uplink, MmType34ElemIdUl::AuthenticationUplink)?;
-        
+
         // Type3
-        
+
         typed::write_type3_generic(obit, buffer, &self.extended_capabilities, MmType34ElemIdUl::ExtendedCapabilities)?;
-        
+
         // Type3
-        
+
         typed::write_type3_generic(obit, buffer, &self.proprietary, MmType34ElemIdUl::Proprietary)?;
-        
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -210,7 +235,9 @@ impl ULocationUpdateDemand {
 
 impl fmt::Display for ULocationUpdateDemand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ULocationUpdateDemand {{ location_update_type: {:?} request_to_append_la: {:?} cipher_control: {:?} ciphering_parameters: {:?} class_of_ms: {:?} energy_saving_mode: {:?} la_information: {:?} ssi: {:?} address_extension: {:?} group_identity_location_demand: {:?} group_report_response: {:?} authentication_uplink: {:?} extended_capabilities: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "ULocationUpdateDemand {{ location_update_type: {:?} request_to_append_la: {:?} cipher_control: {:?} ciphering_parameters: {:?} class_of_ms: {:?} energy_saving_mode: {:?} la_information: {:?} ssi: {:?} address_extension: {:?} group_identity_location_demand: {:?} group_report_response: {:?} authentication_uplink: {:?} extended_capabilities: {:?} proprietary: {:?} }}",
             self.location_update_type,
             self.request_to_append_la,
             self.cipher_control,
@@ -229,7 +256,6 @@ impl fmt::Display for ULocationUpdateDemand {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
 
@@ -239,7 +265,6 @@ mod tests {
 
     #[test]
     fn test_u_location_update_demand_with_gild() {
-        
         // Example of nested type3 struct that embeds another type4
         // Parsing group_identity_location_demand: 001000000110001001001010000001000000000^1001100000111000001110000000010010000000101000000000000000000000001101000
         // Parsing GroupIdentityLocationDemand:    00100000011000100100101000000100000000010011 00000111000 001^1 1000 00000100100 000001 01000000000000000000000001101000
@@ -277,15 +302,14 @@ mod tests {
         assert_eq!(giu0.gssi, Some(26));
     }
 
-
     #[test]
     fn test_u_location_update_demand_with_gild_and_esm() {
-        
         // Vec from moto upon registration
         // Contains optional energy_saving_mode and group_identity_location_demand
 
         debug::setup_logging_verbose();
-        let test_vec = "0010000001100010010010100000010000010010001001100000111000001110000000010010000000101000000000000000000000001101000";
+        let test_vec =
+            "0010000001100010010010100000010000010010001001100000111000001110000000010010000000101000000000000000000000001101000";
         let mut buf_in = BitBuffer::from_bitstr(test_vec);
         let pdu = ULocationUpdateDemand::from_bitbuf(&mut buf_in).expect("Failed parsing");
 
@@ -306,4 +330,3 @@ mod tests {
         assert_eq!(giu0.gssi, Some(26));
     }
 }
-

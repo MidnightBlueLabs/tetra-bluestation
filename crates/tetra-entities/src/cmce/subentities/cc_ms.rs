@@ -4,23 +4,20 @@ use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::MessageQueue;
 
-
 /// Clause 11 Call Control CMCE sub-entity
-pub struct CcMsSubentity{
-
-}
+pub struct CcMsSubentity {}
 
 impl CcMsSubentity {
-    
     pub fn new() -> Self {
         CcMsSubentity {}
     }
 
     pub fn route_rd_deliver(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
-        
         tracing::trace!("route_rd_deliver");
-        
-        let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else { panic!(); };
+
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
+            panic!();
+        };
         let Some(bits) = prim.sdu.peek_bits(5) else {
             tracing::warn!("insufficient bits: {}", prim.sdu.dump_bin());
             return;

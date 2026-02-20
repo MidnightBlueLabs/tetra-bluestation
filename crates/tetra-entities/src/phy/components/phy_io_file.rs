@@ -1,8 +1,8 @@
+use crossbeam_channel::{Sender, unbounded};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::thread;
-use crossbeam_channel::{unbounded, Sender};
 
 #[derive(Debug, Clone)]
 pub enum FileWriteMsg {
@@ -38,50 +38,31 @@ pub struct PhyIoFile {
 
 impl PhyIoFile {
     /// Create a new PhyIoFile instance
-    /// 
+    ///
     /// # Arguments
     /// * `filename` - Path to the file
     /// * `mode` - Write, Read, or ReadRepeat mode
     pub fn new<P: AsRef<Path>>(filename: P, mode: PhyIoFileMode) -> io::Result<Self> {
         let file = match mode {
-            PhyIoFileMode::Read | PhyIoFileMode::ReadRepeat => {
-                OpenOptions::new()
-                    .read(true)
-                    .open(&filename)?
-            }
-            PhyIoFileMode::Write => {
-                OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .open(&filename)?
-            }
+            PhyIoFileMode::Read | PhyIoFileMode::ReadRepeat => OpenOptions::new().read(true).open(&filename)?,
+            PhyIoFileMode::Write => OpenOptions::new().write(true).create(true).truncate(true).open(&filename)?,
         };
 
-        let file_size = if mode == PhyIoFileMode::Read {
-            file.metadata()?.len()
-        } else {
-            0
-        };
+        let file_size = if mode == PhyIoFileMode::Read { file.metadata()?.len() } else { 0 };
 
-        Ok(Self {
-            file,
-            mode,
-            file_size,
-        })
+        Ok(Self { file, mode, file_size })
     }
 
     /// Read a block of data from the file
-    /// 
+    ///
     /// # Arguments
     /// * `buffer` - Buffer to read data into (size determines block size)
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Block successfully read
     /// * `Err(PhyIoError::Eof)` - EOF reached and eof_behavior is Stop
     /// * `Err(PhyIoError::Io)` - I/O error occurred
     pub fn read_block(&mut self, buffer: &mut [u8]) -> Result<(), PhyIoError> {
-        
         let block_size = buffer.len();
         let mut bytes_read = 0;
 
@@ -96,7 +77,7 @@ impl PhyIoFile {
                         PhyIoFileMode::ReadRepeat => {
                             // Seek back to beginning and continue reading
                             self.file.seek(SeekFrom::Start(0))?;
-                            
+
                             // If we had a partial block, it means the file doesn't contain
                             // an integer number of blocks. In this case, discard the partial
                             // block and start fresh from the beginning.
@@ -134,10 +115,10 @@ impl PhyIoFile {
     }
 
     /// Write a block of data to the file
-    /// 
+    ///
     /// # Arguments
     /// * `data` - Data to write
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Block successfully written
     /// * `Err(PhyIoError::Io)` - I/O error occurred or file not opened for writing
@@ -177,7 +158,7 @@ impl PhyIoFile {
         let file_path = filename.as_ref().to_path_buf();
         let (sender, receiver) = unbounded::<FileWriteMsg>();
         // let thread_name = format!("phy-io-writer-{}", file_path.display());
-                
+
         thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
@@ -196,7 +177,7 @@ impl PhyIoFile {
                 }
             })
             .expect("Failed to spawn phy-io-writer thread");
-        
+
         Ok(sender)
     }
 }
@@ -204,33 +185,39 @@ impl PhyIoFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::env;
+    use std::io::Write;
 
     fn create_temp_file(data: &[u8]) -> (String, std::path::PathBuf) {
         let mut path = env::temp_dir();
-        let filename = format!("phy_io_test_{}.bin", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let filename = format!(
+            "phy_io_test_{}.bin",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         path.push(filename.clone());
-        
+
         let mut file = File::create(&path).unwrap();
         file.write_all(data).unwrap();
         file.flush().unwrap();
-        
+
         (filename, path)
     }
 
     #[test]
     fn test_write_and_read_block() {
         let mut path = env::temp_dir();
-        let filename = format!("phy_io_test_write_{}.bin", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let filename = format!(
+            "phy_io_test_write_{}.bin",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         path.push(&filename);
-        
+
         // Write some data
         {
             let mut writer = PhyIoFile::new(&path, PhyIoFileMode::Write).unwrap();
@@ -257,14 +244,14 @@ mod tests {
 
         let mut reader = PhyIoFile::new(&path, PhyIoFileMode::Read).unwrap();
         let mut buffer = [0u8; 4];
-        
+
         // First read should succeed
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4]);
-        
+
         // Second read should hit EOF
         assert!(matches!(reader.read_block(&mut buffer), Err(PhyIoError::Eof)));
-        
+
         // Cleanup
         let _ = std::fs::remove_file(&path);
     }
@@ -275,19 +262,19 @@ mod tests {
 
         let mut reader = PhyIoFile::new(&path, PhyIoFileMode::ReadRepeat).unwrap();
         let mut buffer = [0u8; 4];
-        
+
         // First read
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4]);
-        
+
         // Second read should loop back to beginning
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4]);
-        
+
         // Third read should also work
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4]);
-        
+
         // Cleanup
         let _ = std::fs::remove_file(&path);
     }
@@ -298,15 +285,15 @@ mod tests {
 
         let mut reader = PhyIoFile::new(&path, PhyIoFileMode::ReadRepeat).unwrap();
         let mut buffer = [0u8; 8];
-        
+
         // First read gets first 8 bytes
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4, 5, 6, 7, 8]);
-        
+
         // Second read should discard the 2-byte partial block and loop back
         assert!(reader.read_block(&mut buffer).is_ok());
         assert_eq!(buffer, [1, 2, 3, 4, 5, 6, 7, 8]);
-        
+
         // Cleanup
         let _ = std::fs::remove_file(&path);
     }

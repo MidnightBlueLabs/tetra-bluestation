@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_ul::MlePduTypeUl;
 
@@ -30,10 +30,9 @@ pub struct URestore {
 impl URestore {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeUl::URestore)?;
-        
+
         // obit designates presence of any further type2, type3 or type4 fields
         let obit = delimiters::read_obit(buffer)?;
 
@@ -44,7 +43,8 @@ impl URestore {
         // Type2
         let la = typed::parse_type2_generic(obit, buffer, 14, "la")?;
         // Conditional
-        unimplemented!(); let sdu = if obit { Some(0) } else { None };
+        unimplemented!();
+        let sdu = if obit { Some(0) } else { None };
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -52,12 +52,7 @@ impl URestore {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(URestore { 
-            mcc, 
-            mnc, 
-            la, 
-            sdu
-        })
+        Ok(URestore { mcc, mnc, la, sdu })
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -66,9 +61,11 @@ impl URestore {
         buffer.write_bits(MlePduTypeUl::URestore.into_raw(), 3);
 
         // Check if any optional field present and place o-bit
-        let obit = self.mcc.is_some() || self.mnc.is_some() || self.la.is_some() ;
+        let obit = self.mcc.is_some() || self.mnc.is_some() || self.la.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.mcc, 10);
@@ -95,10 +92,7 @@ impl fmt::Display for URestore {
         write!(
             f,
             "URestore {{ mcc: {:?} mnc: {:?} la: {:?} sdu: {:?} }}",
-            self.mcc,
-            self.mnc,
-            self.la,
-            self.sdu,
+            self.mcc, self.mnc, self.la, self.sdu,
         )
     }
 }

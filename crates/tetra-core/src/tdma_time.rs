@@ -1,6 +1,5 @@
 use core::fmt;
 
-
 #[derive(Clone, Copy, PartialEq)]
 pub struct TdmaTime {
     /// Timeslot, from 1 to 4
@@ -10,7 +9,7 @@ pub struct TdmaTime {
     /// Multiframe number, from 1 to 60
     pub m: u8,
     /// Hyperframe number, from 0 to 0xFFFF
-    pub h: u16
+    pub h: u16,
 }
 
 impl Default for TdmaTime {
@@ -26,23 +25,22 @@ pub const TIME_INT_WRAP: i32 = 4 * 18 * 60 * 65536;
 /// Difference between two int times, handling wrap-around of hyperframe number.
 pub fn time_int_diff(a: i32, b: i32) -> i32 {
     let mut diff = a - b;
-    while diff < -TIME_INT_WRAP/2 { diff += TIME_INT_WRAP; }
-    while diff >= TIME_INT_WRAP/2 { diff -= TIME_INT_WRAP; }
+    while diff < -TIME_INT_WRAP / 2 {
+        diff += TIME_INT_WRAP;
+    }
+    while diff >= TIME_INT_WRAP / 2 {
+        diff -= TIME_INT_WRAP;
+    }
     diff
 }
 
 impl TdmaTime {
     pub fn is_valid(self) -> bool {
-        self.t >= 1 && self.t <= 4 &&
-        self.f >= 1 && self.f <= 18 &&
-        self.m >= 1 && self.m <= 60
+        self.t >= 1 && self.t <= 4 && self.f >= 1 && self.f <= 18 && self.m >= 1 && self.m <= 60
     }
 
     pub fn to_int(self) -> i32 {
-        (self.t as i32 - 1) +
-        ((self.f as i32 - 1) * 4) +
-        ((self.m as i32 - 1) * 4 * 18) +
-        (self.h as i32 * 4 * 18 * 60)
+        (self.t as i32 - 1) + ((self.f as i32 - 1) * 4) + ((self.m as i32 - 1) * 4 * 18) + (self.h as i32 * 4 * 18 * 60)
     }
 
     /// Converts a i32 time into a TdmaTime,
@@ -53,8 +51,8 @@ impl TdmaTime {
         let m = (time.div_euclid(4 * 18).rem_euclid(60) + 1) as u8;
         let h = (time.div_euclid(4 * 18 * 60)) as u16;
         // TODO handle overflow of hyperframe number
-        
-        TdmaTime{ t, f, m, h }
+
+        TdmaTime { t, f, m, h }
     }
 
     /// Add a number of timeslots to a TdmaTime
@@ -100,13 +98,13 @@ impl TdmaTime {
 
 impl fmt::Display for TdmaTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:5}/{:02}/{:02}/{}", self.h, self.m, self.f, self.t)    
+        write!(f, "{:5}/{:02}/{:02}/{}", self.h, self.m, self.f, self.t)
     }
 }
 
 impl fmt::Debug for TdmaTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:5}/{:02}/{:02}/{}", self.h, self.m, self.f, self.t)    
+        write!(f, "{:5}/{:02}/{:02}/{}", self.h, self.m, self.f, self.t)
     }
 }
 
@@ -148,8 +146,16 @@ mod tests {
         // Test both negative and positive numbers
         assert_eq!(TdmaTime::from_int(0), TdmaTime { t: 1, f: 1, m: 1, h: 0 });
         assert_eq!(TdmaTime::from_int(1), TdmaTime { t: 2, f: 1, m: 1, h: 0 });
-        assert_eq!(TdmaTime::from_int(-1), TdmaTime { t: 4, f: 18, m: 60, h: 65535 });
-        for time_int in -10000 .. 10000 {
+        assert_eq!(
+            TdmaTime::from_int(-1),
+            TdmaTime {
+                t: 4,
+                f: 18,
+                m: 60,
+                h: 65535
+            }
+        );
+        for time_int in -10000..10000 {
             assert_eq!(TdmaTime::from_int(time_int).diff(TdmaTime::from_int(0)), time_int);
         }
     }

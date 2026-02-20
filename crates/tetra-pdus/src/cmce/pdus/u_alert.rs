@@ -1,10 +1,9 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-ALERT PDU (Clause 14.7.2.1).
 /// This PDU shall be an acknowledgement from the called MS that the called user has been alerted.
@@ -32,7 +31,6 @@ pub struct UAlert {
 impl UAlert {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-    
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::UAlert)?;
 
@@ -51,23 +49,23 @@ impl UAlert {
 
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UAlert { 
-            call_identifier, 
-            reserved, 
-            simplex_duplex_selection, 
-            basic_service_information, 
-            facility, 
-            proprietary 
+        Ok(UAlert {
+            call_identifier,
+            reserved,
+            simplex_duplex_selection,
+            basic_service_information,
+            facility,
+            proprietary,
         })
     }
 
@@ -83,9 +81,11 @@ impl UAlert {
         buffer.write_bits(self.simplex_duplex_selection as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.basic_service_information.is_some() || self.facility.is_some() || self.proprietary.is_some() ;
+        let obit = self.basic_service_information.is_some() || self.facility.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_struct(obit, buffer, &self.basic_service_information, BasicServiceInformation::to_bitbuf)?;
@@ -104,7 +104,9 @@ impl UAlert {
 
 impl fmt::Display for UAlert {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "UAlert {{ call_identifier: {:?} reserved: {:?} simplex_duplex_selection: {:?} basic_service_information: {:?} facility: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "UAlert {{ call_identifier: {:?} reserved: {:?} simplex_duplex_selection: {:?} basic_service_information: {:?} facility: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.reserved,
             self.simplex_duplex_selection,

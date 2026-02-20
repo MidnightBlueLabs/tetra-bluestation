@@ -1,8 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
+use crate::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
 use tetra_core::typed_pdu_fields::*;
-use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl};
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-FACILITY PDU (Clause 14.7.2.5).
 /// This PDU shall be used to send call unrelated SS information.
@@ -11,14 +11,12 @@ use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl};
 
 // note 1: Contents of this PDU shall be defined by SS protocols.
 #[derive(Debug)]
-pub struct UFacility {
-}
+pub struct UFacility {}
 
 #[allow(unreachable_code)] // TODO FIXME review, finalize and remove this
 impl UFacility {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::UFacility)?;
 
@@ -31,7 +29,7 @@ impl UFacility {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UFacility {  })
+        Ok(UFacility {})
     }
 
     /// Serialize this PDU into the given BitBuffer.
@@ -46,7 +44,6 @@ impl UFacility {
 
 impl fmt::Display for UFacility {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "UFacility {{ }}",
-        )
+        write!(f, "UFacility {{ }}",)
     }
 }

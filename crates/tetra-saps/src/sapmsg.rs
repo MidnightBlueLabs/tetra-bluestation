@@ -4,8 +4,8 @@ use tetra_core::Sap;
 use tetra_core::TdmaTime;
 use tetra_core::tetra_entities::TetraEntity;
 
-use crate::control::call_control::CallControl;
 use crate::control::brew::BrewSubscriberUpdate;
+use crate::control::call_control::CallControl;
 use crate::tmd::TmdCircuitDataInd;
 use crate::tmd::TmdCircuitDataReq;
 use crate::tnmm::TnmmTestDemand;
@@ -21,17 +21,14 @@ use super::tma::*;
 use super::tmv::*;
 use super::tp::*;
 
-
 /// Exhaustive list of SapMsgType structs for use in the SapMsg struct
 /// See Clause 19.2.1 for an overview of all lower-layer SAPs
 #[derive(Debug)]
 pub enum SapMsgInner {
-
     // TODO FIXME and all that stuff
     // PhyControlUpdateNetinfo(PhyControlUpdateNetinfo),
 
     // LmacControlUpdateNetinfo(LmacControlUpdateNetinfo),
-
     /// TP-SAP (Contents not defined in standard)
     TpUnitdataInd(TpUnitdataInd),
     TpUnitdataReq(TpUnitdataReqSlot),
@@ -58,7 +55,7 @@ pub enum SapMsgInner {
     TmdCircuitDataReq(TmdCircuitDataReq),
     TmdCircuitDataInd(TmdCircuitDataInd),
 
-    // TLB-SAP 
+    // TLB-SAP
     // TlmbSyncInd(TlmbSyncInd),
     // TlmbSysinfoInd(TlmbSysinfoInd),
 
@@ -76,7 +73,7 @@ pub enum SapMsgInner {
     // LCMC-SAP (MLE-CMCE)
     LcmcMleUnitdataInd(LcmcMleUnitdataInd),
     LcmcMleUnitdataReq(LcmcMleUnitdataReq),
-    
+
     // CMCE -> UMAC control
     CmceCallControl(CallControl),
 
@@ -85,7 +82,6 @@ pub enum SapMsgInner {
 
     // LTPD-SAP (MLE-LTPD)
     LtpdMleUnitdataInd(LtpdMleUnitdataInd),
-
 
     // TNMM-SAP (MM-User)
     TnmmTestDemand(TnmmTestDemand),
@@ -133,8 +129,7 @@ pub struct SapMsg {
     /// Downlink time at the time the message was created
     pub dltime: TdmaTime,
     // pub t_action: TdmaTime,
-
-    pub msg: SapMsgInner
+    pub msg: SapMsgInner,
 }
 
 impl SapMsg {
@@ -146,7 +141,7 @@ impl SapMsg {
         dest: TetraEntity,
         t_submit: TdmaTime,
         // t_action: TdmaTime,
-        msg: SapMsgInner
+        msg: SapMsgInner,
     ) -> Self {
         Self {
             sap,
@@ -156,7 +151,7 @@ impl SapMsg {
             dest,
             dltime: t_submit,
             // t_action,
-            msg
+            msg,
         }
     }
 
@@ -165,7 +160,7 @@ impl SapMsg {
     }
     pub fn get_dest(&self) -> &TetraEntity {
         &self.dest
-    }   
+    }
     pub fn get_sap(&self) -> &Sap {
         &self.sap
     }
@@ -175,6 +170,4 @@ impl SapMsg {
     // pub fn get_subprim(&self) -> &SapSubPrim {
     //     &self.subprim
     // }
-    
-    
 }

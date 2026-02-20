@@ -1,9 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
-
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the D-CALL RESTORE PDU (Clause 14.7.1.3).
 /// This PDU shall indicate to the MS that a call has been restored after a temporary break of the call.
@@ -45,7 +44,6 @@ pub struct DCallRestore {
 impl DCallRestore {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DCallRestore)?;
 
@@ -87,20 +85,20 @@ impl DCallRestore {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DCallRestore { 
-            call_identifier, 
-            transmission_grant, 
-            transmission_request_permission, 
-            reset_call_time_out_timer_t310_, 
-            new_call_identifier, 
-            call_time_out, 
-            call_status, 
-            modify, 
-            notification_indicator, 
-            facility, 
-            temporary_address, 
-            dm_ms_address, 
-            proprietary 
+        Ok(DCallRestore {
+            call_identifier,
+            transmission_grant,
+            transmission_request_permission,
+            reset_call_time_out_timer_t310_,
+            new_call_identifier,
+            call_time_out,
+            call_status,
+            modify,
+            notification_indicator,
+            facility,
+            temporary_address,
+            dm_ms_address,
+            proprietary,
         })
     }
 
@@ -118,34 +116,44 @@ impl DCallRestore {
         buffer.write_bits(self.reset_call_time_out_timer_t310_ as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.new_call_identifier.is_some() || self.call_time_out.is_some() || self.call_status.is_some() || self.modify.is_some() || self.notification_indicator.is_some() || self.facility.is_some() || self.temporary_address.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some() ;
+        let obit = self.new_call_identifier.is_some()
+            || self.call_time_out.is_some()
+            || self.call_status.is_some()
+            || self.modify.is_some()
+            || self.notification_indicator.is_some()
+            || self.facility.is_some()
+            || self.temporary_address.is_some()
+            || self.dm_ms_address.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.new_call_identifier, 14);
-        
+
         // Type2
         typed::write_type2_generic(obit, buffer, self.call_time_out, 4);
-        
+
         // Type2
         typed::write_type2_generic(obit, buffer, self.call_status, 3);
-        
+
         // Type2
         typed::write_type2_generic(obit, buffer, self.modify, 9);
-        
+
         // Type2
         typed::write_type2_generic(obit, buffer, self.notification_indicator, 6);
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.temporary_address, CmceType3ElemId::TempAddr)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
 
@@ -157,7 +165,9 @@ impl DCallRestore {
 
 impl fmt::Display for DCallRestore {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DCallRestore {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} reset_call_time_out_timer_t310_: {:?} new_call_identifier: {:?} call_time_out: {:?} call_status: {:?} modify: {:?} notification_indicator: {:?} facility: {:?} temporary_address: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DCallRestore {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} reset_call_time_out_timer_t310_: {:?} new_call_identifier: {:?} call_time_out: {:?} call_status: {:?} modify: {:?} notification_indicator: {:?} facility: {:?} temporary_address: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.transmission_grant,
             self.transmission_request_permission,

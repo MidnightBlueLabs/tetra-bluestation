@@ -1,12 +1,11 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use crate::mm::enums::type34_elem_id_dl::MmType34ElemIdDl;
-
 
 /// Representation of the D-LOCATION UPDATE REJECT PDU (Clause 16.9.2.9).
 /// The infrastructure sends this message to the MS to indicate that updating in the network is not accepted.
@@ -38,10 +37,9 @@ pub struct DLocationUpdateReject {
 impl DLocationUpdateReject {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::DLocationUpdateReject)?;
-        
+
         // Type1
         let location_update_type = buffer.read_field(3, "location_update_type")? as u8;
         // Type1
@@ -49,7 +47,8 @@ impl DLocationUpdateReject {
         // Type1
         let cipher_control = buffer.read_field(1, "cipher_control")? != 0;
         // Conditional
-        unimplemented!(); let ciphering_parameters = if true { Some(0) } else { None };
+        unimplemented!();
+        let ciphering_parameters = if true { Some(0) } else { None };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -68,14 +67,14 @@ impl DLocationUpdateReject {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DLocationUpdateReject { 
-            location_update_type, 
-            reject_cause, 
-            cipher_control, 
-            ciphering_parameters, 
-            address_extension, 
-            cell_type_control, 
-            proprietary
+        Ok(DLocationUpdateReject {
+            location_update_type,
+            reject_cause,
+            cipher_control,
+            ciphering_parameters,
+            address_extension,
+            cell_type_control,
+            proprietary,
         })
     }
 
@@ -95,16 +94,18 @@ impl DLocationUpdateReject {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.address_extension.is_some() || self.cell_type_control.is_some() || self.proprietary.is_some() ;
+        let obit = self.address_extension.is_some() || self.cell_type_control.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.address_extension, 24);
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.cell_type_control, MmType34ElemIdDl::CellTypeControl)?;
-        
+
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, MmType34ElemIdDl::Proprietary)?;
 
@@ -116,7 +117,9 @@ impl DLocationUpdateReject {
 
 impl fmt::Display for DLocationUpdateReject {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DLocationUpdateReject {{ location_update_type: {:?} reject_cause: {:?} cipher_control: {:?} ciphering_parameters: {:?} address_extension: {:?} cell_type_control: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "DLocationUpdateReject {{ location_update_type: {:?} reject_cause: {:?} cipher_control: {:?} ciphering_parameters: {:?} address_extension: {:?} cell_type_control: {:?} proprietary: {:?} }}",
             self.location_update_type,
             self.reject_cause,
             self.cipher_control,

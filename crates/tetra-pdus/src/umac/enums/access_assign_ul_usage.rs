@@ -29,10 +29,9 @@ impl AccessAssignUlUsage {
         match self {
             AccessAssignUlUsage::Unallocated => Some(0),
             AccessAssignUlUsage::Traffic(chan) => Some(*chan),
-            _ => None
+            _ => None,
         }
     }
-
 
     pub fn is_traffic(&self) -> bool {
         matches!(self, AccessAssignUlUsage::Traffic(_))
@@ -45,9 +44,7 @@ impl AccessAssignUlUsage {
             None
         }
     }
-
 }
-
 
 impl core::fmt::Display for AccessAssignUlUsage {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

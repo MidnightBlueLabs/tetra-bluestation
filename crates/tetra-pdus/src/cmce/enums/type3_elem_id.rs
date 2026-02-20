@@ -1,5 +1,5 @@
 /// Clause 14.8.48 Type 3 element identifier
-/// 
+///
 /// Bits: 4
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -45,7 +45,9 @@ impl CmceType3ElemId {
 }
 
 impl From<CmceType3ElemId> for u64 {
-    fn from(e: CmceType3ElemId) -> Self { e.into_raw() }
+    fn from(e: CmceType3ElemId) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for CmceType3ElemId {

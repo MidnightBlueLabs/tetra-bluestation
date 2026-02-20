@@ -20,9 +20,7 @@ impl MacFragDl {
         assert!(pdu_subtype == 0);
         let fill_bits = buf.read_field(1, "fill_bits")? != 0;
 
-        Ok(MacFragDl {
-            fill_bits,
-        })
+        Ok(MacFragDl { fill_bits })
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
@@ -32,7 +30,6 @@ impl MacFragDl {
         buf.write_bits(0, 1);
         buf.write_bits(self.fill_bits as u8 as u64, 1);
     }
-
 }
 
 impl fmt::Display for MacFragDl {

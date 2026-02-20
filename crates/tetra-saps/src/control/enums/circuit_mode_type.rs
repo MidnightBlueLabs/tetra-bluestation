@@ -55,7 +55,9 @@ impl CircuitModeType {
 }
 
 impl From<CircuitModeType> for u64 {
-    fn from(e: CircuitModeType) -> Self { e.into_raw() }
+    fn from(e: CircuitModeType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for CircuitModeType {

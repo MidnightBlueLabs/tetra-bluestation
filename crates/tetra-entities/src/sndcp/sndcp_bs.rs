@@ -1,9 +1,8 @@
-use tetra_config::SharedConfig;
-use tetra_core::{Sap, unimplemented_log};
-use tetra_core::tetra_entities::TetraEntity;
 use crate::{MessageQueue, TetraEntityTrait};
+use tetra_config::SharedConfig;
+use tetra_core::tetra_entities::TetraEntity;
+use tetra_core::{Sap, unimplemented_log};
 use tetra_saps::SapMsg;
-
 
 pub struct Sndcp {
     // config: Option<SharedConfig>,
@@ -22,7 +21,6 @@ impl TetraEntityTrait for Sndcp {
     }
 
     fn rx_prim(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
-        
         tracing::debug!("rx_prim: {:?}", message);
         // tracing::debug!(ts=%message.dltime, "rx_prim: {:?}", message);
 

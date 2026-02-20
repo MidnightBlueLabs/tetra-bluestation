@@ -8,24 +8,19 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use uuid::Uuid;
 
 use tetra_config::{SharedConfig, TimeslotOwner};
-use tetra_core::{
-    BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity,
-};
+use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity};
 use tetra_pdus::cmce::{
     enums::{call_timeout::CallTimeout, transmission_grant::TransmissionGrant},
     fields::basic_service_information::BasicServiceInformation,
-    pdus::{
-        d_connect::DConnect, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased,
-        d_tx_granted::DTxGranted,
-    },
+    pdus::{d_connect::DConnect, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased, d_tx_granted::DTxGranted},
 };
 use tetra_saps::{
     SapMsg, SapMsgInner,
+    control::brew::{BrewSubscriberAction, BrewSubscriberUpdate},
     control::{
         call_control::{CallControl, Circuit},
         enums::circuit_mode_type::CircuitModeType,
     },
-    control::brew::{BrewSubscriberAction, BrewSubscriberUpdate},
     lcmc::{
         LcmcMleUnitdataReq,
         enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment},
@@ -40,7 +35,6 @@ use super::worker::{BrewCommand, BrewConfig, BrewEvent, BrewWorker};
 
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
 const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(1);
-
 
 /// Active call tracking - Tracks the state of a single active Brew group call (currently transmitting)
 #[derive(Debug)]
@@ -169,18 +163,10 @@ impl BrewEntity {
         };
 
         let call_id = self.next_call_id;
-        self.next_call_id = if self.next_call_id >= 0x3FF {
-            100
-        } else {
-            self.next_call_id + 1
-        };
+        self.next_call_id = if self.next_call_id >= 0x3FF { 100 } else { self.next_call_id + 1 };
 
         let usage = self.next_usage;
-        self.next_usage = if self.next_usage >= 63 {
-            10
-        } else {
-            self.next_usage + 1
-        };
+        self.next_usage = if self.next_usage >= 63 { 10 } else { self.next_usage + 1 };
 
         Some((ts, call_id, usage))
     }
@@ -189,11 +175,7 @@ impl BrewEntity {
     fn release_timeslot(&mut self, ts: u8) {
         let mut state = self.config.state_write();
         if let Err(err) = state.timeslot_alloc.release(TimeslotOwner::Brew, ts) {
-            tracing::warn!(
-                "BrewEntity: failed to release timeslot ts={} err={:?}",
-                ts,
-                err
-            );
+            tracing::warn!("BrewEntity: failed to release timeslot ts={} err={:?}", ts, err);
         }
     }
 
@@ -219,33 +201,17 @@ impl BrewEntity {
                     priority,
                     service,
                 } => {
-                    tracing::info!(
-                        "BrewEntity: GROUP_TX service={} (0=TETRA ACELP, expect 0)",
-                        service
-                    );
+                    tracing::info!("BrewEntity: GROUP_TX service={} (0=TETRA ACELP, expect 0)", service);
                     self.handle_group_call_start(queue, uuid, source_issi, dest_gssi, priority);
                 }
                 BrewEvent::GroupCallEnd { uuid, cause } => {
                     self.handle_group_call_end(queue, uuid, cause);
                 }
-                BrewEvent::VoiceFrame {
-                    uuid,
-                    length_bits,
-                    data,
-                } => {
+                BrewEvent::VoiceFrame { uuid, length_bits, data } => {
                     self.handle_voice_frame(queue, uuid, length_bits, data);
                 }
-                BrewEvent::SubscriberEvent {
-                    msg_type,
-                    issi,
-                    groups,
-                } => {
-                    tracing::debug!(
-                        "BrewEntity: subscriber event type={} issi={} groups={:?}",
-                        msg_type,
-                        issi,
-                        groups
-                    );
+                BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
+                    tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
                 }
                 BrewEvent::ServerError { error_type, data } => {
                     let ascii = String::from_utf8_lossy(&data);
@@ -297,22 +263,14 @@ impl BrewEntity {
 
         for uuid in active_uuids {
             if let Some(call) = self.active_calls.remove(&uuid) {
-                tracing::info!(
-                    "BrewEntity: dropping active call uuid={} gssi={} (no listeners)",
-                    uuid,
-                    gssi
-                );
+                tracing::info!("BrewEntity: dropping active call uuid={} gssi={} (no listeners)", uuid, gssi);
                 self.send_d_tx_ceased(queue, call.call_id, call.dest_gssi);
                 self.finalize_call(queue, call.call_id, call.ts, call.dest_gssi);
             }
         }
 
         if let Some(hanging) = self.hanging_calls.remove(&gssi) {
-            tracing::info!(
-                "BrewEntity: dropping hanging call gssi={} ts={} (no listeners)",
-                gssi,
-                hanging.ts
-            );
+            tracing::info!("BrewEntity: dropping hanging call gssi={} ts={} (no listeners)", gssi, hanging.ts);
             self.finalize_call(queue, hanging.call_id, hanging.ts, hanging.dest_gssi);
         }
     }
@@ -325,11 +283,7 @@ impl BrewEntity {
             BrewSubscriberAction::Register => {
                 let known = self.subscriber_groups.contains_key(&issi);
                 self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                tracing::info!(
-                    "BrewEntity: subscriber register issi={} known={}",
-                    issi,
-                    known
-                );
+                tracing::info!("BrewEntity: subscriber register issi={} known={}", issi, known);
                 let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
             }
             BrewSubscriberAction::Deregister => {
@@ -340,9 +294,7 @@ impl BrewEntity {
                     }
                 }
                 tracing::info!("BrewEntity: subscriber deregister issi={}", issi);
-                let _ = self
-                    .command_sender
-                    .send(BrewCommand::DeregisterSubscriber { issi });
+                let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
             }
             BrewSubscriberAction::Affiliate => {
                 let is_new = !self.subscriber_groups.contains_key(&issi);
@@ -360,28 +312,15 @@ impl BrewEntity {
                 }
 
                 if is_new {
-                    tracing::info!(
-                        "BrewEntity: affiliate from unknown issi={}, sending register",
-                        issi
-                    );
+                    tracing::info!("BrewEntity: affiliate from unknown issi={}, sending register", issi);
                     let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
                 }
 
                 if new_groups.is_empty() {
-                    tracing::debug!(
-                        "BrewEntity: affiliate ignored (no new groups) issi={}",
-                        issi
-                    );
+                    tracing::debug!("BrewEntity: affiliate ignored (no new groups) issi={}", issi);
                 } else {
-                    tracing::info!(
-                        "BrewEntity: subscriber affiliate issi={} groups={:?}",
-                        issi,
-                        new_groups
-                    );
-                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
-                        issi,
-                        groups: new_groups,
-                    });
+                    tracing::info!("BrewEntity: subscriber affiliate issi={} groups={:?}", issi, new_groups);
+                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: new_groups });
                 }
             }
             BrewSubscriberAction::Deaffiliate => {
@@ -404,16 +343,9 @@ impl BrewEntity {
                 }
 
                 if removed_groups.is_empty() {
-                    tracing::debug!(
-                        "BrewEntity: deaffiliate ignored (no matching groups) issi={}",
-                        issi
-                    );
+                    tracing::debug!("BrewEntity: deaffiliate ignored (no matching groups) issi={}", issi);
                 } else {
-                    tracing::info!(
-                        "BrewEntity: subscriber deaffiliate issi={} groups={:?}",
-                        issi,
-                        removed_groups
-                    );
+                    tracing::info!("BrewEntity: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
                     for gssi in &removed_groups {
                         self.drop_group_calls_if_unlistened(queue, *gssi);
                     }
@@ -432,10 +364,7 @@ impl BrewEntity {
             return;
         }
 
-        tracing::info!(
-            "BrewEntity: resyncing {} subscribers to TetraPack",
-            self.subscriber_groups.len()
-        );
+        tracing::info!("BrewEntity: resyncing {} subscribers to TetraPack", self.subscriber_groups.len());
 
         for (issi, groups) in &self.subscriber_groups {
             let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
@@ -450,20 +379,9 @@ impl BrewEntity {
     }
 
     /// Handle new group call from Brew, reusing hanging call circuits if available.
-    fn handle_group_call_start(
-        &mut self,
-        queue: &mut MessageQueue,
-        uuid: Uuid,
-        source_issi: u32,
-        dest_gssi: u32,
-        _priority: u8,
-    ) {
+    fn handle_group_call_start(&mut self, queue: &mut MessageQueue, uuid: Uuid, source_issi: u32, dest_gssi: u32, _priority: u8) {
         if !self.has_listener(dest_gssi) {
-            tracing::info!(
-                "BrewEntity: ignoring GROUP_TX uuid={} gssi={} (no listeners)",
-                uuid,
-                dest_gssi
-            );
+            tracing::info!("BrewEntity: ignoring GROUP_TX uuid={} gssi={} (no listeners)", uuid, dest_gssi);
             return;
         }
 
@@ -508,11 +426,7 @@ impl BrewEntity {
 
         // New call — allocate a timeslot
         let Some((ts, call_id, usage)) = self.allocate_timeslot() else {
-            tracing::warn!(
-                "BrewEntity: no free timeslot for group call uuid={} gssi={}",
-                uuid,
-                dest_gssi
-            );
+            tracing::warn!("BrewEntity: no free timeslot for group call uuid={} gssi={}", uuid, dest_gssi);
             return;
         };
 
@@ -607,8 +521,7 @@ impl BrewEntity {
             basic_service_information: BasicServiceInformation {
                 circuit_mode_type: CircuitModeType::TchS,
                 encryption_flag: false,
-                communication_type:
-                    tetra_saps::control::enums::communication_type::CommunicationType::P2Mp,
+                communication_type: tetra_saps::control::enums::communication_type::CommunicationType::P2Mp,
                 slots_per_frame: None,
                 speech_service: Some(0), // TETRA encoded speech
             },
@@ -625,12 +538,7 @@ impl BrewEntity {
             proprietary: None,
         };
 
-        tracing::trace!(
-            "BrewEntity: -> D-SETUP call_id={} gssi={} grant={:?}",
-            call_id,
-            dest_gssi,
-            grant
-        );
+        tracing::trace!("BrewEntity: -> D-SETUP call_id={} gssi={} grant={:?}", call_id, dest_gssi, grant);
 
         let mut sdu = BitBuffer::new_autoexpand(80);
         if let Err(e) = d_setup.to_bitbuf(&mut sdu) {
@@ -692,11 +600,7 @@ impl BrewEntity {
             proprietary: None,
         };
 
-        tracing::info!(
-            "BrewEntity: -> D-CONNECT call_id={} gssi={}",
-            call_id,
-            dest_gssi
-        );
+        tracing::info!("BrewEntity: -> D-CONNECT call_id={} gssi={}", call_id, dest_gssi);
 
         let mut sdu = BitBuffer::new_autoexpand(40);
         if let Err(e) = d_connect.to_bitbuf(&mut sdu) {
@@ -731,10 +635,7 @@ impl BrewEntity {
     /// Handle GROUP_IDLE by sending D-TX CEASED and entering hangtime instead of immediate teardown.
     fn handle_group_call_end(&mut self, queue: &mut MessageQueue, uuid: Uuid, _cause: u8) {
         let Some(call) = self.active_calls.remove(&uuid) else {
-            tracing::debug!(
-                "BrewEntity: GROUP_IDLE for unknown uuid={} (already closed?)",
-                uuid
-            );
+            tracing::debug!("BrewEntity: GROUP_IDLE for unknown uuid={} (already closed?)", uuid);
             return;
         };
 
@@ -835,11 +736,7 @@ impl BrewEntity {
             proprietary: None,
         };
 
-        tracing::info!(
-            "BrewEntity: -> D-TX CEASED call_id={} gssi={} (via FACCH)",
-            call_id,
-            dest_gssi
-        );
+        tracing::info!("BrewEntity: -> D-TX CEASED call_id={} gssi={} (via FACCH)", call_id, dest_gssi);
 
         let mut sdu = BitBuffer::new_autoexpand(32);
         if let Err(e) = d_tx_ceased.to_bitbuf(&mut sdu) {
@@ -871,13 +768,7 @@ impl BrewEntity {
     }
 
     /// Send D-TX GRANTED to group via FACCH/STCH to activate MS U-plane (EN 300 392-2, §14.5.2.2.1b).
-    fn send_d_tx_granted(
-        &self,
-        queue: &mut MessageQueue,
-        call_id: u16,
-        source_issi: u32,
-        dest_gssi: u32,
-    ) {
+    fn send_d_tx_granted(&self, queue: &mut MessageQueue, call_id: u16, source_issi: u32, dest_gssi: u32) {
         let d_tx_granted = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
@@ -940,11 +831,7 @@ impl BrewEntity {
             proprietary: None,
         };
 
-        tracing::info!(
-            "BrewEntity: -> D-RELEASE call_id={} cause={}",
-            call_id,
-            cause
-        );
+        tracing::info!("BrewEntity: -> D-RELEASE call_id={} cause={}", call_id, cause);
 
         let mut sdu = BitBuffer::new_autoexpand(32);
         if let Err(e) = d_release.to_bitbuf(&mut sdu) {
@@ -976,20 +863,10 @@ impl BrewEntity {
     }
 
     /// Handle a voice frame from Brew — inject into the downlink
-    fn handle_voice_frame(
-        &mut self,
-        queue: &mut MessageQueue,
-        uuid: Uuid,
-        _length_bits: u16,
-        data: Vec<u8>,
-    ) {
+    fn handle_voice_frame(&mut self, queue: &mut MessageQueue, uuid: Uuid, _length_bits: u16, data: Vec<u8>) {
         let Some(call) = self.active_calls.get_mut(&uuid) else {
             // Voice frame for unknown call — might arrive before GROUP_TX or after GROUP_IDLE
-            tracing::trace!(
-                "BrewEntity: voice frame for unknown uuid={} ({} bytes)",
-                uuid,
-                data.len()
-            );
+            tracing::trace!("BrewEntity: voice frame for unknown uuid={} ({} bytes)", uuid, data.len());
             return;
         };
 
@@ -1008,10 +885,7 @@ impl BrewEntity {
         // STE format: byte 0 = header (control bits), bytes 1-35 = 274 ACELP bits for TCH/S.
         // Strip the STE header and pass only the ACELP payload.
         if data.len() < 36 {
-            tracing::warn!(
-                "BrewEntity: voice frame too short ({} bytes, expected 36 STE bytes)",
-                data.len()
-            );
+            tracing::warn!("BrewEntity: voice frame too short ({} bytes, expected 36 STE bytes)", data.len());
             return;
         }
         let acelp_data = data[1..].to_vec(); // 35 bytes = 280 bits, of which 274 are ACELP
@@ -1131,11 +1005,7 @@ impl TetraEntityTrait for BrewEntity {
                 self.handle_subscriber_update(queue, update);
             }
             _ => {
-                tracing::debug!(
-                    "BrewEntity: unexpected rx_prim from {:?} on {:?}",
-                    message.src,
-                    message.sap
-                );
+                tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
             }
         }
     }

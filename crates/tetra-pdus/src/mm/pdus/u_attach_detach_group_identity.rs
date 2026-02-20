@@ -1,13 +1,12 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
 use crate::mm::enums::type34_elem_id_ul::MmType34ElemIdUl;
 use crate::mm::fields::group_identity_uplink::GroupIdentityUplink;
-
 
 /// Representation of the U-ATTACH/DETACH GROUP IDENTITY PDU (Clause 16.9.3.1).
 /// The MS sends this message to the infrastructure to indicate attachment/detachment of group identities in the MS or to initiate a group report request or give a group report response.
@@ -32,10 +31,9 @@ pub struct UAttachDetachGroupIdentity {
 impl UAttachDetachGroupIdentity {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeUl::UAttachDetachGroupIdentity)?;
-        
+
         // Type1
         let group_identity_report = buffer.read_field(1, "group_identity_report")? != 0;
         // Type1
@@ -46,17 +44,17 @@ impl UAttachDetachGroupIdentity {
 
         // Type3 - stores raw data, so use existing approach
         let group_report_response = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::GroupReportResponse)?;
-        
+
         // Type4 - parses to structs, use generic helper
         let group_identity_uplink = typed::parse_type4_struct(
             obit,
             buffer,
             MmType34ElemIdUl::GroupIdentityUplink,
-            GroupIdentityUplink::from_bitbuf
+            GroupIdentityUplink::from_bitbuf,
         )?;
-        
+
         // Type3
-        let proprietary = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::Proprietary)?;        
+        let proprietary = typed::parse_type3_generic(obit, buffer, MmType34ElemIdUl::Proprietary)?;
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -64,12 +62,12 @@ impl UAttachDetachGroupIdentity {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UAttachDetachGroupIdentity { 
-            group_identity_report, 
-            group_identity_attach_detach_mode, 
-            group_report_response, 
-            group_identity_uplink, 
-            proprietary
+        Ok(UAttachDetachGroupIdentity {
+            group_identity_report,
+            group_identity_attach_detach_mode,
+            group_report_response,
+            group_identity_uplink,
+            proprietary,
         })
     }
 
@@ -83,20 +81,22 @@ impl UAttachDetachGroupIdentity {
         buffer.write_bits(self.group_identity_attach_detach_mode as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.group_report_response.is_some() || self.group_identity_uplink.is_some() || self.proprietary.is_some() ;
+        let obit = self.group_report_response.is_some() || self.group_identity_uplink.is_some() || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.group_report_response, MmType34ElemIdUl::GroupReportResponse)?;
 
         // Type4
         typed::write_type4_struct(
-            obit, 
+            obit,
             buffer,
             &self.group_identity_uplink,
             MmType34ElemIdUl::GroupIdentityUplink,
-            GroupIdentityUplink::to_bitbuf
+            GroupIdentityUplink::to_bitbuf,
         )?;
 
         // Type3
@@ -110,7 +110,9 @@ impl UAttachDetachGroupIdentity {
 
 impl fmt::Display for UAttachDetachGroupIdentity {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "UAttachDetachGroupIdentity {{ group_identity_report: {:?} group_identity_attach_detach_mode: {:?} group_report_response: {:?} group_identity_uplink: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "UAttachDetachGroupIdentity {{ group_identity_report: {:?} group_identity_attach_detach_mode: {:?} group_report_response: {:?} group_identity_uplink: {:?} proprietary: {:?} }}",
             self.group_identity_report,
             self.group_identity_attach_detach_mode,
             self.group_report_response,
@@ -120,7 +122,6 @@ impl fmt::Display for UAttachDetachGroupIdentity {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use tetra_core::debug;
@@ -129,7 +130,6 @@ mod tests {
 
     #[test]
     fn test_u_attach_detach_group_identity() {
-
         // 0111 0 1 1 11000000001001000000010100000000110101000110011100000
         // |--| PDU type
         //      | | group identity report = 0, group identity attach/detach mode = 1 (reset all prev and reattach to specified groups)
@@ -145,7 +145,7 @@ mod tests {
         let test_vec = "011101111000000001001000000010100000000110101000110011100000";
         let mut buf_in = BitBuffer::from_bitstr(test_vec);
         let pdu = UAttachDetachGroupIdentity::from_bitbuf(&mut buf_in).expect("Failed parsing");
-        
+
         tracing::info!("Parsed: {:?}", pdu);
         tracing::info!("Buf at end: {}", buf_in.dump_bin());
 

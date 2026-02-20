@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 use tetra_core::{BitBuffer, TdmaTime, TetraAddress, Todo};
@@ -6,7 +5,7 @@ use tetra_core::{BitBuffer, TdmaTime, TetraAddress, Todo};
 use crate::umac::subcomp::defrag::{DefragBuffer, DefragBufferState};
 
 const DEFRAG_BUF_MAX_LEN: usize = 4096;
-const DEFRAG_TS_BEFORE_TIMEOUT: i32 = 10*4; // TODO check documentation. 10 frames.
+const DEFRAG_TS_BEFORE_TIMEOUT: i32 = 10 * 4; // TODO check documentation. 10 frames.
 
 /// Defragmenter suitable for BS use
 /// Maintains a set of DefragBuffers per timeslot, indexed by SSI.
@@ -18,12 +17,7 @@ pub struct BsDefrag {
 impl BsDefrag {
     pub fn new() -> Self {
         Self {
-            buffers: [
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-                HashMap::new(),
-            ],
+            buffers: [HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new()],
         }
     }
 
@@ -46,9 +40,8 @@ impl BsDefrag {
 
     /// Inserts a first fragment into a fragbuffer.
     pub fn insert_first(&mut self, bitbuffer: &mut BitBuffer, t: TdmaTime, addr: TetraAddress, aie_info: Option<Todo>) {
-
         // Check if buffer already exists for this ssi/timeslot
-        // Remove and discard, if so. 
+        // Remove and discard, if so.
         let ts = (t.t - 1) as usize;
         let ssi = addr.ssi;
         let mut buf = if let Some(mut buf) = self.buffers[ts].remove(&ssi) {
@@ -70,15 +63,20 @@ impl BsDefrag {
         // Copy the bitbuffer data from pos to end into our fragbuffer
         buf.buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());
 
-        tracing::debug!("defrag_buffer for ts {} ssi: {}, t: {}-{}, frags: {}: {}",
-            ts, buf.addr.ssi, buf.t_first, buf.t_last, 
-            buf.num_frags, buf.buffer.dump_bin());
+        tracing::debug!(
+            "defrag_buffer for ts {} ssi: {}, t: {}-{}, frags: {}: {}",
+            ts,
+            buf.addr.ssi,
+            buf.t_first,
+            buf.t_last,
+            buf.num_frags,
+            buf.buffer.dump_bin()
+        );
 
         self.buffers[ts].insert(ssi, buf);
     }
 
     pub fn insert_next(&mut self, bitbuffer: &mut BitBuffer, ssi: u32, t: TdmaTime) {
-        
         let ts = (t.t - 1) as usize;
         let buf = match self.buffers[ts].get_mut(&ssi) {
             Some(b) => b,
@@ -87,7 +85,7 @@ impl BsDefrag {
                 return;
             }
         };
-        
+
         if buf.state != DefragBufferState::Active {
             tracing::warn!("defrag_buffer for ts {} ssi {} not active", t.t, ssi);
             return;
@@ -105,17 +103,22 @@ impl BsDefrag {
         // Copy the bitbuffer data from pos to end into our fragbuffer
         buf.buffer.copy_bits(bitbuffer, bitbuffer.get_len_remaining());
 
-        tracing::debug!("defrag_buffer for ts {} ssi: {}, t: {}-{}, frags: {}: {}",
-            t.t, ssi, buf.t_first, buf.t_last, 
-            buf.num_frags, buf.buffer.dump_bin());
+        tracing::debug!(
+            "defrag_buffer for ts {} ssi: {}, t: {}-{}, frags: {}: {}",
+            t.t,
+            ssi,
+            buf.t_first,
+            buf.t_last,
+            buf.num_frags,
+            buf.buffer.dump_bin()
+        );
     }
 
     /// Inserts the last fragment into a DefragBuffer, and returns the completed object
-    pub fn insert_last(&mut self, bitbuffer: &mut BitBuffer, ssi: u32,t: TdmaTime) -> Option<DefragBuffer> {
-
+    pub fn insert_last(&mut self, bitbuffer: &mut BitBuffer, ssi: u32, t: TdmaTime) -> Option<DefragBuffer> {
         // First, insert the last fragment, then reset buffer pos to start
         self.insert_next(bitbuffer, ssi, t);
-        
+
         // Now take the buffer out of the map
         let ts = (t.t - 1) as usize;
         let mut buf = match self.buffers[ts].remove(&ssi) {
@@ -150,17 +153,15 @@ impl BsDefrag {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tetra_core::{address::SsiType, bitbuffer::BitBuffer, debug};
 
-
     #[test]
-    fn test_3_chunks() { 
+    fn test_3_chunks() {
         debug::setup_logging_verbose();
-        
+
         let ssi = 1234;
         let mut buf1 = BitBuffer::from_bitstr("000");
         let t1 = TdmaTime::default().add_timeslots(2); // UL time 0
@@ -170,8 +171,12 @@ mod tests {
         let t3 = t2.add_timeslots(4);
 
         let mut defragger = BsDefrag::new();
-        let addr = TetraAddress { ssi, ssi_type: SsiType::Issi, encrypted: false};
-        defragger.insert_first(&mut buf1, t1, addr,None);
+        let addr = TetraAddress {
+            ssi,
+            ssi_type: SsiType::Issi,
+            encrypted: false,
+        };
+        defragger.insert_first(&mut buf1, t1, addr, None);
         defragger.insert_next(&mut buf2, ssi, t2);
         let out = defragger.insert_last(&mut buf3, ssi, t3).unwrap();
         assert_eq!(out.buffer.to_bitstr(), "0001110011");

@@ -10,13 +10,21 @@ pub const SCRAMB_INIT: u32 = 3;
 #[inline]
 fn next_lfsr_bit(lfsr: &mut u32) -> u8 {
     let x = *lfsr;
-    let bit = (
-        x  ^ (x >> (32 - 26))  ^ (x >> (32 - 23))  ^
-        (x >> (32 - 22))  ^ (x >> (32 - 16))  ^ (x >> (32 - 12))  ^
-        (x >> (32 - 11))  ^ (x >> (32 - 10))  ^ (x >> (32 - 8))   ^
-        (x >> (32 - 7))   ^ (x >> (32 - 5))   ^ (x >> (32 - 4))   ^
-        (x >> (32 - 2))   ^ (x >> (32 - 1))
-    ) & 1;
+    let bit = (x
+        ^ (x >> (32 - 26))
+        ^ (x >> (32 - 23))
+        ^ (x >> (32 - 22))
+        ^ (x >> (32 - 16))
+        ^ (x >> (32 - 12))
+        ^ (x >> (32 - 11))
+        ^ (x >> (32 - 10))
+        ^ (x >> (32 - 8))
+        ^ (x >> (32 - 7))
+        ^ (x >> (32 - 5))
+        ^ (x >> (32 - 4))
+        ^ (x >> (32 - 2))
+        ^ (x >> (32 - 1)))
+        & 1;
     *lfsr = (x >> 1) | (bit << 31);
     bit as u8
 }
@@ -30,17 +38,17 @@ pub fn tetra_scramb_get_bits(mut lfsr_init: u32, out: &mut [u8]) {
 
 // /// XOR `out[0..]` in‐place with the scrambling bits
 // pub fn tetra_scramb_bits(mut lfsr_init: u32, out: &mut [u8]) {
-    
+
 //     for byte in out.iter_mut() {
 //         *byte ^= next_lfsr_bit(&mut lfsr_init);
 //     }
 // }
 
-/// Scramble or unscramble the given BitBuffer. 
+/// Scramble or unscramble the given BitBuffer.
 /// Generate lfsr sequence for given lfsr initialization value
 /// and XOR it with the given buffer, for all bits from the current
 /// position to the end of the buffer. Resets position to the old
-/// initial position when done. 
+/// initial position when done.
 pub fn tetra_scramb_bits(mut lfsr_init: u32, buf: &mut BitBuffer) {
     let num_bits = buf.get_len_remaining() as isize;
     for _ in 0..num_bits {

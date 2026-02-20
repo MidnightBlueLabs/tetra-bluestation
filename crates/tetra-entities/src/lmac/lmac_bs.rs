@@ -118,11 +118,7 @@ impl LmacBs {
     // }
 
     /// Yields logical channel for given block. Based on Clause 9.5.1
-    fn determine_logical_channel_ul(
-        blk: &TpUnitdataInd,
-        burst_is_traffic: bool,
-        block2_stolen: bool,
-    ) -> LogicalChannel {
+    fn determine_logical_channel_ul(blk: &TpUnitdataInd, burst_is_traffic: bool, block2_stolen: bool) -> LogicalChannel {
         match blk.burst_type {
             BurstType::CUB => {
                 // CUB is always SCH/HU
@@ -169,10 +165,7 @@ impl LmacBs {
                                 LogicalChannel::TchS
                             }
                         } else {
-                            panic!(
-                                "NUB with NormalTrainSeq2 must have two blocks, got {:?}",
-                                blk.block_num
-                            );
+                            panic!("NUB with NormalTrainSeq2 must have two blocks, got {:?}", blk.block_num);
                         }
                     }
                     _ => panic!(),
@@ -182,13 +175,7 @@ impl LmacBs {
         }
     }
 
-    fn rx_blk_traffic(
-        &mut self,
-        queue: &mut MessageQueue,
-        blk: TpUnitdataInd,
-        lchan: LogicalChannel,
-        ul_time: TdmaTime,
-    ) {
+    fn rx_blk_traffic(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel, ul_time: TdmaTime) {
         // Only full-slot TCH/S supported for now
         if lchan != LogicalChannel::TchS || blk.block_num != PhyBlockNum::Both {
             tracing::trace!(
@@ -220,21 +207,12 @@ impl LmacBs {
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
             dltime: ul_time,
-            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd {
-                ts: ul_time.t,
-                data,
-            }),
+            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts: ul_time.t, data }),
         };
         queue.push_back(msg);
     }
 
-    fn rx_blk_control(
-        &mut self,
-        queue: &mut MessageQueue,
-        blk: TpUnitdataInd,
-        lchan: LogicalChannel,
-        ul_time: TdmaTime,
-    ) {
+    fn rx_blk_control(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel, ul_time: TdmaTime) {
         assert!(
             lchan.is_control_channel(),
             "rx_blk_cp: lchan {:?} is not a signalling channel",
@@ -253,11 +231,7 @@ impl LmacBs {
                 type1bits
             );
         } else {
-            tracing::info!(
-                "rx_blk_cp {:?} CRC: {}",
-                lchan,
-                if crc_pass { "ok" } else { "WRONG" }
-            );
+            tracing::info!("rx_blk_cp {:?} CRC: {}", lchan, if crc_pass { "ok" } else { "WRONG" });
         }
 
         // TODO FIXME, for now, we're not passing broken CRC msgs up to Lmac
@@ -291,16 +265,10 @@ impl LmacBs {
         tracing::debug!("rx_tp_prim: msg {:?}", message);
 
         let ul_time = message.dltime;
-        let SapMsgInner::TpUnitdataInd(prim) = message.msg else {
-            panic!()
-        };
+        let SapMsgInner::TpUnitdataInd(prim) = message.msg else { panic!() };
         // let pchan = self.determine_phy_chan_ul();
         let pchan = self.uplink_phy_chan[ul_time.t as usize - 1];
-        let lchan = Self::determine_logical_channel_ul(
-            &prim,
-            pchan == PhysicalChannel::Tp,
-            self.second_block_stolen,
-        );
+        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, self.second_block_stolen);
 
         // Sanity checks
         assert!(
@@ -314,10 +282,9 @@ impl LmacBs {
 
         match lchan {
             LogicalChannel::Clch => {}
-            LogicalChannel::TchS
-            | LogicalChannel::Tch24
-            | LogicalChannel::Tch48
-            | LogicalChannel::Tch72 => self.rx_blk_traffic(queue, prim, lchan, ul_time),
+            LogicalChannel::TchS | LogicalChannel::Tch24 | LogicalChannel::Tch48 | LogicalChannel::Tch72 => {
+                self.rx_blk_traffic(queue, prim, lchan, ul_time)
+            }
             _ => {
                 self.rx_blk_control(queue, prim, lchan, ul_time);
             }
@@ -341,14 +308,8 @@ impl LmacBs {
         let ts_idx = prim.ts.t as usize - 1;
         self.uplink_phy_chan[ts_idx] = prim.ul_phy_chan;
 
-        assert!(
-            prim.bbk.is_some(),
-            "rx_tmv_unitdata_req_slot: bbk must be present"
-        );
-        assert!(
-            prim.blk1.is_some(),
-            "rx_tmv_unitdata_req_slot: blk1 must be present"
-        );
+        assert!(prim.bbk.is_some(), "rx_tmv_unitdata_req_slot: bbk must be present");
+        assert!(prim.blk1.is_some(), "rx_tmv_unitdata_req_slot: blk1 must be present");
 
         let bbk = prim.bbk.take().unwrap(); // Guaranteed for BS stack
         let blk1 = prim.blk1.take().unwrap(); // Guaranteed for BS stack
@@ -367,10 +328,7 @@ impl LmacBs {
                 assert!(blk2.is_none());
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq1)
             }
-            LogicalChannel::TchS
-            | LogicalChannel::Tch24
-            | LogicalChannel::Tch48
-            | LogicalChannel::Tch72 => {
+            LogicalChannel::TchS | LogicalChannel::Tch24 | LogicalChannel::Tch48 | LogicalChannel::Tch72 => {
                 // Traffic burst
                 // TODO FIXME: we could say, if blk2 is some, then it's traffic with the
                 // first block stolen. Then, we still need to know if blk2 is also stolen
@@ -382,10 +340,7 @@ impl LmacBs {
                 assert!(blk2.is_some());
                 (BurstType::NDB, TrainingSequence::NormalTrainSeq2)
             }
-            _ => panic!(
-                "rx_tmv_unitdata_req_slot: unsupported logical channel {:?}",
-                blk1.logical_channel
-            ),
+            _ => panic!("rx_tmv_unitdata_req_slot: unsupported logical channel {:?}", blk1.logical_channel),
         };
 
         let mut prim_phy = TpUnitdataReqSlot {
@@ -397,10 +352,7 @@ impl LmacBs {
         };
 
         // Encode blk1 and optionally blk2
-        prim_phy.bbk = Some(errorcontrol::encode_aach(
-            bbk.mac_block,
-            bbk.scrambling_code,
-        ));
+        prim_phy.bbk = Some(errorcontrol::encode_aach(bbk.mac_block, bbk.scrambling_code));
         if blk1.logical_channel.is_traffic() {
             prim_phy.blk1 = Some(errorcontrol::encode_tp(blk1, 1));
         } else {

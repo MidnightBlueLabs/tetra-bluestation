@@ -57,9 +57,7 @@ impl<const N: usize> ViterbiDecoder<N> {
                 if encoder_output { 1 as SoftBit } else { -1 as SoftBit }
             })
         });
-        Self {
-            expected_0,
-        }
+        Self { expected_0 }
     }
 
     pub fn decode(&self, received_bits: &[SoftBit]) -> Vec<u8> {
@@ -81,13 +79,9 @@ impl<const N: usize> ViterbiDecoder<N> {
             let mut branch_metrics_0: [Metric; NUM_STATES] = [0; NUM_STATES];
 
             // Loop through each generator polynomial and add to branch metrics
-            for (received_bit, expected_0) in
-                received_bits_for_one_output_bit.iter().zip(self.expected_0.iter())
-            {
+            for (received_bit, expected_0) in received_bits_for_one_output_bit.iter().zip(self.expected_0.iter()) {
                 // Loop through each state
-                for (branch_metric_0, expected_bit_0) in
-                    branch_metrics_0.iter_mut().zip(expected_0.iter())
-                {
+                for (branch_metric_0, expected_bit_0) in branch_metrics_0.iter_mut().zip(expected_0.iter()) {
                     *branch_metric_0 -= (received_bit * expected_bit_0) as Metric;
                 }
             }
@@ -129,7 +123,7 @@ impl<const N: usize> ViterbiDecoder<N> {
 
         let mut decoded_bits: Vec<u8> = Vec::with_capacity(num_output_bits);
         for decisions in trellis_decisions.iter().rev() {
-            decoded_bits.push(((best_state >> (K-2)) & 1) as u8);
+            decoded_bits.push(((best_state >> (K - 2)) & 1) as u8);
             best_state = best_state * 2 % NUM_STATES + ((*decisions >> best_state) & 1) as usize;
         }
         decoded_bits.reverse();
@@ -143,10 +137,10 @@ pub type TetraViterbiDecoder = ViterbiDecoder<4>;
 impl TetraViterbiDecoder {
     pub fn new() -> Self {
         Self::new_with_polynomials(&[
-            [true, true,  false, false, true],
-            [true, false, true,  true,  true],
-            [true, true,  true,  false, true],
-            [true, true,  false, true,  true],
+            [true, true, false, false, true],
+            [true, false, true, true, true],
+            [true, true, true, false, true],
+            [true, true, false, true, true],
         ])
     }
 }
@@ -157,9 +151,9 @@ pub type TetraCodecViterbiDecoder = ViterbiDecoder<3>;
 impl TetraCodecViterbiDecoder {
     pub fn new() -> Self {
         Self::new_with_polynomials(&[
-            [true, true,  true,  true,  true],
-            [true, true,  false, true,  true],
-            [true, false, true,  false, true],
+            [true, true, true, true, true],
+            [true, true, false, true, true],
+            [true, false, true, false, true],
         ])
     }
 }
@@ -174,10 +168,10 @@ pub fn dec_sb1(in_buf: &[u8], out_buf: &mut [u8], sym_count: usize) {
     let soft: Vec<SoftBit> = in_buf[..sym_count * 4]
         .iter()
         .map(|&b| match b {
-            0x00 => -1,  // strong '0'
-            0x01 =>  1,  // strong '1'
-            0xff =>  0,  // erasure / puncture
-            _    => panic!("viterbi_dec_sb1_wrapper: invalid input"),
+            0x00 => -1, // strong '0'
+            0x01 => 1,  // strong '1'
+            0xff => 0,  // erasure / puncture
+            _ => panic!("viterbi_dec_sb1_wrapper: invalid input"),
         })
         .collect();
 
@@ -186,21 +180,16 @@ pub fn dec_sb1(in_buf: &[u8], out_buf: &mut [u8], sym_count: usize) {
     out_buf[..sym_count].copy_from_slice(&decoded[..sym_count]);
 }
 
-
 #[cfg(test)]
 mod tests {
+    use super::super::convenc;
     use super::*;
     use rand;
-    use super::super::convenc;
 
     #[test]
     fn test_decoder() {
         // Generate a random message with 4 zero tail bits
-        let message: Vec<u8> =
-            (0..288)
-            .map(|_| { rand::random_range(0..2) })
-            .chain((0..4).map(|_| 0))
-            .collect();
+        let message: Vec<u8> = (0..288).map(|_| rand::random_range(0..2)).chain((0..4).map(|_| 0)).collect();
         eprintln!("Message: {:?}", message);
 
         let mut encoder = convenc::ConvEncState::new();
@@ -210,11 +199,19 @@ mod tests {
         // Convert to the format used by the decoder.
         // Puncture some bits, not really following any TETRA puncturing pattern,
         // but enough to check that the decoder can correct for missing bits.
-        let encoded_soft: Vec<i8> = encoded.into_iter().enumerate().map(|(i, bit)| {
-            if i % 3 > 0 {
-                0 // puncture
-            } else if bit != 0 { 1 } else { -1 }
-        }).collect();
+        let encoded_soft: Vec<i8> = encoded
+            .into_iter()
+            .enumerate()
+            .map(|(i, bit)| {
+                if i % 3 > 0 {
+                    0 // puncture
+                } else if bit != 0 {
+                    1
+                } else {
+                    -1
+                }
+            })
+            .collect();
 
         let decoder = TetraViterbiDecoder::new();
         let decoded_message = decoder.decode(&encoded_soft[..]);
@@ -223,6 +220,3 @@ mod tests {
         assert!(decoded_message[..] == message[..]);
     }
 }
-
-
-

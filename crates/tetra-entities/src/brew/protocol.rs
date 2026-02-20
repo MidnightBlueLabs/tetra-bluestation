@@ -151,12 +151,7 @@ fn read_u16_le(data: &[u8], offset: usize) -> u16 {
 
 /// Read a little-endian u32 from a byte slice
 fn read_u32_le(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ])
+    u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
 }
 
 /// Read a little-endian u64 from a byte slice
@@ -240,9 +235,7 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
         return Err(BrewParseError::TooShort(data.len()));
     }
 
-    let uuid_bytes: [u8; 16] = data[2..18]
-        .try_into()
-        .map_err(|_| BrewParseError::InvalidUuid)?;
+    let uuid_bytes: [u8; 16] = data[2..18].try_into().map_err(|_| BrewParseError::InvalidUuid)?;
     let identifier = Uuid::from_bytes(uuid_bytes);
 
     let payload_data = &data[18..];
@@ -294,9 +287,7 @@ fn parse_frame(frame_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParseErro
         return Err(BrewParseError::TooShort(data.len()));
     }
 
-    let uuid_bytes: [u8; 16] = data[2..18]
-        .try_into()
-        .map_err(|_| BrewParseError::InvalidUuid)?;
+    let uuid_bytes: [u8; 16] = data[2..18].try_into().map_err(|_| BrewParseError::InvalidUuid)?;
     let identifier = Uuid::from_bytes(uuid_bytes);
 
     let length_bits = read_u16_le(data, 18);
@@ -321,12 +312,8 @@ fn parse_service(service_type: u8, data: &[u8]) -> Result<BrewMessage, BrewParse
     // Data is NULL-terminated JSON
     let json_bytes = &data[2..];
     // Find NULL terminator or use full length
-    let end = json_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(json_bytes.len());
-    let json_str =
-        std::str::from_utf8(&json_bytes[..end]).map_err(|_| BrewParseError::InvalidUtf8)?;
+    let end = json_bytes.iter().position(|&b| b == 0).unwrap_or(json_bytes.len());
+    let json_str = std::str::from_utf8(&json_bytes[..end]).map_err(|_| BrewParseError::InvalidUtf8)?;
 
     Ok(BrewMessage::Service(BrewServiceMessage {
         service_type,
@@ -404,13 +391,7 @@ pub fn build_subscriber_deregister(issi: u32) -> Vec<u8> {
 
 /// Build a group call transmission start message (GROUP_TX)
 /// Sent when a local radio starts transmitting on a subscribed group
-pub fn build_group_tx(
-    session_uuid: &Uuid,
-    source_issi: u32,
-    dest_gssi: u32,
-    priority: u8,
-    service: u16,
-) -> Vec<u8> {
+pub fn build_group_tx(session_uuid: &Uuid, source_issi: u32, dest_gssi: u32, priority: u8, service: u16) -> Vec<u8> {
     // kind(1) + type(1) + uuid(16) + source(4) + dest(4) + priority(1) + access(1) + service(2) = 30
     let mut buf = Vec::with_capacity(30);
     buf.push(BREW_CLASS_CALL_CONTROL);

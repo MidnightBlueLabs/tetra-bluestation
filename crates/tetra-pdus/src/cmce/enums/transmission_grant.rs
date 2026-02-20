@@ -35,7 +35,9 @@ impl TransmissionGrant {
 }
 
 impl From<TransmissionGrant> for u64 {
-    fn from(e: TransmissionGrant) -> Self { e.into_raw() }
+    fn from(e: TransmissionGrant) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for TransmissionGrant {

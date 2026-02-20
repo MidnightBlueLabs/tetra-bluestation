@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Direction {
     None,
@@ -6,7 +5,7 @@ pub enum Direction {
     Ul,
     /// Downlink
     Dl,
-    Both
+    Both,
 }
 
 impl Direction {

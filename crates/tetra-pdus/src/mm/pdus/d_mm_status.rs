@@ -1,11 +1,10 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
-
 
 /// Representation of the D-MM STATUS PDU (Clause 16.9.2.5.1).
 /// The infrastructure sends this message to the MS to request or indicate/reject a change of an operation mode.
@@ -28,18 +27,17 @@ pub struct DMmStatus {
 impl DMmStatus {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::DMmStatus)?;
-        
+
         // Type1
         let status_downlink = buffer.read_field(6, "status_downlink")? as u8;
         // Conditional
-        unimplemented!(); let status_downlink_dependent_information = if true { Some(0) } else { None };
+        unimplemented!();
+        let status_downlink_dependent_information = if true { Some(0) } else { None };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
-
 
         // Read trailing obit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -47,9 +45,9 @@ impl DMmStatus {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DMmStatus { 
-            status_downlink, 
-            status_downlink_dependent_information
+        Ok(DMmStatus {
+            status_downlink,
+            status_downlink_dependent_information,
         })
     }
 
@@ -72,9 +70,10 @@ impl DMmStatus {
 
 impl fmt::Display for DMmStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DMmStatus {{ status_downlink: {:?} status_downlink_dependent_information: {:?} }}",
-            self.status_downlink,
-            self.status_downlink_dependent_information,
+        write!(
+            f,
+            "DMmStatus {{ status_downlink: {:?} status_downlink_dependent_information: {:?} }}",
+            self.status_downlink, self.status_downlink_dependent_information,
         )
     }
 }

@@ -1,5 +1,3 @@
-
-
 /// Pass TMD circuit data to UMAC for TX scheduling
 #[derive(Debug)]
 pub struct TmdCircuitDataReq {

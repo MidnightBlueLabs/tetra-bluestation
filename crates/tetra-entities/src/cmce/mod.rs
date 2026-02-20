@@ -1,4 +1,4 @@
-pub mod components; 
+pub mod components;
 pub mod subentities;
 
 pub mod cmce_bs;

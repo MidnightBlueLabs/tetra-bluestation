@@ -47,7 +47,9 @@ impl MleProtocolDiscriminator {
 }
 
 impl From<MleProtocolDiscriminator> for u64 {
-    fn from(e: MleProtocolDiscriminator) -> Self { e.into_raw() }
+    fn from(e: MleProtocolDiscriminator) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MleProtocolDiscriminator {

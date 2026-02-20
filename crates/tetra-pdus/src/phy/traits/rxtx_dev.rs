@@ -1,7 +1,6 @@
 use tetra_core::TdmaTime;
 use tetra_core::TrainingSequence;
 
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RxTxDevError {
     RxEndOfData,

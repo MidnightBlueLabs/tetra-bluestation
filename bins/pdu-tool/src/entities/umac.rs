@@ -1,29 +1,26 @@
 use tetra_core::BitBuffer;
-use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
 use tetra_pdus::umac::{
-    enums::{
-        broadcast_type::BroadcastType,
-        mac_pdu_type::MacPduType,
-    },
+    enums::{broadcast_type::BroadcastType, mac_pdu_type::MacPduType},
     pdus::{
+        access_define::AccessDefine,
         // Uplink PDUs
         mac_access::MacAccess,
+        mac_d_blck::MacDBlck,
         mac_data::MacData,
+        mac_end_dl::MacEndDl,
         mac_end_hu::MacEndHu,
         mac_end_ul::MacEndUl,
+        mac_frag_dl::MacFragDl,
         mac_frag_ul::MacFragUl,
-        mac_u_blck::MacUBlck,
-        mac_u_signal::MacUSignal,
         // Downlink PDUs
         mac_resource::MacResource,
-        mac_end_dl::MacEndDl,
-        mac_frag_dl::MacFragDl,
-        mac_d_blck::MacDBlck,
-        mac_sysinfo::MacSysinfo,
         mac_sync::MacSync,
-        access_define::AccessDefine,
+        mac_sysinfo::MacSysinfo,
+        mac_u_blck::MacUBlck,
+        mac_u_signal::MacUSignal,
     },
 };
+use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
 
 /// Result of length_ind interpretation
 #[derive(Debug)]
@@ -42,7 +39,6 @@ pub struct LengthIndInfo {
 pub struct UmacParser;
 
 impl UmacParser {
-
     /// Parse an uplink MAC PDU and print the result
     /// Follows the structure of UmacBs::rx_tmv_unitdata_ind and rx_tmv_sch
     pub fn parse_ul(mut pdu: BitBuffer, logical_channel: LogicalChannel) {
@@ -105,14 +101,16 @@ impl UmacParser {
                 LogicalChannel::SchHu => {
                     // Only 1 bit needed for subtype distinction on SCH/HU
                     let pdu_type = (bits >> 2) & 1;
-                    println!("SCH/HU PDU Type: {} ({})", 
-                        if pdu_type == 0 { "MAC-ACCESS" } else { "MAC-END-HU" }, 
-                        pdu_type);
+                    println!(
+                        "SCH/HU PDU Type: {} ({})",
+                        if pdu_type == 0 { "MAC-ACCESS" } else { "MAC-END-HU" },
+                        pdu_type
+                    );
 
                     match pdu_type {
                         0 => Self::parse_mac_access(&mut pdu),
                         1 => Self::parse_mac_end_hu(&mut pdu),
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
                 _ => {
@@ -150,9 +148,11 @@ impl UmacParser {
             _ => {}
         }
 
-        assert!(logical_channel == LogicalChannel::SchF
-            || logical_channel == LogicalChannel::SchHd, 
-            "Unsupported logical channel for DL: {:?}", logical_channel);
+        assert!(
+            logical_channel == LogicalChannel::SchF || logical_channel == LogicalChannel::SchHd,
+            "Unsupported logical channel for DL: {:?}",
+            logical_channel
+        );
 
         // Iterate until no more messages left in mac block
         loop {
@@ -161,7 +161,7 @@ impl UmacParser {
                 return;
             };
             let orig_start = pdu.get_raw_start();
-            
+
             // First two bits are MAC PDU type
             let Ok(pdu_type) = MacPduType::try_from(bits >> 1) else {
                 println!("[!] Invalid PDU type: {}", bits >> 1);
@@ -213,7 +213,7 @@ impl UmacParser {
         match MacData::from_bitbuf(pdu) {
             Ok(mac_data) => {
                 println!("{:#?}", mac_data);
-                
+
                 // Print SDU preview if we have a length
                 if let Some(len) = mac_data.length_ind {
                     let info = Self::interpret_length_ind(len, pdu.get_len_remaining());
@@ -223,7 +223,7 @@ impl UmacParser {
                         println!("Fragment data: {} bits remaining", pdu.get_len_remaining());
                     }
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, mac_data.length_ind, mac_data.fill_bits);
             }
@@ -236,7 +236,7 @@ impl UmacParser {
         match MacAccess::from_bitbuf(pdu) {
             Ok(mac_access) => {
                 println!("{:#?}", mac_access);
-                
+
                 // Print SDU preview if we have a length
                 if let Some(len) = mac_access.length_ind {
                     let info = Self::interpret_length_ind(len, pdu.get_len_remaining());
@@ -246,7 +246,7 @@ impl UmacParser {
                         println!("Fragment data: {} bits remaining", pdu.get_len_remaining());
                     }
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, mac_access.length_ind, mac_access.fill_bits);
             }
@@ -277,7 +277,7 @@ impl UmacParser {
         match MacEndUl::from_bitbuf(pdu) {
             Ok(mac_end) => {
                 println!("{:#?}", mac_end);
-                
+
                 // Print SDU preview if we have a length
                 if let Some(len) = mac_end.length_ind {
                     let info = Self::interpret_length_ind(len, pdu.get_len_remaining());
@@ -287,7 +287,7 @@ impl UmacParser {
                         println!("Fragment data: {} bits remaining", pdu.get_len_remaining());
                     }
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, mac_end.length_ind, mac_end.fill_bits);
             }
@@ -300,7 +300,7 @@ impl UmacParser {
         match MacEndHu::from_bitbuf(pdu) {
             Ok(mac_end) => {
                 println!("{:#?}", mac_end);
-                
+
                 // Print SDU preview if we have a length
                 if let Some(len) = mac_end.length_ind {
                     let info = Self::interpret_length_ind(len, pdu.get_len_remaining());
@@ -310,7 +310,7 @@ impl UmacParser {
                         println!("Fragment data: {} bits remaining", pdu.get_len_remaining());
                     }
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, mac_end.length_ind, mac_end.fill_bits);
             }
@@ -351,7 +351,7 @@ impl UmacParser {
         match MacResource::from_bitbuf(pdu) {
             Ok(mac_res) => {
                 println!("{:#?}", mac_res);
-                
+
                 // Print SDU preview
                 let info = Self::interpret_length_ind(mac_res.length_ind, pdu.get_len_remaining());
                 if !info.is_null_pdu && !info.is_frag_start && !info.second_half_stolen && info.pdu_len_bits > 0 {
@@ -360,7 +360,7 @@ impl UmacParser {
                     let remaining = pdu.get_len_remaining();
                     println!("Fragment data: {} bits remaining", remaining);
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, Some(mac_res.length_ind), mac_res.fill_bits);
             }
@@ -386,7 +386,7 @@ impl UmacParser {
         match MacEndDl::from_bitbuf(pdu) {
             Ok(mac_end) => {
                 println!("{:#?}", mac_end);
-                
+
                 // Print SDU preview
                 let info = Self::interpret_length_ind(mac_end.length_ind, pdu.get_len_remaining());
                 if !info.is_null_pdu && !info.is_frag_start && !info.second_half_stolen && info.pdu_len_bits > 0 {
@@ -394,7 +394,7 @@ impl UmacParser {
                 } else if info.is_frag_start {
                     println!("Fragment data: {} bits remaining", pdu.get_len_remaining());
                 }
-                
+
                 // Apply PDU association
                 Self::apply_pdu_association(pdu, Some(mac_end.length_ind), mac_end.fill_bits);
             }
@@ -425,7 +425,7 @@ impl UmacParser {
             println!("[!] Insufficient bits for broadcast type");
             return;
         };
-        
+
         let Ok(bcast_type) = BroadcastType::try_from(bits) else {
             println!("[!] Invalid broadcast type: {}", bits);
             return;
@@ -561,7 +561,7 @@ impl UmacParser {
     pub fn count_fill_bits(pdu: &BitBuffer, pdu_len_bits: usize) -> usize {
         let start = pdu.get_raw_start();
         let mut index = pdu_len_bits as isize - 1;
-        
+
         // Walk backwards from end looking for the '1' that marks start of fill
         while index >= 0 {
             let bit = pdu.peek_bits_startoffset(start + index as usize, 1);
@@ -576,20 +576,16 @@ impl UmacParser {
                 break;
             }
         }
-        
+
         // No fill bits found (all zeros or empty)
         0
     }
 
     /// Apply PDU association: truncate buffer to PDU boundary, strip fill bits,
     /// and check for remaining data that could be another PDU.
-    /// 
+    ///
     /// Returns the remaining bits string if there's a "next block", None otherwise.
-    pub fn apply_pdu_association(
-        pdu: &mut BitBuffer,
-        length_ind: Option<u8>,
-        has_fill_bits: bool,
-    ) -> Option<String> {
+    pub fn apply_pdu_association(pdu: &mut BitBuffer, length_ind: Option<u8>, has_fill_bits: bool) -> Option<String> {
         let Some(length_ind) = length_ind else {
             println!("    [No length_ind present - cannot apply PDU association]");
             return None;
@@ -601,18 +597,18 @@ impl UmacParser {
         println!();
         println!("=== PDU Association ===");
         println!("length_ind: {} (0b{:06b})", length_ind, length_ind);
-        
+
         if info.is_null_pdu {
             println!("    Null PDU");
             return None;
         }
-        
+
         if info.is_frag_start {
             println!("    Fragmentation start (TL-SDU extends to subsequent MAC PDUs)");
             println!("    Remaining {} bits are fragment data", remaining_bits);
             return None;
         }
-        
+
         if info.second_half_stolen {
             println!("    Second half slot stolen (STCH signalling)");
             return None;
@@ -646,7 +642,7 @@ impl UmacParser {
             println!();
             println!("=== Next Block Available ===");
             println!("    {} bits remaining after this PDU", remaining_after_pdu);
-            
+
             // Extract the remaining bits as a string
             let mut next_block = String::new();
             for i in 0..remaining_after_pdu {
@@ -654,12 +650,12 @@ impl UmacParser {
                     next_block.push(if bit == 1 { '1' } else { '0' });
                 }
             }
-            
+
             println!("    Next block: {}", next_block);
             println!();
             println!("To decode next PDU, run:");
             println!("    pdu-tool <direction> tmv umac \"{}\"", next_block);
-            
+
             return Some(next_block);
         } else if remaining_after_pdu > 0 {
             println!();
@@ -689,7 +685,7 @@ impl UmacParser {
     /// Print SDU data if available
     fn print_sdu(pdu: &mut BitBuffer, bit_len: usize, label: &str) {
         println!("{} length: {} bits ({} bytes)", label, bit_len, bit_len / 8);
-        
+
         if let Some(sdu_bits) = pdu.peek_bits(bit_len) {
             println!("{}: {:0width$b}", label, sdu_bits, width = bit_len);
         }

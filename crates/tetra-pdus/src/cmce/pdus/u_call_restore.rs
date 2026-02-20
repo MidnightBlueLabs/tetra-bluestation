@@ -1,9 +1,9 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-CALL RESTORE PDU (Clause 14.7.2.2).
 /// This PDU shall be the order from the MS for restoration of a specific call after a temporary break of the call.
@@ -41,7 +41,6 @@ pub struct UCallRestore {
 impl UCallRestore {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::UCallRestore)?;
 
@@ -52,17 +51,23 @@ impl UCallRestore {
         // Type1
         let other_party_type_identifier = buffer.read_field(2, "other_party_type_identifier")? as u8;
         // Conditional
-        let other_party_short_number_address = if other_party_type_identifier == 0 { 
-            Some(buffer.read_field(8, "other_party_short_number_address")?) 
-        } else { None };
+        let other_party_short_number_address = if other_party_type_identifier == 0 {
+            Some(buffer.read_field(8, "other_party_short_number_address")?)
+        } else {
+            None
+        };
         // Conditional
-        let other_party_ssi = if other_party_type_identifier == 1 || other_party_type_identifier == 2 { 
-            Some(buffer.read_field(24, "other_party_ssi")?) 
-        } else { None };
+        let other_party_ssi = if other_party_type_identifier == 1 || other_party_type_identifier == 2 {
+            Some(buffer.read_field(24, "other_party_ssi")?)
+        } else {
+            None
+        };
         // Conditional
-        let other_party_extension = if other_party_type_identifier == 2 { 
-            Some(buffer.read_field(24, "other_party_extension")?) 
-        } else { None };
+        let other_party_extension = if other_party_type_identifier == 2 {
+            Some(buffer.read_field(24, "other_party_extension")?)
+        } else {
+            None
+        };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -70,16 +75,14 @@ impl UCallRestore {
         // Type2
         let basic_service_information = typed::parse_type2_struct(obit, buffer, BasicServiceInformation::from_bitbuf)?;
 
-
         // Type3
         let facility = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Facility)?;
-        
+
         // Type3
         let dm_ms_address = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Type3
         let proprietary = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::Proprietary)?;
-        
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -87,17 +90,17 @@ impl UCallRestore {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(UCallRestore { 
-            call_identifier, 
-            request_to_transmit_send_data, 
-            other_party_type_identifier, 
-            other_party_short_number_address, 
-            other_party_ssi, 
-            other_party_extension, 
-            basic_service_information, 
-            facility, 
-            dm_ms_address, 
-            proprietary 
+        Ok(UCallRestore {
+            call_identifier,
+            request_to_transmit_send_data,
+            other_party_type_identifier,
+            other_party_short_number_address,
+            other_party_ssi,
+            other_party_extension,
+            basic_service_information,
+            facility,
+            dm_ms_address,
+            proprietary,
         })
     }
 
@@ -125,22 +128,27 @@ impl UCallRestore {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.basic_service_information.is_some() || self.facility.is_some() || self.dm_ms_address.is_some() || self.proprietary.is_some() ;
+        let obit = self.basic_service_information.is_some()
+            || self.facility.is_some()
+            || self.dm_ms_address.is_some()
+            || self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_struct(obit, buffer, &self.basic_service_information, BasicServiceInformation::to_bitbuf)?;
 
         // Type3
-        typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;        
-        
+        typed::write_type3_generic(obit, buffer, &self.facility, CmceType3ElemId::Facility)?;
+
         // Type3
-        typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;        
-        
+        typed::write_type3_generic(obit, buffer, &self.dm_ms_address, CmceType3ElemId::DmMsAddr)?;
+
         // Type3
-        typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;        
-        
+        typed::write_type3_generic(obit, buffer, &self.proprietary, CmceType3ElemId::Proprietary)?;
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -149,7 +157,9 @@ impl UCallRestore {
 
 impl fmt::Display for UCallRestore {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "UCallRestore {{ call_identifier: {:?} request_to_transmit_send_data: {:?} other_party_type_identifier: {:?} other_party_short_number_address: {:?} other_party_ssi: {:?} other_party_extension: {:?} basic_service_information: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+        write!(
+            f,
+            "UCallRestore {{ call_identifier: {:?} request_to_transmit_send_data: {:?} other_party_type_identifier: {:?} other_party_short_number_address: {:?} other_party_ssi: {:?} other_party_extension: {:?} basic_service_information: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.request_to_transmit_send_data,
             self.other_party_type_identifier,

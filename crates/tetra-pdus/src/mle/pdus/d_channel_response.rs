@@ -1,7 +1,7 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 use crate::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 
@@ -28,8 +28,7 @@ pub struct DChannelResponse {
 #[allow(unreachable_code)] // TODO FIXME review, finalize and remove this
 impl DChannelResponse {
     /// Parse from BitBuffer
-pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
+    pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
         let pdu_type = buffer.read_field(3, "pdu_type")?;
         expect_pdu_type!(pdu_type, MlePduTypeDl::DChannelResponse)?;
 
@@ -54,12 +53,12 @@ pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DChannelResponse { 
-            channel_response_type, 
-            reason_for_the_channel_request, 
-            channel_request_retry_delay, 
-            reserved1, 
-            reserved2
+        Ok(DChannelResponse {
+            channel_response_type,
+            reason_for_the_channel_request,
+            channel_request_retry_delay,
+            reserved1,
+            reserved2,
         })
     }
 
@@ -75,9 +74,11 @@ pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
         buffer.write_bits(self.channel_request_retry_delay as u64, 4);
 
         // Check if any optional field present and place o-bit
-        let obit = self.reserved1.is_some() || self.reserved2.is_some() ;
+        let obit = self.reserved1.is_some() || self.reserved2.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.reserved1, 8);

@@ -1,12 +1,11 @@
 use tetra_core::BitBuffer;
 
 /// Compute FCS checksum for a range of bits in a BitBuffer
-/// Offsets are relative to the bitbuffer window start. 
+/// Offsets are relative to the bitbuffer window start.
 pub fn compute_fcs(bitbuf: &BitBuffer, start: usize, end: usize) -> u32 {
-    
     assert!(start <= end);
     assert!(end <= bitbuf.get_len());
-    
+
     let mut crc: u32 = 0xFFFFFFFF;
     let len = end - start;
     if len < 32 {
@@ -31,7 +30,10 @@ pub fn compute_fcs(bitbuf: &BitBuffer, start: usize, end: usize) -> u32 {
 /// Computes over bitbuffer range [pos, end-32]. Checks with FCS at [end - 32, end]
 pub fn check_fcs(bitbuf: &BitBuffer) -> bool {
     if bitbuf.get_len_remaining() < 32 {
-        tracing::warn!("check_fcs: Not enough bits for FCS, length remaining: {}", bitbuf.get_len_remaining());
+        tracing::warn!(
+            "check_fcs: Not enough bits for FCS, length remaining: {}",
+            bitbuf.get_len_remaining()
+        );
         return false;
     }
     let fcs_computed = compute_fcs(bitbuf, bitbuf.get_pos(), bitbuf.get_len() - 32);
@@ -50,8 +52,8 @@ mod tests {
         let testvec = "010100100111101011010111110000100110000110001011000011000000000000000011000100000001001100110011000000110010001011000011001000110000001100100011000100110001001100010011000100110101001100100011000000110010001100000011000000110001011001111010000010101011000110101";
         let mut bitbuf = BitBuffer::from_bitstr(testvec);
         bitbuf.seek(5);
-        let fcs = compute_fcs(&bitbuf, 5, 5+224);
-        let extracted_fcs = bitbuf.peek_bits_startoffset(5+224, 32).unwrap() as u32;
+        let fcs = compute_fcs(&bitbuf, 5, 5 + 224);
+        let extracted_fcs = bitbuf.peek_bits_startoffset(5 + 224, 32).unwrap() as u32;
         assert_eq!(fcs, extracted_fcs);
     }
 

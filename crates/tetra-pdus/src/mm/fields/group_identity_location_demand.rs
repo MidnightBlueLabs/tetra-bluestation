@@ -1,21 +1,18 @@
 use core::fmt;
 
 use tetra_core::expect_value;
+use tetra_core::typed_pdu_fields::{delimiters, typed};
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::{typed, delimiters};
 
 use crate::mm::enums::type34_elem_id_ul::MmType34ElemIdUl;
 use crate::mm::fields::group_identity_uplink::GroupIdentityUplink;
 
-
-
-
 /// Representation of the Group identity location demand PDU (Clause 16.10.24).
 /// The group identity location demand information element shall be a collection of sub elements.
-/// Response expected: 
-/// Response to: 
+/// Response expected:
+/// Response to:
 
-#[derive(Debug)] 
+#[derive(Debug)]
 pub struct GroupIdentityLocationDemand {
     /// Type1, 1 bits, reserved
     // pub reserved: bool,
@@ -29,7 +26,6 @@ pub struct GroupIdentityLocationDemand {
 impl GroupIdentityLocationDemand {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         let reserved = buffer.read_field(1, "reserved")?;
         expect_value!(reserved, 0)?;
 
@@ -40,7 +36,12 @@ impl GroupIdentityLocationDemand {
         let mut obit = delimiters::read_obit(buffer)?;
 
         // Type4
-        let group_identity_uplink = typed::parse_type4_struct(obit, buffer, MmType34ElemIdUl::GroupIdentityUplink, GroupIdentityUplink::from_bitbuf)?;
+        let group_identity_uplink = typed::parse_type4_struct(
+            obit,
+            buffer,
+            MmType34ElemIdUl::GroupIdentityUplink,
+            GroupIdentityUplink::from_bitbuf,
+        )?;
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -58,30 +59,38 @@ impl GroupIdentityLocationDemand {
     pub fn to_bitbuf(&self, buffer: &mut BitBuffer) -> Result<(), PduParseErr> {
         // Type1
         buffer.write_bits(0, 1);
-        
+
         // Type1
         buffer.write_bits(self.group_identity_attach_detach_mode as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.group_identity_uplink.is_some() ;
+        let obit = self.group_identity_uplink.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type4
-        typed::write_type4_struct(obit, buffer, &self.group_identity_uplink, MmType34ElemIdUl::GroupIdentityUplink, GroupIdentityUplink::to_bitbuf)?;
-        
+        typed::write_type4_struct(
+            obit,
+            buffer,
+            &self.group_identity_uplink,
+            MmType34ElemIdUl::GroupIdentityUplink,
+            GroupIdentityUplink::to_bitbuf,
+        )?;
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
     }
 }
 
-
 impl fmt::Display for GroupIdentityLocationDemand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "GroupIdentityLocationDemand {{ group_identity_attach_detach_mode: {:?} group_identity_uplink: {:?} }}",
-            self.group_identity_attach_detach_mode,
-            self.group_identity_uplink,
+        write!(
+            f,
+            "GroupIdentityLocationDemand {{ group_identity_attach_detach_mode: {:?} group_identity_uplink: {:?} }}",
+            self.group_identity_attach_detach_mode, self.group_identity_uplink,
         )
     }
 }

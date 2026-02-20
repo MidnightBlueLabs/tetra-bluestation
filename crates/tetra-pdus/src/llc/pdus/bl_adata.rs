@@ -4,7 +4,6 @@ use tetra_core::BitBuffer;
 use tetra_core::pdu_parse_error::*;
 use tetra_core::{expect_value, let_field};
 
-
 /// Clause 21.2.2.2 BL-ADATA
 #[derive(Debug, Clone)]
 pub struct BlAdata {
@@ -18,7 +17,6 @@ pub struct BlAdata {
 
 impl BlAdata {
     pub fn from_bitbuf(buf: &mut BitBuffer) -> Result<Self, PduParseErr> {
-        
         // Parse 4-bit type, perform sanity checks
         let_field!(buf, llc_link_type, 1);
         expect_value!(llc_link_type, 0)?;
@@ -30,7 +28,7 @@ impl BlAdata {
         let_field!(buf, nr, 1);
         let_field!(buf, ns, 1);
 
-        Ok(BlAdata{
+        Ok(BlAdata {
             has_fcs: has_fcs != 0,
             nr: nr as u8,
             ns: ns as u8,

@@ -9,20 +9,20 @@ pub struct EventLabelMapping {
 
 pub struct EventLabelStore {
     labels: std::collections::HashMap<EventLabel, EventLabelMapping>,
-    next_label: EventLabel
+    next_label: EventLabel,
 }
 
 impl EventLabelStore {
     pub fn new() -> Self {
         Self {
             labels: std::collections::HashMap::new(),
-            next_label: 1
+            next_label: 1,
         }
     }
 
-    /// Get the next free event label. Event labels are allocated linearly, and we assume the next one to be 
+    /// Get the next free event label. Event labels are allocated linearly, and we assume the next one to be
     /// free. Upon rollover, we assume old labels to have been dropped by now. If not, we'll crash when inserting
-    /// a label into the labels hashmap. 
+    /// a label into the labels hashmap.
     pub fn get_free_label(&mut self) -> EventLabel {
         let ret = self.next_label;
         self.next_label = (self.next_label + 1) % 0x1FF;
@@ -32,7 +32,6 @@ impl EventLabelStore {
     /// Create an event label for a TetraAddress. There should not yet exist a label for this address, or we
     /// crash. Returns the generated event label.
     fn create_label_for_addr(&mut self, addr: TetraAddress) -> EventLabel {
-
         assert!(self.get_label_by_ssi(addr.ssi).is_none(), "an event label for SSI already exists");
 
         let label = self.get_free_label();
@@ -42,15 +41,18 @@ impl EventLabelStore {
         label
     }
 
-    /// Retrieve an address by its label. The returned address may be encrypted if 
+    /// Retrieve an address by its label. The returned address may be encrypted if
     /// the unencrypted variant was not known at the time of label creation
     pub fn get_addr_by_label(&self, label: EventLabel) -> Option<TetraAddress> {
         self.labels.get(&label).map(|event_label| event_label.addr)
     }
 
-    /// Find if a label is associated with some SSI. 
+    /// Find if a label is associated with some SSI.
     pub fn get_label_by_ssi(&self, ssi: u32) -> Option<EventLabel> {
-        self.labels.values().find(|event_label| event_label.addr.ssi == ssi).map(|event_label| event_label.label)        
+        self.labels
+            .values()
+            .find(|event_label| event_label.addr.ssi == ssi)
+            .map(|event_label| event_label.label)
     }
 
     // pub fn remove_label(&mut self, label: EventLabel) -> Option<EventLabel> {

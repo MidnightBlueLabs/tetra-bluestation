@@ -39,7 +39,9 @@ impl CommunicationType {
 }
 
 impl From<CommunicationType> for u64 {
-    fn from(e: CommunicationType) -> Self { e.into_raw() }
+    fn from(e: CommunicationType) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for CommunicationType {

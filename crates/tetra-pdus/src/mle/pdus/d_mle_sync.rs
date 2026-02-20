@@ -2,7 +2,6 @@ use core::fmt;
 
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
-
 /// Clause 18.4.2.1
 #[derive(Debug, Clone)]
 pub struct DMleSync {
@@ -20,7 +19,6 @@ pub struct DMleSync {
 
 impl DMleSync {
     pub fn from_bitbuf(buf: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let mcc = buf.read_field(10, "mcc")? as u16;
         let mnc = buf.read_field(14, "mnc")? as u16;
         let neighbor_cell_broadcast = buf.read_field(2, "neighbor_cell_broadcast")? as u8;
@@ -32,7 +30,7 @@ impl DMleSync {
             mnc,
             neighbor_cell_broadcast,
             cell_load_ca,
-            late_entry_supported
+            late_entry_supported,
         })
     }
 
@@ -43,7 +41,6 @@ impl DMleSync {
         buf.write_bits(self.cell_load_ca as u64, 2);
         buf.write_bits(self.late_entry_supported as u8 as u64, 1);
     }
-
 }
 
 impl fmt::Display for DMleSync {
@@ -51,11 +48,7 @@ impl fmt::Display for DMleSync {
         write!(
             f,
             "DMleSync {{ mcc: {} mnc: {} neighbor_cell_broadcast: {} cell_load_ca: {} late_entry_supported: {} }}",
-            self.mcc,
-            self.mnc,
-            self.neighbor_cell_broadcast,
-            self.cell_load_ca,
-            self.late_entry_supported,
+            self.mcc, self.mnc, self.neighbor_cell_broadcast, self.cell_load_ca, self.late_entry_supported,
         )
     }
 }

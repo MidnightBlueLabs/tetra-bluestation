@@ -167,28 +167,52 @@ impl StatusUplink {
 }
 
 impl From<StatusUplink> for u64 {
-    fn from(e: StatusUplink) -> Self { e.into_raw() }
+    fn from(e: StatusUplink) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for StatusUplink {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            StatusUplink::ChangeOfEnergySavingModeRequest => write!(f, "ChangeOfEnergySavingModeRequest"),
-            StatusUplink::ChangeOfEnergySavingModeResponse => write!(f, "ChangeOfEnergySavingModeResponse"),
+            StatusUplink::ChangeOfEnergySavingModeRequest => {
+                write!(f, "ChangeOfEnergySavingModeRequest")
+            }
+            StatusUplink::ChangeOfEnergySavingModeResponse => {
+                write!(f, "ChangeOfEnergySavingModeResponse")
+            }
             StatusUplink::DualWatchModeRequest => write!(f, "DualWatchModeRequest"),
-            StatusUplink::TerminatingDualWatchModeRequest => write!(f, "TerminatingDualWatchModeRequest"),
-            StatusUplink::ChangeOfDualWatchModeResponse => write!(f, "ChangeOfDualWatchModeResponse"),
+            StatusUplink::TerminatingDualWatchModeRequest => {
+                write!(f, "TerminatingDualWatchModeRequest")
+            }
+            StatusUplink::ChangeOfDualWatchModeResponse => {
+                write!(f, "ChangeOfDualWatchModeResponse")
+            }
             StatusUplink::StartOfDirectModeOperation => write!(f, "StartOfDirectModeOperation"),
             StatusUplink::MsFrequencyBandsInformation => write!(f, "MsFrequencyBandsInformation"),
-            StatusUplink::RequestToStartDmGatewayOperation => write!(f, "RequestToStartDmGatewayOperation"),
-            StatusUplink::RequestToContinuedmGatewayOperation => write!(f, "RequestToContinuedmGatewayOperation"),
-            StatusUplink::RequestToStopDmGatewayOperation => write!(f, "RequestToStopDmGatewayOperation"),
+            StatusUplink::RequestToStartDmGatewayOperation => {
+                write!(f, "RequestToStartDmGatewayOperation")
+            }
+            StatusUplink::RequestToContinuedmGatewayOperation => {
+                write!(f, "RequestToContinuedmGatewayOperation")
+            }
+            StatusUplink::RequestToStopDmGatewayOperation => {
+                write!(f, "RequestToStopDmGatewayOperation")
+            }
             StatusUplink::RequestToAddDmMsAddresses => write!(f, "RequestToAddDmMsAddresses"),
             StatusUplink::RequestToRemoveDmMsAddresses => write!(f, "RequestToRemoveDmMsAddresses"),
-            StatusUplink::RequestToReplaceDmMsAddresses => write!(f, "RequestToReplaceDmMsAddresses"),
-            StatusUplink::AcceptanceToRemovalOfDmMsAddresses => write!(f, "AcceptanceToRemovalOfDmMsAddresses"),
-            StatusUplink::AcceptanceToChangeRegistrationLabel => write!(f, "AcceptanceToChangeRegistrationLabel"),
-            StatusUplink::AcceptanceToStopDmGatewayOperation => write!(f, "AcceptanceToStopDmGatewayOperation"),
+            StatusUplink::RequestToReplaceDmMsAddresses => {
+                write!(f, "RequestToReplaceDmMsAddresses")
+            }
+            StatusUplink::AcceptanceToRemovalOfDmMsAddresses => {
+                write!(f, "AcceptanceToRemovalOfDmMsAddresses")
+            }
+            StatusUplink::AcceptanceToChangeRegistrationLabel => {
+                write!(f, "AcceptanceToChangeRegistrationLabel")
+            }
+            StatusUplink::AcceptanceToStopDmGatewayOperation => {
+                write!(f, "AcceptanceToStopDmGatewayOperation")
+            }
             StatusUplink::NetworkOrUserSpecific32 => write!(f, "NetworkOrUserSpecific32"),
             StatusUplink::NetworkOrUserSpecific33 => write!(f, "NetworkOrUserSpecific33"),
             StatusUplink::NetworkOrUserSpecific34 => write!(f, "NetworkOrUserSpecific34"),

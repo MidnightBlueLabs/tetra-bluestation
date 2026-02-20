@@ -1,13 +1,12 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use crate::mm::enums::type34_elem_id_dl::MmType34ElemIdDl;
 use crate::mm::fields::group_identity_downlink::GroupIdentityDownlink;
-
 
 /// Representation of the D-ATTACH/DETACH GROUP IDENTITY ACKNOWLEDGEMENT PDU (Clause 16.9.2.2).
 /// The infrastructure sends this message to the MS to acknowledge MS-initiated attachment/detachment of group identities.
@@ -26,17 +25,16 @@ pub struct DAttachDetachGroupIdentityAcknowledgement {
     /// Type4, See note,
     pub group_identity_downlink: Option<Vec<GroupIdentityDownlink>>,
     /// Type4, See ETSI EN 300 392-7 [8] and note,
-    pub group_identity_security_related_information: Option<Type4FieldGeneric>
+    pub group_identity_security_related_information: Option<Type4FieldGeneric>,
 }
 
 #[allow(unreachable_code)] // TODO FIXME review, finalize and remove this
 impl DAttachDetachGroupIdentityAcknowledgement {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement)?;
-        
+
         // Type1
         let group_identity_accept_reject = buffer.read_field(1, "group_identity_accept_reject")? as u8;
         // Type1
@@ -49,10 +47,16 @@ impl DAttachDetachGroupIdentityAcknowledgement {
         let proprietary = typed::parse_type3_generic(obit, buffer, MmType34ElemIdDl::Proprietary)?;
 
         // Type4
-        let group_identity_downlink = typed::parse_type4_struct(obit, buffer, MmType34ElemIdDl::GroupIdentityDownlink, GroupIdentityDownlink::from_bitbuf)?;
-        
+        let group_identity_downlink = typed::parse_type4_struct(
+            obit,
+            buffer,
+            MmType34ElemIdDl::GroupIdentityDownlink,
+            GroupIdentityDownlink::from_bitbuf,
+        )?;
+
         // Type4
-        let group_identity_security_related_information = typed::parse_type4_generic(obit, buffer, MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation)?;
+        let group_identity_security_related_information =
+            typed::parse_type4_generic(obit, buffer, MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation)?;
 
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
@@ -60,12 +64,12 @@ impl DAttachDetachGroupIdentityAcknowledgement {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DAttachDetachGroupIdentityAcknowledgement { 
-            group_identity_accept_reject, 
-            reserved, 
-            proprietary, 
-            group_identity_downlink, 
-            group_identity_security_related_information
+        Ok(DAttachDetachGroupIdentityAcknowledgement {
+            group_identity_accept_reject,
+            reserved,
+            proprietary,
+            group_identity_downlink,
+            group_identity_security_related_information,
         })
     }
 
@@ -79,19 +83,34 @@ impl DAttachDetachGroupIdentityAcknowledgement {
         buffer.write_bits(self.reserved as u64, 1);
 
         // Check if any optional field present and place o-bit
-        let obit = self.proprietary.is_some() || self.group_identity_downlink.is_some() || self.group_identity_security_related_information.is_some() ;
+        let obit = self.proprietary.is_some()
+            || self.group_identity_downlink.is_some()
+            || self.group_identity_security_related_information.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, MmType34ElemIdDl::Proprietary)?;
 
         // Type4
-        typed::write_type4_struct(obit, buffer, &self.group_identity_downlink, MmType34ElemIdDl::GroupIdentityDownlink, GroupIdentityDownlink::to_bitbuf)?;
+        typed::write_type4_struct(
+            obit,
+            buffer,
+            &self.group_identity_downlink,
+            MmType34ElemIdDl::GroupIdentityDownlink,
+            GroupIdentityDownlink::to_bitbuf,
+        )?;
 
         // Type4
-        typed::write_type4_todo(obit, buffer, &self.group_identity_security_related_information, MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation)?;
-        
+        typed::write_type4_todo(
+            obit,
+            buffer,
+            &self.group_identity_security_related_information,
+            MmType34ElemIdDl::GroupIdentitySecurityRelatedInformation,
+        )?;
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -100,7 +119,9 @@ impl DAttachDetachGroupIdentityAcknowledgement {
 
 impl fmt::Display for DAttachDetachGroupIdentityAcknowledgement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DAttachDetachGroupIdentityAcknowledgement {{ group_identity_accept_reject: {:?} reserved: {:?} proprietary: {:?} group_identity_downlink: {:?} group_identity_security_related_information: {:?} }}",
+        write!(
+            f,
+            "DAttachDetachGroupIdentityAcknowledgement {{ group_identity_accept_reject: {:?} reserved: {:?} proprietary: {:?} group_identity_downlink: {:?} group_identity_security_related_information: {:?} }}",
             self.group_identity_accept_reject,
             self.reserved,
             self.proprietary,
@@ -110,8 +131,6 @@ impl fmt::Display for DAttachDetachGroupIdentityAcknowledgement {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use tetra_core::debug;
@@ -120,11 +139,10 @@ mod tests {
 
     #[test]
     fn test_d_attach_detach_group_identity_ack() {
-
         // 10110011011100000100110000001011100000000110101000110011100000
         // |--|         identifier
         //     |        accept/reject
-        //      |       reserved 
+        //      |       reserved
         //       ||                                                         obit, mbit
         //         |--|                                                     identifier: 0x7 GroupIdentityDownlink
         //             |---------|                                          len: 38
@@ -138,7 +156,7 @@ mod tests {
         //           |-|    class of usage: 4
         //              ||  type identifier
         //                |----------------------| gssi: 0x000000
-        
+
         // Vec from lab
         debug::setup_logging_verbose();
         let test_vec = "10110011011100000100110000001011100000000110101000110011100000";
@@ -147,7 +165,7 @@ mod tests {
 
         tracing::info!("Parsed: {:?}", pdu);
         tracing::info!("Buf at end: {}", buf_in.dump_bin());
-        
+
         assert!(buf_in.get_len_remaining() == 0, "Buffer not fully consumed");
 
         let mut buf_out = BitBuffer::new_autoexpand(32);

@@ -47,7 +47,9 @@ impl MlePduTypeDl {
 }
 
 impl From<MlePduTypeDl> for u64 {
-    fn from(e: MlePduTypeDl) -> Self { e.into_raw() }
+    fn from(e: MlePduTypeDl) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MlePduTypeDl {

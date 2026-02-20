@@ -1,8 +1,8 @@
 use core::fmt;
 
-use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
-use tetra_core::typed_pdu_fields::*;
 use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
+use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
 /// Representation of the U-SDS-DATA PDU (Clause 14.7.2.8).
 /// This PDU shall be for sending user defined SDS data.
@@ -48,7 +48,6 @@ pub struct USdsData {
 impl USdsData {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(5, "pdu_type")?;
         expect_pdu_type!(pdu_type, CmcePduTypeUl::USdsData)?;
 
@@ -57,70 +56,86 @@ impl USdsData {
         // Type1
         let called_party_type_identifier = buffer.read_field(2, "called_party_type_identifier")? as u8;
         // Conditional
-        let called_party_short_number_address = if called_party_type_identifier == 0 { 
-            Some(buffer.read_field(8, "called_party_short_number_address")?) 
-        } else { None };
+        let called_party_short_number_address = if called_party_type_identifier == 0 {
+            Some(buffer.read_field(8, "called_party_short_number_address")?)
+        } else {
+            None
+        };
         // Conditional
-        let called_party_ssi = if called_party_type_identifier == 1 || called_party_type_identifier == 2 { 
-            Some(buffer.read_field(24, "called_party_ssi")?) 
-        } else { None };
+        let called_party_ssi = if called_party_type_identifier == 1 || called_party_type_identifier == 2 {
+            Some(buffer.read_field(24, "called_party_ssi")?)
+        } else {
+            None
+        };
         // Conditional
-        let called_party_extension = if called_party_type_identifier == 2 { 
-            Some(buffer.read_field(24, "called_party_extension")?) 
-        } else { None };
+        let called_party_extension = if called_party_type_identifier == 2 {
+            Some(buffer.read_field(24, "called_party_extension")?)
+        } else {
+            None
+        };
         // Type1
         let short_data_type_identifier = buffer.read_field(2, "short_data_type_identifier")? as u8;
         // Conditional
-        let user_defined_data_1 = if short_data_type_identifier == 0 { 
-            Some(buffer.read_field(16, "user_defined_data_1")?) 
-        } else { None };
+        let user_defined_data_1 = if short_data_type_identifier == 0 {
+            Some(buffer.read_field(16, "user_defined_data_1")?)
+        } else {
+            None
+        };
         // Conditional
-        let user_defined_data_2 = if short_data_type_identifier == 1 { 
-            Some(buffer.read_field(32, "user_defined_data_2")?) 
-        } else { None };
+        let user_defined_data_2 = if short_data_type_identifier == 1 {
+            Some(buffer.read_field(32, "user_defined_data_2")?)
+        } else {
+            None
+        };
         // Conditional
-        let user_defined_data_3 = if short_data_type_identifier == 2 { 
-            Some(buffer.read_field(64, "user_defined_data_3")?) 
-        } else { None };
+        let user_defined_data_3 = if short_data_type_identifier == 2 {
+            Some(buffer.read_field(64, "user_defined_data_3")?)
+        } else {
+            None
+        };
         // Conditional
-        let length_indicator = if short_data_type_identifier == 3 { 
-            Some(buffer.read_field(11, "length_indicator")?) 
-        } else { None };
+        let length_indicator = if short_data_type_identifier == 3 {
+            Some(buffer.read_field(11, "length_indicator")?)
+        } else {
+            None
+        };
         // Conditional
-        let user_defined_data_4 = if short_data_type_identifier == 3 { 
+        let user_defined_data_4 = if short_data_type_identifier == 3 {
             unimplemented!();
-            Some(buffer.read_field(999, "user_defined_data_4")?) 
-        } else { None };
+            Some(buffer.read_field(999, "user_defined_data_4")?)
+        } else {
+            None
+        };
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
 
         // Type3
         let external_subscriber_number = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::ExtSubscriberNum)?;
-        
+
         // Type3
         let dm_ms_address = typed::parse_type3_generic(obit, buffer, CmceType3ElemId::DmMsAddr)?;
-        
+
         // Read trailing mbit (if not previously encountered)
         obit = if obit { buffer.read_field(1, "trailing_obit")? == 1 } else { obit };
         if obit {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(USdsData { 
-            area_selection, 
-            called_party_type_identifier, 
-            called_party_short_number_address, 
-            called_party_ssi, 
-            called_party_extension, 
-            short_data_type_identifier, 
-            user_defined_data_1, 
-            user_defined_data_2, 
-            user_defined_data_3, 
-            length_indicator, 
-            user_defined_data_4, 
-            external_subscriber_number, 
-            dm_ms_address 
+        Ok(USdsData {
+            area_selection,
+            called_party_type_identifier,
+            called_party_short_number_address,
+            called_party_ssi,
+            called_party_extension,
+            short_data_type_identifier,
+            user_defined_data_1,
+            user_defined_data_2,
+            user_defined_data_3,
+            length_indicator,
+            user_defined_data_4,
+            external_subscriber_number,
+            dm_ms_address,
         })
     }
 
@@ -169,9 +184,11 @@ impl USdsData {
         }
 
         // Check if any optional field present and place o-bit
-        let obit = self.external_subscriber_number.is_some() || self.dm_ms_address.is_some() ;
+        let obit = self.external_subscriber_number.is_some() || self.dm_ms_address.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.external_subscriber_number, CmceType3ElemId::ExtSubscriberNum)?;
@@ -187,7 +204,9 @@ impl USdsData {
 
 impl fmt::Display for USdsData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "USdsData {{ area_selection: {:?} called_party_type_identifier: {:?} called_party_short_number_address: {:?} called_party_ssi: {:?} called_party_extension: {:?} short_data_type_identifier: {:?} user_defined_data_1: {:?} user_defined_data_2: {:?} user_defined_data_3: {:?} length_indicator: {:?} user_defined_data_4: {:?} external_subscriber_number: {:?} dm_ms_address: {:?} }}",
+        write!(
+            f,
+            "USdsData {{ area_selection: {:?} called_party_type_identifier: {:?} called_party_short_number_address: {:?} called_party_ssi: {:?} called_party_extension: {:?} short_data_type_identifier: {:?} user_defined_data_1: {:?} user_defined_data_2: {:?} user_defined_data_3: {:?} length_indicator: {:?} user_defined_data_4: {:?} external_subscriber_number: {:?} dm_ms_address: {:?} }}",
             self.area_selection,
             self.called_party_type_identifier,
             self.called_party_short_number_address,

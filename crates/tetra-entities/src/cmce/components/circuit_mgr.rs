@@ -43,12 +43,7 @@ impl CircuitMgr {
             dltime: TdmaTime::default(),
             dl: [None, None, None, None],
             ul_only: [None, None, None, None],
-            tx_data: [
-                VecDeque::new(),
-                VecDeque::new(),
-                VecDeque::new(),
-                VecDeque::new(),
-            ],
+            tx_data: [VecDeque::new(), VecDeque::new(), VecDeque::new(), VecDeque::new()],
             next_call_identifier: 4,
             next_usage_number: 4,
         }
@@ -146,11 +141,7 @@ impl CircuitMgr {
         Err(CircuitErr::NoCircuitFree)
     }
 
-    pub fn allocate_circuit(
-        &mut self,
-        dir: Direction,
-        comm_type: CommunicationType,
-    ) -> Result<&CmceCircuit, CircuitErr> {
+    pub fn allocate_circuit(&mut self, dir: Direction, comm_type: CommunicationType) -> Result<&CmceCircuit, CircuitErr> {
         // Get timeslot, call_id and usage
         let ts = self.get_free_ts(dir)?;
         let call_id = self.get_next_call_id();
@@ -160,7 +151,7 @@ impl CircuitMgr {
         let circuit = CmceCircuit {
             ts_created: self.dltime,
             direction: dir,
-            ts: ts,
+            ts,
             call_id,
             usage,
             circuit_mode: CircuitModeType::TchS, // TODO: only speech supported for now
@@ -182,16 +173,14 @@ impl CircuitMgr {
         allocator: &mut TimeslotAllocator,
         owner: TimeslotOwner,
     ) -> Result<&CmceCircuit, CircuitErr> {
-        let ts = allocator
-            .allocate_any(owner)
-            .ok_or(CircuitErr::NoCircuitFree)?;
+        let ts = allocator.allocate_any(owner).ok_or(CircuitErr::NoCircuitFree)?;
         let call_id = self.get_next_call_id();
         let usage = self.get_next_usage_number();
 
         let circuit = CmceCircuit {
             ts_created: self.dltime,
             direction: dir,
-            ts: ts,
+            ts,
             call_id,
             usage,
             circuit_mode: CircuitModeType::TchS, // TODO: only speech supported for now
@@ -218,10 +207,7 @@ impl CircuitMgr {
             Direction::Dl | Direction::Both => {
                 self.tx_data[ts as usize - 1].clear();
                 if dir == Direction::Both && self.ul_only[ts as usize - 1].is_some() {
-                    tracing::warn!(
-                        "Closing Dl+Ul circuit on ts {} while Ul-only circuit exists",
-                        ts
-                    );
+                    tracing::warn!("Closing Dl+Ul circuit on ts {} while Ul-only circuit exists", ts);
                 }
                 let circuit = self.dl[ts as usize - 1].take();
                 circuit.ok_or(CircuitErr::CircuitNotActive)
@@ -237,11 +223,7 @@ impl CircuitMgr {
     /// Creates a new circuit on the given direction and timeslot
     /// This channel should be free, if not, warnings will be issued and existing circuit will be closed first
     /// Consumes the circuit but returns a reference
-    fn open_circuit(
-        &mut self,
-        dir: Direction,
-        circuit: CmceCircuit,
-    ) -> Result<&CmceCircuit, CircuitErr> {
+    fn open_circuit(&mut self, dir: Direction, circuit: CmceCircuit) -> Result<&CmceCircuit, CircuitErr> {
         // Sanity check, close circuit and issue warning if exists
         let ts = circuit.ts;
         let (dl_active, ul_active) = self.is_active(ts);
@@ -291,10 +273,7 @@ impl CircuitMgr {
     /// Closes any circuits that have expired.
     /// Safety timeout: 6 minutes (beyond the 5-minute call timeout T5m).
     /// Active calls are cleaned up earlier by CMCE hangtime/release logic.
-    fn close_expired_circuits(
-        &mut self,
-        mut tasks: Option<Vec<CircuitMgrCmd>>,
-    ) -> Option<Vec<CircuitMgrCmd>> {
+    fn close_expired_circuits(&mut self, mut tasks: Option<Vec<CircuitMgrCmd>>) -> Option<Vec<CircuitMgrCmd>> {
         const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4; // 6 minutes
 
         let mut to_close: Vec<_> = self
@@ -313,9 +292,7 @@ impl CircuitMgr {
         );
         for (dir, ts, call_id) in to_close {
             let circuit = self.close_circuit(dir, ts).unwrap(); // TODO FIXME not so sure about this one
-            tasks
-                .get_or_insert_with(Vec::new)
-                .push(CircuitMgrCmd::SendClose(call_id, circuit));
+            tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, circuit));
         }
         tasks
     }
@@ -335,19 +312,11 @@ impl CircuitMgr {
                     if circuit.ts_created.age(dltime) < 4 * 4 {
                         tasks
                             .get_or_insert_with(Vec::new)
-                            .push(CircuitMgrCmd::SendDSetup(
-                                circuit.call_id,
-                                circuit.usage,
-                                circuit.ts,
-                            ));
+                            .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
                     } else if (circuit.ts_created.age(dltime) - 4) % 3 == 2 {
                         tasks
                             .get_or_insert_with(Vec::new)
-                            .push(CircuitMgrCmd::SendDSetup(
-                                circuit.call_id,
-                                circuit.usage,
-                                circuit.ts,
-                            ));
+                            .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
                     }
                 }
             }

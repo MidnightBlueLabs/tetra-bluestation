@@ -2,9 +2,7 @@ use std::cmp::min;
 
 use tetra_core::BitBuffer;
 
-use tetra_pdus::umac::pdus::{
-    mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource,
-};
+use tetra_pdus::umac::pdus::{mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource};
 
 use crate::umac::subcomp::fillbits;
 
@@ -41,14 +39,8 @@ impl BsFragger {
     /// and more chunks are needed.
     fn get_resource_chunk(&mut self, mac_block: &mut BitBuffer) -> bool {
         // Some sanity checks
-        assert!(
-            self.sdu.get_pos() == 0,
-            "SDU must be at the start of the buffer"
-        );
-        assert!(
-            !self.mac_hdr_is_written,
-            "MAC header should not be written yet"
-        );
+        assert!(self.sdu.get_pos() == 0, "SDU must be at the start of the buffer");
+        assert!(!self.mac_hdr_is_written, "MAC header should not be written yet");
         assert!(
             !(self.resource.is_null_pdu() && self.sdu.get_len_remaining() > 0),
             "Null PDU cannot have SDU data"
@@ -84,12 +76,8 @@ impl BsFragger {
             tracing::debug!(
                 "-> {:?} sdu {}",
                 self.resource,
-                self.sdu.raw_dump_bin(
-                    false,
-                    false,
-                    self.sdu.get_pos(),
-                    self.sdu.get_pos() + sdu_len_bits
-                )
+                self.sdu
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_len_bits)
             );
 
             // Write MAC-RESOURCE header, followed by TM-SDU, to MAC block
@@ -109,12 +97,8 @@ impl BsFragger {
             tracing::debug!(
                 "-> {:?} sdu {} (partial fill bits)",
                 self.resource,
-                self.sdu.raw_dump_bin(
-                    false,
-                    false,
-                    self.sdu.get_pos(),
-                    self.sdu.get_pos() + sdu_len_bits
-                )
+                self.sdu
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_len_bits)
             );
 
             self.resource.to_bitbuf(mac_block);
@@ -143,12 +127,8 @@ impl BsFragger {
             tracing::debug!(
                 "-> {:?} sdu {}",
                 self.resource,
-                self.sdu.raw_dump_bin(
-                    false,
-                    false,
-                    self.sdu.get_pos(),
-                    self.sdu.get_pos() + sdu_bits
-                )
+                self.sdu
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_bits)
             );
 
             self.resource.to_bitbuf(mac_block);
@@ -167,10 +147,7 @@ impl BsFragger {
     /// TODO FIXME: support adding ChanAlloc element in MAC-END
     fn get_frag_or_end_chunk(&mut self, mac_block: &mut BitBuffer) -> bool {
         // Some sanity checks
-        assert!(
-            self.mac_hdr_is_written,
-            "MAC header should be previously written"
-        );
+        assert!(self.mac_hdr_is_written, "MAC header should be previously written");
         assert!(
             mac_block.get_len_written() % 8 == 0 || mac_block.get_len_remaining() == 0,
             "MAC block must be byte aligned at start of writing"
@@ -198,12 +175,8 @@ impl BsFragger {
             tracing::debug!(
                 "-> {:?} sdu {}",
                 pdu,
-                self.sdu.raw_dump_bin(
-                    false,
-                    false,
-                    self.sdu.get_pos(),
-                    self.sdu.get_pos() + sdu_bits
-                )
+                self.sdu
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_bits)
             );
 
             // Write MAC-END header followed by TM-SDU
@@ -235,12 +208,8 @@ impl BsFragger {
             tracing::debug!(
                 "-> {:?} sdu {}",
                 pdu,
-                self.sdu.raw_dump_bin(
-                    false,
-                    false,
-                    self.sdu.get_pos(),
-                    self.sdu.get_pos() + sdu_bits
-                )
+                self.sdu
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_bits)
             );
 
             pdu.to_bitbuf(mac_block);

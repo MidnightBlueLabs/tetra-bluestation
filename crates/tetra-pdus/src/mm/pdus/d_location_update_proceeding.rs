@@ -1,12 +1,11 @@
 use core::fmt;
 
 use tetra_core::expect_pdu_type;
-use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 use tetra_core::typed_pdu_fields::*;
+use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use crate::mm::enums::type34_elem_id_dl::MmType34ElemIdDl;
-
 
 /// Representation of the D-LOCATION UPDATE PROCEEDING PDU (Clause 16.9.2.10).
 /// The infrastructure sends this message to the MS on registration at accepted migration to assign a (V)ASSI.
@@ -27,10 +26,9 @@ pub struct DLocationUpdateProceeding {
 impl DLocationUpdateProceeding {
     /// Parse from BitBuffer
     pub fn from_bitbuf(buffer: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let pdu_type = buffer.read_field(4, "pdu_type")?;
         expect_pdu_type!(pdu_type, MmPduTypeDl::DLocationUpdateProceeding)?;
-        
+
         // Type1
         let ssi = buffer.read_field(24, "ssi")? as u32;
         // Type1
@@ -48,10 +46,10 @@ impl DLocationUpdateProceeding {
             return Err(PduParseErr::InvalidTrailingMbitValue);
         }
 
-        Ok(DLocationUpdateProceeding { 
-            ssi, 
-            address_extension, 
-            proprietary
+        Ok(DLocationUpdateProceeding {
+            ssi,
+            address_extension,
+            proprietary,
         })
     }
 
@@ -65,13 +63,15 @@ impl DLocationUpdateProceeding {
         buffer.write_bits(self.address_extension as u64, 24);
 
         // Check if any optional field present and place o-bit
-        let obit = self.proprietary.is_some() ;
+        let obit = self.proprietary.is_some();
         delimiters::write_obit(buffer, obit as u8);
-        if !obit { return Ok(()); }
+        if !obit {
+            return Ok(());
+        }
 
         // Type3
         typed::write_type3_generic(obit, buffer, &self.proprietary, MmType34ElemIdDl::Proprietary)?;
-        
+
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
@@ -80,10 +80,10 @@ impl DLocationUpdateProceeding {
 
 impl fmt::Display for DLocationUpdateProceeding {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DLocationUpdateProceeding {{ ssi: {:?} address_extension: {:?} proprietary: {:?} }}",
-            self.ssi,
-            self.address_extension,
-            self.proprietary,
+        write!(
+            f,
+            "DLocationUpdateProceeding {{ ssi: {:?} address_extension: {:?} proprietary: {:?} }}",
+            self.ssi, self.address_extension, self.proprietary,
         )
     }
 }

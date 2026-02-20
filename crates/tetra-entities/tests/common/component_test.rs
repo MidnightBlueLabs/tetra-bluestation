@@ -1,7 +1,4 @@
-use tetra_config::{
-    CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode,
-    StackState,
-};
+use tetra_config::{CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
 use tetra_core::TdmaTime;
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
@@ -27,10 +24,7 @@ use super::sink::Sink;
 /// Creates a default config for testing. It can still be modified as needed
 /// before passing it to the ComponentTest constructor
 pub fn default_test_config(stack_mode: StackMode) -> StackConfig {
-    let net_info = CfgNetInfo {
-        mcc: 204,
-        mnc: 1337,
-    };
+    let net_info = CfgNetInfo { mcc: 204, mnc: 1337 };
     let freq_info = FreqInfo::from_components(4, 1521, 0, false, 4, None).unwrap();
     let mut cell_info = CfgCellInfo::default();
     cell_info.colour_code = 1;
@@ -80,7 +74,7 @@ impl ComponentTest {
             config: shared_config,
             router: mr,
             sinks: vec![],
-            start_dl_time: start_dl_time,
+            start_dl_time,
         }
     }
 
@@ -116,8 +110,7 @@ impl ComponentTest {
                 TetraEntity::Umac => {
                     let mut umac = UmacBs::new(self.config.clone());
                     // Prepare channel scheduler for next tick_start
-                    umac.channel_scheduler
-                        .set_dl_time(self.start_dl_time.add_timeslots(-1));
+                    umac.channel_scheduler.set_dl_time(self.start_dl_time.add_timeslots(-1));
                     self.router.register_entity(Box::new(umac));
                 }
                 TetraEntity::Llc => {
@@ -180,11 +173,7 @@ impl ComponentTest {
     fn create_sinks(&mut self, sinks: Vec<TetraEntity>) {
         // Setup any sinks
         for sink in sinks.iter() {
-            assert!(
-                !self.sinks.contains(sink),
-                "Sink already exists: {:?}",
-                sink
-            );
+            assert!(!self.sinks.contains(sink), "Sink already exists: {:?}", sink);
             assert!(
                 self.router.get_entity(*sink).is_none(),
                 "Sink already registered as entity: {:?}",

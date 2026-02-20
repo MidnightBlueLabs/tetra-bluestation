@@ -180,9 +180,7 @@ const P_RATE2_3: &[u32] = &[0, 1, 2, 5];
 const P_RATE1_3: &[u32] = &[0, 1, 2, 3, 5, 6, 7];
 const P_RATE8_12: &[u32] = &[0, 1, 2, 4];
 const P_RATE8_18: &[u32] = &[0, 1, 2, 3, 4, 5, 7, 8, 10, 11];
-const P_RATE8_17: &[u32] = &[
-    0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23,
-];
+const P_RATE8_17: &[u32] = &[0, 1, 2, 3, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23];
 
 // Get puncturer parameters by enum type
 fn get_puncturer(pu: RcpcPunctMode) -> Puncturer {

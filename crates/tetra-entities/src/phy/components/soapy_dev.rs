@@ -13,10 +13,10 @@ use tetra_pdus::phy::traits::rxtx_dev::TxSlotBits;
 use crate::phy::components::soapy_dev;
 
 use super::demodulator;
-use super::modulator;
-use super::fcfb;
-use super::soapyio;
 use super::dsp_types::*;
+use super::fcfb;
+use super::modulator;
+use super::soapyio;
 
 pub struct SdrConfig<'a> {
     /// SoapySDR device arguments
@@ -43,7 +43,6 @@ pub struct RxTxDevSoapySdr {
     rx_dsp: Option<RxDsp>,
     tx_dsp: Option<TxDsp>,
 }
-
 
 type FftPlanner = rustfft::FftPlanner<RealSample>;
 
@@ -79,7 +78,6 @@ impl RxTxDevSoapySdr {
     // }
 
     pub fn new(cfg: &SharedConfig) -> Self {
-
         let mut fft_planner = rustfft::FftPlanner::new();
 
         // TODO FIXME we can remove the soapyio::mode enum and replace it by the globally used StackMode
@@ -91,8 +89,13 @@ impl RxTxDevSoapySdr {
 
         // TODO FIXME currently no MS and MON support in the below statement; need to fix
         let config_guard = cfg.config();
-        let soapy_cfg = config_guard.as_ref().phy_io.soapysdr.as_ref().expect("Soapysdr config must be set for Soapysdr PhyIo");
-        
+        let soapy_cfg = config_guard
+            .as_ref()
+            .phy_io
+            .soapysdr
+            .as_ref()
+            .expect("Soapysdr config must be set for Soapysdr PhyIo");
+
         let (dl_corrected, dl_err) = soapy_cfg.dl_freq_corrected();
         let (ul_corrected, ul_err) = soapy_cfg.ul_freq_corrected();
 
@@ -113,22 +116,23 @@ impl RxTxDevSoapySdr {
             ..Default::default()
         };
 
-        let mut sdr = soapyio::SoapyIo::new(
-            cfg, 
-            mode
-        ).unwrap();
+        let mut sdr = soapyio::SoapyIo::new(cfg, mode).unwrap();
 
         Self {
             rx_dsp: if sdr.rx_enabled() {
                 Some(RxDsp::new(&mut fft_planner, &mut sdr, &phy_config))
-            } else { None },
+            } else {
+                None
+            },
 
             tx_dsp: if sdr.tx_enabled() {
                 Some(TxDsp::new(&mut fft_planner, &mut sdr, &phy_config))
-            } else { None },
+            } else {
+                None
+            },
 
             sdr,
-        }        
+        }
     }
 
     /// Process a block of received signal.
@@ -149,10 +153,7 @@ impl RxTxDevSoapySdr {
     fn process_tx_block(&mut self, tx_slot: &[TxSlotBits]) -> Result<bool, RxTxDevError> {
         if let Some(tx_dsp) = &mut self.tx_dsp {
             if self.sdr.tx_possible() {
-                tx_dsp.process_block(&mut self.sdr,
-                    self.rx_dsp.as_ref().map(|rx_dsp| { rx_dsp.rx_block_count }),
-                    tx_slot,
-                )
+                tx_dsp.process_block(&mut self.sdr, self.rx_dsp.as_ref().map(|rx_dsp| rx_dsp.rx_block_count), tx_slot)
             } else {
                 Ok(false)
             }
@@ -166,14 +167,14 @@ impl RxTxDev for RxTxDevSoapySdr {
     fn rxtx_timeslot<'a>(
         &'a mut self,
         tx_slot: &[TxSlotBits],
-    // TODO multiple demodulators
+        // TODO multiple demodulators
     ) -> Result<Vec<Option<RxSlotBits<'a>>>, RxTxDevError> {
         // First generate as much TX signal as possible at the moment.
-        while self.process_tx_block(tx_slot)? { }
+        while self.process_tx_block(tx_slot)? {}
 
         while self.process_rx_block()? {
             // Continue producing TX signal if possible.
-            while self.process_tx_block(tx_slot)? { }
+            while self.process_tx_block(tx_slot)? {}
         }
 
         if let Some(rx_dsp) = &mut self.rx_dsp {
@@ -198,11 +199,7 @@ struct RxDsp {
 }
 
 impl RxDsp {
-    fn new(
-        fft_planner: &mut FftPlanner,
-        sdr: &mut soapyio::SoapyIo,
-        phy_config: &PhyConfig,
-    ) -> Self {
+    fn new(fft_planner: &mut FftPlanner, sdr: &mut soapyio::SoapyIo, phy_config: &PhyConfig) -> Self {
         let sdr_sample_rate = sdr.rx_sample_rate();
         let rx_fcfb_params = fcfb::AnalysisInputParameters {
             // Use a bin spacing of 500 Hz.
@@ -224,31 +221,22 @@ impl RxDsp {
             rx_fcfb: fcfb,
             rx_block_count: 0,
 
-            monitors: phy_config.monitor_frequencies.iter().map(|(dl_freq, ul_freq)| {
-                MonitorDlUlPair {
-                    dl: DemodulatorChannel::new(
-                        fft_planner,
-                        rx_fcfb_params,
-                        *dl_freq,
-                        demodulator::Mode::DlUnsynchronized
-                    ),
-                    ul: ul_freq.as_ref().map(|ul_freq| DemodulatorChannel::new(
-                        fft_planner,
-                        rx_fcfb_params,
-                        *ul_freq,
-                        demodulator::Mode::Idle,
-                    ))
-                }
-            }).collect(),
+            monitors: phy_config
+                .monitor_frequencies
+                .iter()
+                .map(|(dl_freq, ul_freq)| MonitorDlUlPair {
+                    dl: DemodulatorChannel::new(fft_planner, rx_fcfb_params, *dl_freq, demodulator::Mode::DlUnsynchronized),
+                    ul: ul_freq
+                        .as_ref()
+                        .map(|ul_freq| DemodulatorChannel::new(fft_planner, rx_fcfb_params, *ul_freq, demodulator::Mode::Idle)),
+                })
+                .collect(),
 
-            ul_demodulators: phy_config.bs_ul_frequencies.iter().map(|ul_freq| {
-                DemodulatorChannel::new(
-                    fft_planner,
-                    rx_fcfb_params,
-                    *ul_freq,
-                    demodulator::Mode::Ul
-                )
-            }).collect(),
+            ul_demodulators: phy_config
+                .bs_ul_frequencies
+                .iter()
+                .map(|ul_freq| DemodulatorChannel::new(fft_planner, rx_fcfb_params, *ul_freq, demodulator::Mode::Ul))
+                .collect(),
         }
     }
 
@@ -280,7 +268,8 @@ impl RxDsp {
         self.rx_block_count += 1;
 
         // Copy overlapping part from previous block to the beginning
-        self.rx_buffer.copy_within(self.rx_block_size.new .. self.rx_block_size.new + self.rx_block_size.overlap, 0);
+        self.rx_buffer
+            .copy_within(self.rx_block_size.new..self.rx_block_size.new + self.rx_block_size.overlap, 0);
         self.rx_buffer_i = self.rx_block_size.overlap;
 
         loop {
@@ -304,8 +293,12 @@ impl RxDsp {
 
                 let mut samples_to_skip = next_block_beginning - next_count;
 
-                tracing::warn!("Lost {} samples, skipping {} more samples and {} processing blocks",
-                    samples_lost, samples_to_skip, next_possible_block - self.rx_block_count);
+                tracing::warn!(
+                    "Lost {} samples, skipping {} more samples and {} processing blocks",
+                    samples_lost,
+                    samples_to_skip,
+                    next_possible_block - self.rx_block_count
+                );
 
                 self.rx_block_count = next_possible_block;
                 self.rx_buffer_i = 0;
@@ -323,7 +316,7 @@ impl RxDsp {
                     //     // incorrect if time is not available but does not really matter
                     //     sdr.rx_current_count().unwrap_or(0) - (result.count + result.len as SampleCount - 1),
                     // );
-                    return Ok(())
+                    return Ok(());
                 }
             }
         }
@@ -350,7 +343,6 @@ impl RxDsp {
     }
 }
 
-
 struct TxDsp {
     fcfb: fcfb::SynthesisOutputProcessor,
     block_count: fcfb::BlockCount,
@@ -359,11 +351,7 @@ struct TxDsp {
 }
 
 impl TxDsp {
-    fn new(
-        fft_planner: &mut FftPlanner,
-        sdr: &mut soapyio::SoapyIo,
-        phy_config: &PhyConfig,
-    ) -> Self {
+    fn new(fft_planner: &mut FftPlanner, sdr: &mut soapyio::SoapyIo, phy_config: &PhyConfig) -> Self {
         let sdr_sample_rate = sdr.tx_sample_rate();
         let fcfb_params = fcfb::SynthesisOutputParameters {
             ifft_size: (sdr_sample_rate / 500.0).round() as usize,
@@ -376,12 +364,7 @@ impl TxDsp {
 
         let mut modulators = Vec::<ModulatorChannel>::new();
         for dl_freq in phy_config.bs_dl_frequencies {
-            modulators.push(ModulatorChannel::new(
-                fft_planner,
-                fcfb_params,
-                *dl_freq,
-                modulator::Mode::Dl,
-            ));
+            modulators.push(ModulatorChannel::new(fft_planner, fcfb_params, *dl_freq, modulator::Mode::Dl));
         }
 
         Self {
@@ -407,7 +390,11 @@ impl TxDsp {
         let dmin = 2; // how many blocks in future minimum
         if d < dmin {
             let new_block_count = current_block + dmin;
-            tracing::warn!("Too late to produce TX block {}, skipping {} TX blocks", self.block_count, new_block_count - self.block_count);
+            tracing::warn!(
+                "Too late to produce TX block {}, skipping {} TX blocks",
+                self.block_count,
+                new_block_count - self.block_count
+            );
             self.block_count = new_block_count;
         }
         // Limit how far into future TX blocks are generated
@@ -426,7 +413,7 @@ impl TxDsp {
         if let Some(latest_rx_block) = latest_rx_block {
             let d_rx = self.block_count - latest_rx_block;
             if d_rx > dmax {
-                return Ok(false)
+                return Ok(false);
             }
         }
 
@@ -439,7 +426,7 @@ impl TxDsp {
         let tx_signal = self.fcfb.process();
 
         // TODO: compensate for delay of SDR
-        let sdr_sample_count =  tx_signal.len() as SampleCount * self.block_count;
+        let sdr_sample_count = tx_signal.len() as SampleCount * self.block_count;
 
         // Increment block count before calling sdr.transmit with ?,
         // so we do not end up producing the same block again even if transmit fails.
@@ -455,8 +442,6 @@ impl TxDsp {
         Ok(true)
     }
 }
-
-
 
 struct DemodulatorChannel {
     downconverter: fcfb::AnalysisOutputProcessor,
@@ -476,7 +461,7 @@ impl DemodulatorChannel {
                 analysis_in_params,
                 demodulator::SAMPLE_RATE,
                 frequency,
-                Some(25000.0)
+                Some(25000.0),
             ),
             demodulator: demodulator::Demodulator::new(mode),
         }
@@ -488,7 +473,10 @@ impl DemodulatorChannel {
         let samples = self.downconverter.process(fcfb_result);
         for (i, sample) in samples.iter().enumerate() {
             // TODO: include delay of FCFB in sample count
-            self.demodulator.sample(*sample, block_count as SampleCount * samples.len() as SampleCount + i as SampleCount);
+            self.demodulator.sample(
+                *sample,
+                block_count as SampleCount * samples.len() as SampleCount + i as SampleCount,
+            );
         }
         !self.demodulator.demodulated_slot_available()
     }
@@ -515,7 +503,7 @@ impl ModulatorChannel {
             synthesis_out_params,
             modulator::SAMPLE_RATE,
             frequency,
-            Some(25000.0)
+            Some(25000.0),
         );
         Self {
             buffer: upconverter.make_input_buffer(),
@@ -525,18 +513,13 @@ impl ModulatorChannel {
         }
     }
 
-    fn process(
-        &mut self,
-        fcfb: &mut fcfb::SynthesisOutputProcessor,
-        block_count: fcfb::BlockCount,
-        tx_slot: &TxSlotBits,
-    ) -> bool {
+    fn process(&mut self, fcfb: &mut fcfb::SynthesisOutputProcessor, block_count: fcfb::BlockCount, tx_slot: &TxSlotBits) -> bool {
         let buf = self.buffer.buffer_in();
         while self.buffer_i < buf.len() {
             // TODO: include delay of FCFB in sample count
             match self.modulator.sample(
                 block_count as SampleCount * buf.len() as SampleCount + self.buffer_i as SampleCount,
-                tx_slot
+                tx_slot,
             ) {
                 Ok(sample) => {
                     buf[self.buffer_i] = sample;

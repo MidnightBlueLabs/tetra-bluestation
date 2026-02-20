@@ -2,13 +2,11 @@ use std::collections::VecDeque;
 
 use tetra_core::unimplemented_log;
 
-
 /// States for a downlink call. Can originate from:
 /// - A local MS that opens a call using U-SETUP
 /// - A remote, networked call incoming from the call router
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DlCallState {
-
     /// Call is created but setup messages have not yet been sent
     Init,
 
@@ -22,7 +20,6 @@ pub enum DlCallState {
     /// Call has been disconnected or released
     Disconnected,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DlCallPdu {
@@ -58,20 +55,20 @@ pub enum DlCallPdu {
     ///   This PDU shall be the order to the called MS to through-connect.
     DConnectAck,
 
-    /// TODO UNCLEAR CALLER / CALLEE 
+    /// TODO UNCLEAR CALLER / CALLEE
     /// Response to:        -
     /// Response expected:  U-RELEASE
     ///   This PDU shall be the disconnect request message sent from the infrastructure to
     ///   the MS.
     DDisconnect,
 
-    /// TODO UNCLEAR CALLER / CALLEE 
+    /// TODO UNCLEAR CALLER / CALLEE
     /// Response to:        -
     /// Response expected:  -
     ///   This PDU shall be the general information message to the MS.
     DInfo,
 
-    /// TODO UNCLEAR CALLER / CALLEE 
+    /// TODO UNCLEAR CALLER / CALLEE
     /// Response to:        - / U-DISCONNECT
     /// Response expected:  -
     ///   This PDU shall be a message from the infrastructure to the MS to inform that
@@ -113,14 +110,13 @@ pub enum DlCallPdu {
     ///   This PDU shall be a message from the SwMI indicating that a permission to transmit
     //    has been withdrawn.
     DTxInterrupt,
-    
+
     /// DLSTREAM ULSTREAM? TODO CHECK
     /// Response to:        U-TX DEMAND
     /// Response expected:  -
     ///   This PDU shall be a message from the SwMI that the call is being interrupted.
     DTxWait,
 }
-
 
 /// These UL PDUs can be expected in response to a downlink call
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +127,7 @@ pub enum UlCallPdu {
     ///   This PDU shall be a acknowledgement from the called MS that the called user
     ///   has been alerted.
     UAlert,
-    
+
     ///          ULSTREAM
     /// Response to:        -
     /// Response expected:  D-CALL RESTORE
@@ -167,7 +163,7 @@ pub enum UlCallPdu {
     ///          ULSTREAM
     /// Response to:        -
     /// Response expected:  D-CALL PROCEEDING / D-ALERT / D-CONNECT
-    /// 
+    ///
     USetup,
 
     ///          ULSTREAM
@@ -178,7 +174,7 @@ pub enum UlCallPdu {
 
     ///          ULSTREAM
     /// Response to:        -
-    /// Response expected:  D-TX GRANTED 
+    /// Response expected:  D-TX GRANTED
     ///   This PDU shall be the message to the SwMI that a transmission is requested.
     UTxDemand,
 }
@@ -188,8 +184,6 @@ pub enum RemoteEvent {
     NewCall,
     CallActive,
     TxCeased,
-
-    
 }
 
 #[derive(Debug)]
@@ -206,13 +200,13 @@ struct Call {
 
 impl Call {
     pub fn new(
-            current_caller_issi: u32, 
-            current_caller_is_local: bool, 
-            callee_ssi: u32, 
-            callee_is_local: bool, 
-            is_group: bool, 
-            is_acked: bool
-        ) -> Self {
+        current_caller_issi: u32,
+        current_caller_is_local: bool,
+        callee_ssi: u32,
+        callee_is_local: bool,
+        is_group: bool,
+        is_acked: bool,
+    ) -> Self {
         Self {
             state: DlCallState::Init,
             current_caller_issi,
@@ -226,9 +220,10 @@ impl Call {
     }
 
     fn discard(&self, pdu: UlCallPdu) {
-        tracing::warn!("State: {:?} local calller {} callee {}, group: {}, acked: {}, discarding pdu: {:?}", 
-            self.state, 
-            self.current_caller_is_local, 
+        tracing::warn!(
+            "State: {:?} local calller {} callee {}, group: {}, acked: {}, discarding pdu: {:?}",
+            self.state,
+            self.current_caller_is_local,
             self.callee_is_local,
             self.is_group,
             self.is_acked,
@@ -241,30 +236,28 @@ impl Call {
             DlCallState::Init => {
                 // The call is not communicated to the participants, and we accept no incoming message
                 match pdu {
-                    UlCallPdu::UAlert |
-                    UlCallPdu::UCallRestore |
-                    UlCallPdu::UConnect |
-                    UlCallPdu::UDisconnect |
-                    UlCallPdu::UInfo |
-                    UlCallPdu::UTxCeased |
-                    UlCallPdu::UTxDemand |
-                    UlCallPdu::URelease => {
-                        self.discard(pdu)
-                    }
+                    UlCallPdu::UAlert
+                    | UlCallPdu::UCallRestore
+                    | UlCallPdu::UConnect
+                    | UlCallPdu::UDisconnect
+                    | UlCallPdu::UInfo
+                    | UlCallPdu::UTxCeased
+                    | UlCallPdu::UTxDemand
+                    | UlCallPdu::URelease => self.discard(pdu),
                     UlCallPdu::USetup => {
                         if self.handle_u_setup(pdu) {
                             self.state = DlCallState::CallActive;
                         }
                     }
                 }
-            },
+            }
             DlCallState::CallActive => {
                 // Call is ongoing. Tx has been granted
                 match (
-                    pdu, 
-                    self.current_caller_is_local, 
-                    self.callee_is_local, 
-                    self.is_group, 
+                    pdu,
+                    self.current_caller_is_local,
+                    self.callee_is_local,
+                    self.is_group,
                     self.is_acked
                 ) {
                     (UlCallPdu::USetup, _, _, _, _) |           // Invalid after setup
@@ -309,10 +302,10 @@ impl Call {
             DlCallState::TxCeased => {
                 // Call is ongoing. Depending on local/remote state of caller/callee, we handle certain messages
                 match (
-                    pdu, 
-                    self.current_caller_is_local, 
-                    self.callee_is_local, 
-                    self.is_group, 
+                    pdu,
+                    self.current_caller_is_local,
+                    self.callee_is_local,
+                    self.is_group,
                     self.is_acked
                 ) {
                     (UlCallPdu::USetup, _, _, _, _) |           // Invalid after setup
@@ -322,8 +315,8 @@ impl Call {
                     (UlCallPdu::UInfo, _, _, _, _) |            // Only during call setup
                     (UlCallPdu::UAlert, _, _, _, _) => {        // Only during call setup
                         tracing::warn!("State: {:?} local calller {} callee {}, group: {}, acked: {}, discarding pdu: {:?}", 
-                            self.state, 
-                            self.current_caller_is_local, 
+                            self.state,
+                            self.current_caller_is_local,
                             self.callee_is_local,
                             self.is_group,
                             self.is_acked,
@@ -350,7 +343,7 @@ impl Call {
             }
             DlCallState::Disconnected => {
                 self.discard(pdu);
-            } 
+            }
         }
     }
 
@@ -362,28 +355,27 @@ impl Call {
                 self.send_d_setup(self.callee_ssi);
                 self.signal_umac_dl_circuit();
                 self.state = DlCallState::CallActive;
-            },
+            }
 
             (DlCallState::CallActive, RemoteEvent::CallActive) => {
                 self.send_d_call_proceeding(self.current_caller_issi);
-            },
+            }
 
             (DlCallState::CallActive, RemoteEvent::TxCeased) => {
                 self.send_d_tx_ceased();
                 self.state = DlCallState::TxCeased;
-            },
+            }
 
             (DlCallState::TxCeased, RemoteEvent::CallActive) => {
                 self.send_d_tx_continue();
                 self.state = DlCallState::CallActive;
-            },
+            }
 
             (_, _) => {
                 unimplemented_log!("Unhandled remote event {:?} in state {:?}", event, self.state);
             }
         }
     }
-
 
     fn handle_u_setup(&mut self, _pdu: UlCallPdu) -> bool {
         tracing::info!("Handling U-SETUP in state {:?}", self.state);
@@ -417,7 +409,7 @@ impl Call {
 
 #[cfg(test)]
 mod test {
-    
+
     use super::*;
 
     use tetra_core::debug;
@@ -425,13 +417,7 @@ mod test {
     #[test]
     fn test_dl_call_fsm() {
         debug::setup_logging_verbose();
-        let mut call = Call::new(
-            1001, 
-            false,
-            2001, 
-            true, 
-            true, 
-            false);
+        let mut call = Call::new(1001, false, 2001, true, true, false);
         call.handle_pdu(super::UlCallPdu::UAlert);
     }
 }

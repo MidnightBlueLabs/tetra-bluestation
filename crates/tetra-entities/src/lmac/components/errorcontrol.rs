@@ -34,8 +34,7 @@ pub fn encode_cp(mut prim: TmvUnitdataReq) -> BitBuffer {
     // Convert bitbuffer to bitarray -> type1
     prim.mac_block.seek(0);
     let mut type2_arr = [0u8; MAX_TYPE2_BITS]; // largest possible type1 block
-    prim.mac_block
-        .to_bitarr(&mut type2_arr[0..params.type1_bits]);
+    prim.mac_block.to_bitarr(&mut type2_arr[0..params.type1_bits]);
 
     // CRC addition, type1 -> type2
     assert!(params.have_crc16);
@@ -66,12 +65,7 @@ pub fn encode_cp(mut prim: TmvUnitdataReq) -> BitBuffer {
 
     // Interleaving, type3 -> type4
     let mut type4_arr = [0u8; MAX_TYPE345_BITS]; // Need params.type345_bits
-    interleaver::block_interleave(
-        params.type345_bits,
-        params.interleave_a,
-        &type3_arr,
-        &mut type4_arr,
-    );
+    interleaver::block_interleave(params.type345_bits, params.interleave_a, &type3_arr, &mut type4_arr);
     let mut type4 = BitBuffer::from_bitarr(&type4_arr[0..params.type345_bits]);
     tracing::trace!("encode_cp {:?} type4: {:?}", lchan, type4.dump_bin());
 
@@ -88,11 +82,7 @@ pub fn encode_cp(mut prim: TmvUnitdataReq) -> BitBuffer {
 /// Returns (buf, bool) tuple
 /// buf is BitBuffer with type1 bits if decoding successful
 /// bool is true if CRC check was successful
-pub fn decode_cp(
-    lchan: LogicalChannel,
-    prim: TpUnitdataInd,
-    default_scramb_code: Option<u32>,
-) -> (Option<BitBuffer>, bool) {
+pub fn decode_cp(lchan: LogicalChannel, prim: TpUnitdataInd, default_scramb_code: Option<u32>) -> (Option<BitBuffer>, bool) {
     assert!(lchan.is_control_channel() && lchan != LogicalChannel::Aach);
 
     // Various intermediate buffers, needed for decoding stages
@@ -125,12 +115,7 @@ pub fn decode_cp(
 
     // De-interleaving, type4 -> type3
     type4.to_bitarr(&mut type4_arr[0..params.type345_bits]);
-    interleaver::block_deinterleave(
-        params.type345_bits,
-        params.interleave_a,
-        &type4_arr,
-        &mut type3_arr,
-    );
+    interleaver::block_deinterleave(params.type345_bits, params.interleave_a, &type4_arr, &mut type3_arr);
     tracing::trace!(
         "decode_cp {:?} type3: {:?}",
         lchan,
@@ -138,12 +123,7 @@ pub fn decode_cp(
     );
 
     // De-puncturing, type3 -> type3dp
-    convenc::tetra_rcpc_depunct(
-        RcpcPunctMode::Rate2_3,
-        &type3_arr,
-        params.type345_bits,
-        &mut type3dp_arr,
-    );
+    convenc::tetra_rcpc_depunct(RcpcPunctMode::Rate2_3, &type3_arr, params.type345_bits, &mut type3dp_arr);
     // tracing::trace!("decode_cp: t3dp:  {:?}", &type3dp_arr[0..4*params.type2_bits]);
 
     // Viterbi, type3dp -> type2
@@ -309,11 +289,7 @@ pub fn encode_tp(mut prim: TmvUnitdataReq, blk_num: u8) -> BitBuffer {
 /// Decode traffic plane from type5 to type1 bits (ACELP codec order). Reverse of `encode_tp()`:
 /// descramble → deinterleave → split UEP → Class0 copy, Class1+2 depuncture+Viterbi → CRC → reassemble → reorder.
 /// Returns (Option<BitBuffer>, bool): 274 ACELP bits if successful, CRC check result for Class 2.
-pub fn decode_tp(
-    lchan: LogicalChannel,
-    type5_block: BitBuffer,
-    scrambling_code: u32,
-) -> (Option<BitBuffer>, bool) {
+pub fn decode_tp(lchan: LogicalChannel, type5_block: BitBuffer, scrambling_code: u32) -> (Option<BitBuffer>, bool) {
     assert_eq!(lchan, LogicalChannel::TchS);
 
     let params = errorcontrol_params::get_params(lchan);
@@ -351,23 +327,12 @@ pub fn decode_tp(
         // De-puncture Class 1: 168 type3 → 336 mother code bits
         let class1_type3 = &type3_arr[CLASS0_BITS..CLASS0_BITS + CLASS1_TYPE3];
         let mut mother_class1 = [0xFFu8; CLASS1_BITS * 3]; // 336
-        convenc::tetra_rcpc_depunct(
-            RcpcPunctMode::Rate112_168,
-            class1_type3,
-            CLASS1_TYPE3,
-            &mut mother_class1,
-        );
+        convenc::tetra_rcpc_depunct(RcpcPunctMode::Rate112_168, class1_type3, CLASS1_TYPE3, &mut mother_class1);
 
         // De-puncture Class 2: 162 type3 → 216 mother code bits
-        let class2_type3 =
-            &type3_arr[CLASS0_BITS + CLASS1_TYPE3..CLASS0_BITS + CLASS1_TYPE3 + CLASS2_TYPE3];
+        let class2_type3 = &type3_arr[CLASS0_BITS + CLASS1_TYPE3..CLASS0_BITS + CLASS1_TYPE3 + CLASS2_TYPE3];
         let mut mother_class2 = [0xFFu8; CLASS2_TYPE2 * 3]; // 216
-        convenc::tetra_rcpc_depunct(
-            RcpcPunctMode::Rate72_162,
-            class2_type3,
-            CLASS2_TYPE3,
-            &mut mother_class2,
-        );
+        convenc::tetra_rcpc_depunct(RcpcPunctMode::Rate72_162, class2_type3, CLASS2_TYPE3, &mut mother_class2);
 
         // Concatenate mother code bits: Class1(336) + Class2(216) = 552
         let mut combined_mother = [0xFFu8; (CLASS1_BITS + CLASS2_TYPE2) * 3]; // 552
@@ -401,8 +366,7 @@ pub fn decode_tp(
         let expected_crc = speech_crc(data);
         crc_ok = expected_crc[..] == received_crc[..];
 
-        type1_arr[CLASS0_BITS + CLASS1_BITS..CLASS0_BITS + CLASS1_BITS + CLASS2_BITS]
-            .copy_from_slice(data);
+        type1_arr[CLASS0_BITS + CLASS1_BITS..CLASS0_BITS + CLASS1_BITS + CLASS2_BITS].copy_from_slice(data);
     }
 
     // ── channel_to_codec reorder (274 channel → 274 codec bits) ────
@@ -481,7 +445,8 @@ mod tests {
     #[test]
     fn test_encdec_bnch() {
         // setup_logging_verbose();
-        let type1vec = "1000001111101001010000000000101001101110011000000000000000001010000101010100000000000000000000101111111111111111110100100000";
+        let type1vec =
+            "1000001111101001010000000000101001101110011000000000000000001010000101010100000000000000000000101111111111111111110100100000";
         let type5vec = "001101111110011111000110100001101110011100110000111100011000011100101011111100010101101001101001001110011100001010001101101010100000000011010001001101001010101100100110011001111100001011000001010010000011010110110110";
         let bb = BitBuffer::from_bitstr(type1vec);
         let lchan = LogicalChannel::Bnch;
@@ -563,11 +528,7 @@ mod tests {
         // All-zero input → CRC should be all zeros
         let zeros = [0u8; 60];
         let crc = speech_crc(&zeros);
-        assert_eq!(
-            crc,
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            "CRC of all-zeros should be all-zeros"
-        );
+        assert_eq!(crc, [0, 0, 0, 0, 0, 0, 0, 0], "CRC of all-zeros should be all-zeros");
 
         // Single bit at position 0: I(X) = 1
         // X^7 * 1 mod (X^7 + X^3 + 1) = X^3 + 1

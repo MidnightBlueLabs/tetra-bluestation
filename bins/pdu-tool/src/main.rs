@@ -15,27 +15,19 @@ use entities::umac::UmacParser;
 )]
 struct Args {
     /// Direction: uplink or downlink
-    #[arg(
-        help = "Direction: [ ul | dl ]"
-    )]
+    #[arg(help = "Direction: [ ul | dl ]")]
     direction: String,
 
     /// SAP (Service Access Point) name
-    #[arg(
-        help = "SAP name: [ tmv ]"
-    )]
+    #[arg(help = "SAP name: [ tmv ]")]
     sap: String,
 
     /// Destination component name
-    #[arg(
-        help = "Destination component: [ umac ]"
-    )]
+    #[arg(help = "Destination component: [ umac ]")]
     destination: String,
 
     /// Raw bitstring to decode
-    #[arg(
-        help = "Raw bitstring (binary representation) to parse as PDU"
-    )]
+    #[arg(help = "Raw bitstring (binary representation) to parse as PDU")]
     bitstring: String,
 
     #[arg(
@@ -54,7 +46,7 @@ fn main() {
     eprintln!(" *  There be bugs..                              *");
 
     let args = Args::parse();
-    
+
     let logical_channel = match args.channel.to_lowercase().as_str() {
         "schf" | "sch_f" | "sch/f" => LogicalChannel::SchF,
         "schhu" | "sch_hu" | "sch/hu" => LogicalChannel::SchHu,
@@ -64,7 +56,10 @@ fn main() {
         "bsch" => LogicalChannel::Bsch,
         "aach" => LogicalChannel::Aach,
         _ => {
-            eprintln!("Error: Unsupported logical channel '{}'. Use: schf, schhu, schhd, stch, bnch, bsch, aach", args.channel);
+            eprintln!(
+                "Error: Unsupported logical channel '{}'. Use: schf, schhu, schhd, stch, bnch, bsch, aach",
+                args.channel
+            );
             std::process::exit(1);
         }
     };
@@ -86,7 +81,7 @@ fn main() {
             } else {
                 UmacParser::parse_ul(pdu, logical_channel);
             }
-        },
+        }
         _ => {
             eprintln!("Error: Unsupported SAP '{}' or destination '{}'", args.sap, args.destination);
             eprintln!("Supported: tmv umac");

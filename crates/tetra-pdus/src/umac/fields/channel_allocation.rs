@@ -5,7 +5,6 @@ use core::fmt;
 use tetra_core::{BitBuffer, Todo, pdu_parse_error::PduParseErr};
 use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
 
-
 #[derive(Debug, Clone)]
 pub struct ChanAllocElement {
     // 2
@@ -30,13 +29,11 @@ pub struct ChanAllocElement {
     // pub ext_duplex_spacing: Option<u8>,
     // 1 opt
     // pub ext_reverse_operation: Option<bool>,
-
     pub ext: Option<Todo>,
     // 2
     pub mon_pattern: u8,
     // 2 opt
     pub frame18_mon_pattern: Option<u8>,
-    
     // Below is for extended channel allocation which is unsupported for now
     // // 2 opt
     // pub aug_uldl_ass: Option<u8>,
@@ -72,10 +69,8 @@ pub struct ChanAllocElement {
     // pub further_aug_flag: bool,
 }
 
-
 impl ChanAllocElement {
     pub fn from_bitbuf(buf: &mut BitBuffer) -> Result<Self, PduParseErr> {
-
         let val = buf.read_field(2, "alloc_type")?;
         let alloc_type = ChanAllocType::try_from(val).unwrap(); // Never fails
 
@@ -94,7 +89,6 @@ impl ChanAllocElement {
         let cell_change_flag = buf.read_field(1, "cell_change_flag")? != 0;
         let carrier_num = buf.read_field(12, "carrier_num")? as u16;
 
-        
         let ext_carrier_num_flag = buf.read_field(1, "ext_carrier_num_flag")? == 1;
         let ext = if ext_carrier_num_flag {
             unimplemented!("Extended channel allocation");
@@ -130,7 +124,7 @@ impl ChanAllocElement {
             cell_change_flag,
             carrier_num,
             ext,
-            // ext_freq_band, 
+            // ext_freq_band,
             // ext_offset,
             // ext_duplex_spacing,
             // ext_reverse_operation,
@@ -148,12 +142,12 @@ impl ChanAllocElement {
         buf.write_bits(self.clch_permission as u8 as u64, 1);
         buf.write_bits(self.cell_change_flag as u8 as u64, 1);
         buf.write_bits(self.carrier_num as u64, 12);
-        
+
         // If ext_freq_band supplied, we assume all four fields are there
         if let Some(_ext) = self.ext {
             buf.write_bits(1, 1); // Extended carrier number flag
             unimplemented!("Extended channel allocation");
-            // buf.write_bits(ext_freq_band as u64, 4); 
+            // buf.write_bits(ext_freq_band as u64, 4);
             // buf.write_bits(self.ext_offset.unwrap() as u64, 2);
             // buf.write_bits(self.ext_duplex_spacing.unwrap() as u64, 3);
             // buf.write_bits(self.ext_reverse_operation.unwrap() as u8 as u64, 1);
@@ -222,28 +216,24 @@ impl ChanAllocElement {
     }
 }
 
-impl fmt::Display for ChanAllocElement{
+impl fmt::Display for ChanAllocElement {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ChanAllocElement {{ alloc_type: {} ts_assigned: {:?} ul_dl_assigned: {} clch_permission: {} cell_change_flag: {} carrier_num: {}",
-            self.alloc_type,
-            self.ts_assigned,
-            self.ul_dl_assigned,
-            self.clch_permission,
-            self.cell_change_flag,
-            self.carrier_num,
+        write!(
+            f,
+            "ChanAllocElement {{ alloc_type: {} ts_assigned: {:?} ul_dl_assigned: {} clch_permission: {} cell_change_flag: {} carrier_num: {}",
+            self.alloc_type, self.ts_assigned, self.ul_dl_assigned, self.clch_permission, self.cell_change_flag, self.carrier_num,
         )?;
 
-        if let Some(v) = self.ext { 
-            write!(f, "  ext: {}", v)?; 
+        if let Some(v) = self.ext {
+            write!(f, "  ext: {}", v)?;
         }
         write!(f, " mon_pattern: {}", self.mon_pattern)?;
-        if let Some(v) = self.frame18_mon_pattern { 
-            write!(f, "  frame18_mon_pattern: {}", v)?; 
+        if let Some(v) = self.frame18_mon_pattern {
+            write!(f, "  frame18_mon_pattern: {}", v)?;
         }
         write!(f, " }}")
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -252,7 +242,6 @@ mod tests {
 
     #[test]
     fn test_parse_chanalloc_replace_lab() {
-
         debug::setup_logging_verbose();
         let bitstr = "0001001110001111101001011";
         let mut buffer = BitBuffer::from_bitstr(bitstr);
@@ -269,7 +258,6 @@ mod tests {
         assert_eq!(bitstr, buffer_out.to_bitstr());
         assert_eq!(bitstr.len(), result.compute_len());
     }
-
 
     #[test]
     fn test_parse_chanalloc_additional() {
@@ -309,7 +297,7 @@ mod tests {
         tracing::info!("Serialized: {}", buffer_out.dump_bin());
         assert_eq!(bitstr, buffer_out.to_bitstr());
         assert_eq!(bitstr.len(), result.compute_len());
-    } 
+    }
 
     #[test]
     fn test_parse_chanalloc_quitandgo() {
@@ -327,5 +315,5 @@ mod tests {
         tracing::info!("Serialized: {}", buffer_out.dump_bin());
         assert_eq!(bitstr, buffer_out.to_bitstr());
         assert_eq!(bitstr.len(), result.compute_len());
-    }     
+    }
 }

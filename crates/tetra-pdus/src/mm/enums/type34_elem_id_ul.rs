@@ -44,13 +44,17 @@ impl MmType34ElemIdUl {
 }
 
 impl From<MmType34ElemIdUl> for u64 {
-    fn from(e: MmType34ElemIdUl) -> Self { e.into_raw() }
+    fn from(e: MmType34ElemIdUl) -> Self {
+        e.into_raw()
+    }
 }
 
 impl core::fmt::Display for MmType34ElemIdUl {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            MmType34ElemIdUl::GroupIdentityLocationDemand => write!(f, "GroupIdentityLocationDemand"),
+            MmType34ElemIdUl::GroupIdentityLocationDemand => {
+                write!(f, "GroupIdentityLocationDemand")
+            }
             MmType34ElemIdUl::GroupReportResponse => write!(f, "GroupReportResponse"),
             MmType34ElemIdUl::DmMsAddress => write!(f, "DmMsAddress"),
             MmType34ElemIdUl::GroupIdentityUplink => write!(f, "GroupIdentityUplink"),

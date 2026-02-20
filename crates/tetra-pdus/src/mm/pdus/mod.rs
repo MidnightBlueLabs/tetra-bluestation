@@ -1,13 +1,13 @@
 pub mod d_attach_detach_group_identity;
 pub mod d_attach_detach_group_identity_acknowledgement;
-pub mod d_mm_status;
 pub mod d_location_update_accept;
 pub mod d_location_update_command;
-pub mod d_location_update_reject;
 pub mod d_location_update_proceeding;
+pub mod d_location_update_reject;
+pub mod d_mm_status;
+pub mod mm_pdu_function_not_supported;
 pub mod u_attach_detach_group_identity;
 pub mod u_attach_detach_group_identity_acknowledgement;
 pub mod u_itsi_detach;
 pub mod u_location_update_demand;
 pub mod u_mm_status;
-pub mod mm_pdu_function_not_supported;
