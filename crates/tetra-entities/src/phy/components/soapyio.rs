@@ -47,6 +47,10 @@ pub struct SoapyIo {
     tx: Option<soapysdr::TxStream<StreamType>>,
 }
 
+/// Soapy/Lime timestamps can occasionally jitter by a single sample.
+/// Treat tiny deltas as contiguous to avoid triggering large block realignments downstream.
+const RX_TIMESTAMP_JITTER_TOLERANCE_SAMPLES: SampleCount = 1;
+
 /// It is annoying to repeat error handling so do that in a macro.
 /// ? could be used but then it could not print which SoapySDR call failed.
 macro_rules! soapycheck {
@@ -328,8 +332,14 @@ impl SoapyIo {
                         tracing::trace!("Set initial_time to {} ns", self.initial_time.unwrap());
                     };
 
-                    // Re-compute total count from timestamp (gracefully handles lost samples)
-                    let count = time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs);
+                    // Re-compute total count from timestamp (gracefully handles lost samples).
+                    let mut count = time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs);
+
+                    // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic.
+                    let delta_from_expected = count - self.rx_next_count;
+                    if delta_from_expected.abs() <= RX_TIMESTAMP_JITTER_TOLERANCE_SAMPLES {
+                        count = self.rx_next_count;
+                    }
 
                     // Store expected sample count for the next sample to be read.
                     // This is used in case timestamp is missing.
