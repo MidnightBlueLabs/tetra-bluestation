@@ -44,18 +44,10 @@ impl From<BasicSlotgrantGrantingDelay> for u64 {
 impl core::fmt::Display for BasicSlotgrantGrantingDelay {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            BasicSlotgrantGrantingDelay::CapAllocAtNextOpportunity => {
-                write!(f, "CapAllocAtNextOpportunity")
-            }
-            BasicSlotgrantGrantingDelay::DelayNOpportunities(n) => {
-                write!(f, "Delay{}Opportunities", n)
-            }
-            BasicSlotgrantGrantingDelay::AllocStartsAtOpportunityInFr18 => {
-                write!(f, "AllocStartsAtOpportunityInFr18")
-            }
-            BasicSlotgrantGrantingDelay::WaitForAnotherSlotgrantMessage => {
-                write!(f, "WaitForAnotherSlotgrantMessage")
-            }
+            BasicSlotgrantGrantingDelay::CapAllocAtNextOpportunity => write!(f, "CapAllocAtNextOpportunity"),
+            BasicSlotgrantGrantingDelay::DelayNOpportunities(n) => write!(f, "Delay{}Opportunities", n),
+            BasicSlotgrantGrantingDelay::AllocStartsAtOpportunityInFr18 => write!(f, "AllocStartsAtOpportunityInFr18"),
+            BasicSlotgrantGrantingDelay::WaitForAnotherSlotgrantMessage => write!(f, "WaitForAnotherSlotgrantMessage"),
         }
     }
 }

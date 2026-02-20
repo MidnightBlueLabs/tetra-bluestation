@@ -6,7 +6,9 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use super::stack_config::{CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
+use super::stack_config_brew::{CfgBrewDto, apply_brew_patch};
+
+use super::stack_config::{CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
 use super::stack_config_soapy::{CfgSoapySdr, LimeSdrCfg, SXceiverCfg, UsrpB2xxCfg};
 
 /// Build `SharedConfig` from a TOML configuration file
@@ -35,6 +37,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
             }
         }
     }
+
+    if let Some(ref brew) = root.brew {
+        if !brew.extra.is_empty() {
+            return Err(format!("Unrecognized fields in brew config: {:?}", sorted_keys(&brew.extra)).into());
+        }
+    }
+
     if !root.net_info.extra.is_empty() {
         return Err(format!("Unrecognized fields in net_info: {:?}", sorted_keys(&root.net_info.extra)).into());
     }
@@ -59,7 +68,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
             mnc: root.net_info.mnc,
         },
         cell: CfgCellInfo::default(),
-        brew: root.brew.unwrap_or_default(),
+        brew: None,
     };
 
     // Handle new phy_io structure
@@ -69,6 +78,10 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
 
     if let Some(ci) = root.cell_info {
         apply_cell_info_patch(&mut cfg.cell, ci);
+    }
+
+    if let Some(brew) = root.brew {
+        cfg.brew = Some(apply_brew_patch(brew));
     }
 
     // Mutable runtime state. Currently just a placeholder and not yet actually used
@@ -254,7 +267,7 @@ struct TomlConfigRoot {
     stack_state: Option<StackStatePatch>,
 
     #[serde(default)]
-    brew: Option<CfgBrew>,
+    brew: Option<CfgBrewDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 tetra-core = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }

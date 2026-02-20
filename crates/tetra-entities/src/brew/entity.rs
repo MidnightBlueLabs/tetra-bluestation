@@ -36,17 +36,19 @@ use super::worker::{BrewCommand, BrewConfig, BrewEvent, BrewWorker};
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
 const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(1);
 
-/// Active call tracking - Tracks the state of a single active Brew group call (currently transmitting)
+// ─── Active call tracking ─────────────────────────────────────────
+
+/// Tracks the state of a single active Brew group call (currently transmitting)
 #[derive(Debug)]
 struct ActiveCall {
     /// Brew session UUID
     uuid: Uuid,
-    /// TETRA call identifier (14-bit)
-    call_id: u16,
-    /// Allocated timeslot (2-4)
-    ts: u8,
-    /// Usage number for the channel allocation
-    usage: u8,
+    /// TETRA call identifier (14-bit) - None until NetworkCallReady received
+    call_id: Option<u16>,
+    /// Allocated timeslot (2-4) - None until NetworkCallReady received
+    ts: Option<u8>,
+    /// Usage number for the channel allocation - None until NetworkCallReady received
+    usage: Option<u8>,
     /// Calling party ISSI (from Brew)
     source_issi: u32,
     /// Destination GSSI (from Brew)
@@ -58,6 +60,8 @@ struct ActiveCall {
 /// Group call in hangtime with circuit still allocated.
 #[derive(Debug)]
 struct HangingCall {
+    /// Brew session UUID
+    uuid: Uuid,
     /// TETRA call identifier (14-bit)
     call_id: u16,
     /// Allocated timeslot (2-4)
@@ -93,6 +97,9 @@ struct UlForwardedCall {
 
 pub struct BrewEntity {
     config: SharedConfig,
+
+    brew_config: BrewConfig,
+
     dltime: TdmaTime,
 
     /// Receive events from the worker thread
@@ -121,6 +128,9 @@ pub struct BrewEntity {
 
     /// Whether the worker is connected
     connected: bool,
+
+    /// Worker thread handle for graceful shutdown
+    worker_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl BrewEntity {
@@ -130,8 +140,8 @@ impl BrewEntity {
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
 
         // Spawn worker thread
-        let worker_config = brew_config;
-        thread::Builder::new()
+        let worker_config = brew_config.clone();
+        let handle = thread::Builder::new()
             .name("brew-worker".to_string())
             .spawn(move || {
                 let mut worker = BrewWorker::new(worker_config, event_sender, command_receiver);
@@ -141,6 +151,7 @@ impl BrewEntity {
 
         Self {
             config,
+            brew_config,
             dltime: TdmaTime::default(),
             event_receiver,
             command_sender,
@@ -152,6 +163,7 @@ impl BrewEntity {
             next_call_id: 100, // Start at 100 to avoid collision with CMCE
             next_usage: 10,    // Start at 10 to avoid collision
             connected: false,
+            worker_handle: Some(handle),
         }
     }
 
@@ -400,9 +412,10 @@ impl BrewEntity {
         // Check if there's a hanging call for this GSSI — reuse the circuit
         if let Some(hanging) = self.hanging_calls.remove(&dest_gssi) {
             tracing::info!(
-                "BrewEntity: reusing hanging circuit for gssi={} ts={} call_id={} (hangtime {:.1}s)",
+                "BrewEntity: reusing hanging circuit for gssi={} ts={} call_id={} uuid={} (hangtime {:.1}s)",
                 dest_gssi,
                 hanging.ts,
+                uuid,
                 hanging.call_id,
                 hanging.since.elapsed().as_secs_f32()
             );

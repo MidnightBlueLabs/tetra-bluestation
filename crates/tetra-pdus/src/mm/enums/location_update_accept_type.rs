@@ -55,17 +55,11 @@ impl From<LocationUpdateAcceptType> for u64 {
 impl core::fmt::Display for LocationUpdateAcceptType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            LocationUpdateAcceptType::RoamingLocationUpdating => {
-                write!(f, "RoamingLocationUpdating")
-            }
+            LocationUpdateAcceptType::RoamingLocationUpdating => write!(f, "RoamingLocationUpdating"),
             LocationUpdateAcceptType::TemporaryRegistration => write!(f, "TemporaryRegistration"),
-            LocationUpdateAcceptType::PeriodicLocationUpdating => {
-                write!(f, "PeriodicLocationUpdating")
-            }
+            LocationUpdateAcceptType::PeriodicLocationUpdating => write!(f, "PeriodicLocationUpdating"),
             LocationUpdateAcceptType::ItsiAttach => write!(f, "ItsiAttach"),
-            LocationUpdateAcceptType::ServiceRestorationRoamingLocationUpdating => {
-                write!(f, "ServiceRestorationRoamingLocationUpdating")
-            }
+            LocationUpdateAcceptType::ServiceRestorationRoamingLocationUpdating => write!(f, "ServiceRestorationRoamingLocationUpdating"),
             LocationUpdateAcceptType::MigratingOrServiceRestorationMigratingLocationUpdating => {
                 write!(f, "MigratingOrServiceRestorationMigratingLocationUpdating")
             }

@@ -272,7 +272,7 @@ impl Call {
                     }
 
                     (UlCallPdu::UTxCeased, true, _, _, _) => {
-                        unimplemented_log!("{:?}", pdu); 
+                        unimplemented_log!("{:?}", pdu);
                         // self.handle_u_tx_ceased();
                     },
                     (UlCallPdu::UTxDemand, _, _, _, _) => {
@@ -314,7 +314,7 @@ impl Call {
                     (UlCallPdu::UConnect, _, _, _, _) |         // Only during call setup
                     (UlCallPdu::UInfo, _, _, _, _) |            // Only during call setup
                     (UlCallPdu::UAlert, _, _, _, _) => {        // Only during call setup
-                        tracing::warn!("State: {:?} local calller {} callee {}, group: {}, acked: {}, discarding pdu: {:?}", 
+                        tracing::warn!("State: {:?} local calller {} callee {}, group: {}, acked: {}, discarding pdu: {:?}",
                             self.state,
                             self.current_caller_is_local,
                             self.callee_is_local,

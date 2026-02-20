@@ -1066,8 +1066,13 @@ impl UmacBs {
         // (D-TX CEASED, D-TX GRANTED) per EN 300 392-2, clause 23.5.
         // CRITICAL: DL STCH uses MAC-RESOURCE (124-bit half-slot), NOT MAC-U-SIGNAL (UL-only).
         if prim.stealing_permission {
-            // Find the traffic timeslot (first active DL circuit on TS2-4)
-            let traffic_ts = (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(Direction::Dl, t));
+            // Determine the target traffic timeslot for FACCH stealing.
+            // If chan_alloc specifies a timeslot, use it; otherwise fall back to first active DL circuit.
+            let traffic_ts = prim
+                .chan_alloc
+                .as_ref()
+                .and_then(|ca| ca.timeslots.iter().enumerate().find(|&(_, &set)| set).map(|(i, _)| (i + 1) as u8))
+                .or_else(|| (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(Direction::Dl, t)));
 
             if let Some(ts) = traffic_ts {
                 // Build MAC-RESOURCE PDU for the STCH half-slot (124 type1 bits).
@@ -1198,27 +1203,25 @@ impl UmacBs {
                     );
                 }
             }
-            // UL voice from LMAC → loopback to DL for group call repeater
+            // UL voice from LMAC → forward to Brew + optional loopback to DL
             SapMsgInner::TmdCircuitDataInd(prim) => {
                 let ts = prim.ts;
                 let data = prim.data;
-                if !self.ul_tx_is_active(ts) {
-                    tracing::trace!("rx_tmd_prim: UL voice on ts={} while tx inactive, dropping", ts);
-                    return;
-                }
 
-                // Forward UL voice to upper layers (Brew entity) for potential TetraPack TX
-                if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
-                    let fwd = SapMsg {
-                        sap: Sap::TmdSap,
-                        src: TetraEntity::Umac,
-                        dest: TetraEntity::Brew,
-                        dltime,
-                        msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts, data: data.clone() }),
-                    };
-                    queue.push_back(fwd);
-                } else {
-                    tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to Brew", ts);
+                // Forward UL voice to Brew (User plane) if loaded
+                if self.config.config().brew.is_some() {
+                    if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+                        let msg = SapMsg {
+                            sap: Sap::TmdSap,
+                            src: TetraEntity::Umac,
+                            dest: TetraEntity::Brew,
+                            dltime,
+                            msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts, data: data.clone() }),
+                        };
+                        queue.push_back(msg);
+                    } else {
+                        tracing::trace!("rx_tmd_prim: no active UL circuit on ts={}, dropping UL voice to Brew", ts);
+                    }
                 }
 
                 // Loopback only if there's an active DL circuit on this timeslot
@@ -1303,10 +1306,10 @@ impl UmacBs {
             };
             self.channel_scheduler.create_circuit(d, c);
             tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {}", d, ts);
-
-            if d == Direction::Ul {
-                self.set_ul_tx_active(ts, true);
-            }
+            // TODO: test this
+            // if d == Direction::Ul {
+            //     self.set_ul_tx_active(ts, true);
+            // }
         }
     }
 
@@ -1443,16 +1446,21 @@ impl TetraEntityTrait for UmacBs {
     }
 }
 
+/// Pack UL ACELP voice bits (274 bits, one-bit-per-byte) into packed byte array for DL transmission.
+/// Handles both already-packed (35 bytes) and unpacked (274 bytes) formats.
 fn pack_ul_acelp_bits(bits: &[u8]) -> Option<Vec<u8>> {
     const PACKED_TCH_S_BYTES: usize = (TCH_S_CAP + 7) / 8;
 
+    // Already packed format — pass through
     if bits.len() == PACKED_TCH_S_BYTES {
         return Some(bits.to_vec());
     }
+    // Insufficient data
     if bits.len() < TCH_S_CAP {
         return None;
     }
 
+    // Pack 274 one-bit-per-byte into 35 bytes (last byte has 2 padding bits)
     let mut out = Vec::with_capacity(PACKED_TCH_S_BYTES);
     for chunk_idx in 0..PACKED_TCH_S_BYTES {
         let mut byte = 0u8;

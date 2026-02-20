@@ -175,46 +175,22 @@ impl From<StatusDownlink> for u64 {
 impl core::fmt::Display for StatusDownlink {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            StatusDownlink::ChangeOfEnergySavingModeRequest => {
-                write!(f, "ChangeOfEnergySavingModeRequest")
-            }
-            StatusDownlink::ChangeOfEnergySavingModeResponse => {
-                write!(f, "ChangeOfEnergySavingModeResponse")
-            }
+            StatusDownlink::ChangeOfEnergySavingModeRequest => write!(f, "ChangeOfEnergySavingModeRequest"),
+            StatusDownlink::ChangeOfEnergySavingModeResponse => write!(f, "ChangeOfEnergySavingModeResponse"),
             StatusDownlink::DualWatchModeResponse => write!(f, "DualWatchModeResponse"),
-            StatusDownlink::TerminatingDualWatchModeResponse => {
-                write!(f, "TerminatingDualWatchModeResponse")
-            }
-            StatusDownlink::ChangeOfDualWatchModeRequest => {
-                write!(f, "ChangeOfDualWatchModeRequest")
-            }
+            StatusDownlink::TerminatingDualWatchModeResponse => write!(f, "TerminatingDualWatchModeResponse"),
+            StatusDownlink::ChangeOfDualWatchModeRequest => write!(f, "ChangeOfDualWatchModeRequest"),
             StatusDownlink::MsFrequencyBandsRequest => write!(f, "MsFrequencyBandsRequest"),
             StatusDownlink::PeriodicDistanceReporting => write!(f, "PeriodicDistanceReporting"),
-            StatusDownlink::AcceptanceToStartDmGatewayOperation => {
-                write!(f, "AcceptanceToStartDmGatewayOperation")
-            }
-            StatusDownlink::RejectionToStartDmGatewayOperation => {
-                write!(f, "RejectionToStartDmGatewayOperation")
-            }
-            StatusDownlink::AcceptanceToContinueDmGatewayOperation => {
-                write!(f, "AcceptanceToContinueDmGatewayOperation")
-            }
-            StatusDownlink::RejectionToContinueDmGatewayOperation => {
-                write!(f, "RejectionToContinueDmGatewayOperation")
-            }
-            StatusDownlink::AcceptanceToStopDmGatewayOperation => {
-                write!(f, "AcceptanceToStopDmGatewayOperation")
-            }
+            StatusDownlink::AcceptanceToStartDmGatewayOperation => write!(f, "AcceptanceToStartDmGatewayOperation"),
+            StatusDownlink::RejectionToStartDmGatewayOperation => write!(f, "RejectionToStartDmGatewayOperation"),
+            StatusDownlink::AcceptanceToContinueDmGatewayOperation => write!(f, "AcceptanceToContinueDmGatewayOperation"),
+            StatusDownlink::RejectionToContinueDmGatewayOperation => write!(f, "RejectionToContinueDmGatewayOperation"),
+            StatusDownlink::AcceptanceToStopDmGatewayOperation => write!(f, "AcceptanceToStopDmGatewayOperation"),
             StatusDownlink::AcceptanceOfDmMsAddresses => write!(f, "AcceptanceOfDmMsAddresses"),
-            StatusDownlink::CommandToRemoveDmMsAddresses => {
-                write!(f, "CommandToRemoveDmMsAddresses")
-            }
-            StatusDownlink::CommandToChangeRegistrationLabel => {
-                write!(f, "CommandToChangeRegistrationLabel")
-            }
-            StatusDownlink::CommandToStopDmGatewayOperation => {
-                write!(f, "CommandToStopDmGatewayOperation")
-            }
+            StatusDownlink::CommandToRemoveDmMsAddresses => write!(f, "CommandToRemoveDmMsAddresses"),
+            StatusDownlink::CommandToChangeRegistrationLabel => write!(f, "CommandToChangeRegistrationLabel"),
+            StatusDownlink::CommandToStopDmGatewayOperation => write!(f, "CommandToStopDmGatewayOperation"),
             StatusDownlink::NetworkOrUserSpecific32 => write!(f, "NetworkOrUserSpecific32"),
             StatusDownlink::NetworkOrUserSpecific33 => write!(f, "NetworkOrUserSpecific33"),
             StatusDownlink::NetworkOrUserSpecific34 => write!(f, "NetworkOrUserSpecific34"),

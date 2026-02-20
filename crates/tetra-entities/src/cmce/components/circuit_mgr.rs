@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
-use tetra_config::{TimeslotAllocator, TimeslotOwner};
-use tetra_core::{Direction, TdmaTime};
+use tetra_core::{Direction, TdmaTime, TimeslotAllocator, TimeslotOwner};
 use tetra_pdus::cmce::structs::cmce_circuit::CmceCircuit;
 use tetra_saps::{
     control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
@@ -166,14 +165,17 @@ impl CircuitMgr {
         Ok(self.open_circuit(dir, circuit)?)
     }
 
+    /// Allocate circuit using centralized timeslot allocator
     pub fn allocate_circuit_with_allocator(
         &mut self,
         dir: Direction,
         comm_type: CommunicationType,
-        allocator: &mut TimeslotAllocator,
+        timeslot_alloc: &mut TimeslotAllocator,
         owner: TimeslotOwner,
     ) -> Result<&CmceCircuit, CircuitErr> {
-        let ts = allocator.allocate_any(owner).ok_or(CircuitErr::NoCircuitFree)?;
+        // Get timeslot from centralized allocator
+        let ts = timeslot_alloc.allocate_any(owner).ok_or(CircuitErr::NoCircuitFree)?;
+
         let call_id = self.get_next_call_id();
         let usage = self.get_next_usage_number();
 
@@ -193,7 +195,7 @@ impl CircuitMgr {
         match self.open_circuit(dir, circuit) {
             Ok(circuit) => Ok(circuit),
             Err(e) => {
-                let _ = allocator.release(owner, ts);
+                let _ = timeslot_alloc.release(owner, ts);
                 Err(e)
             }
         }
@@ -306,14 +308,21 @@ impl CircuitMgr {
             tasks = self.close_expired_circuits(tasks);
 
             // Next, go through channels, see if D-SETUPs need to be sent
+            // Late entry: resend D-SETUP every 20 multiframes (5 seconds)
+            const LATE_ENTRY_INTERVAL_TIMESLOTS: i32 = 20 * 18 * 4; // 20 MN = 1440 timeslots
+
             for circuit in self.dl.iter() {
                 if let Some(circuit) = circuit {
-                    // Circuit exists
-                    if circuit.ts_created.age(dltime) < 4 * 4 {
+                    let age = circuit.ts_created.age(dltime);
+
+                    // Send D-SETUP for first 4 frames after circuit creation
+                    if age < 4 * 4 {
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
-                    } else if (circuit.ts_created.age(dltime) - 4) % 3 == 2 {
+                    }
+                    // Late entry: resend every 20 multiframes
+                    else if age % LATE_ENTRY_INTERVAL_TIMESLOTS == 0 {
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));

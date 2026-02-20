@@ -1,5 +1,7 @@
 use clap::Parser;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tetra_config::{PhyBackend, SharedConfig, StackMode, toml_config};
@@ -62,13 +64,11 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> MessageRouter {
     router.register_entity(Box::new(cmce));
 
     // Register Brew entity if enabled
-    let brew_cfg = cfg.config().brew.clone();
-    if brew_cfg.enabled {
+    if let Some(brew_cfg) = cfg.config().brew.clone() {
         let brew_config = BrewConfig {
             host: brew_cfg.host,
             port: brew_cfg.port,
             tls: brew_cfg.tls,
-            user_agent: brew_cfg.user_agent,
             username: brew_cfg.username,
             password: brew_cfg.password,
             issi: brew_cfg.issi,
@@ -122,5 +122,14 @@ fn main() {
         StackMode::Bs => build_bs_stack(&mut cfg),
     };
 
-    router.run_stack(None);
+    // Set up Ctrl+C handler for graceful shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("failed to set Ctrl+C handler");
+
+    router.run_stack(None, Some(running));
+    // router drops here → entities are dropped → BrewEntity::Drop fires teardown
 }

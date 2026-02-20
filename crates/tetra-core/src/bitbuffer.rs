@@ -405,6 +405,10 @@ impl BitBuffer {
         let mut bits_remaining = num_bits;
         while bits_remaining > 0 {
             let bits_to_copy = usize::min(bits_remaining, 64);
+            assert!(
+                src_bitbuf.get_len_remaining() >= bits_to_copy,
+                "not enough bits remaining in source buffer to copy"
+            );
             let v = src_bitbuf.read_bits(bits_to_copy).unwrap(); // Guaranteed
             self.write_bits(v, bits_to_copy);
             bits_remaining -= bits_to_copy;

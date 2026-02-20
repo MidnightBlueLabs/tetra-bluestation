@@ -45,10 +45,8 @@ impl LogicalChannel {
     /// TODO FIXME actually, BNCH, BSCH, AACH are also part of CP
     pub fn is_control_channel(self) -> bool {
         match self {
-            // Odd one since very different decoding, but actually part of CP
-            LogicalChannel::Aach |
-            // Also not containing regular mac blocks but still CP
-            LogicalChannel::Bsch |
+            LogicalChannel::Aach | // Odd one since very different decoding, but actually part of CP
+            LogicalChannel::Bsch | // Also not containing regular mac blocks but still CP
             LogicalChannel::Bnch |
             LogicalChannel::SchHd |
             LogicalChannel::SchF |

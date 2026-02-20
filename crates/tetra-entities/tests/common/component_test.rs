@@ -1,4 +1,4 @@
-use tetra_config::{CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
+use tetra_config::{CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState};
 use tetra_core::TdmaTime;
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
@@ -46,7 +46,7 @@ pub fn default_test_config(stack_mode: StackMode) -> StackConfig {
         phy_io,
         net: net_info,
         cell: cell_info,
-        brew: CfgBrew::default(),
+        brew: None,
     }
 }
 
@@ -191,7 +191,7 @@ impl ComponentTest {
     }
 
     pub fn run_stack(&mut self, num_ticks: Option<usize>) {
-        self.router.run_stack(num_ticks);
+        self.router.run_stack(num_ticks, None);
     }
 
     pub fn submit_message(&mut self, message: SapMsg) {

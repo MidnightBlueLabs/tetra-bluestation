@@ -47,9 +47,7 @@ impl core::fmt::Display for ChanAllocType {
             ChanAllocType::Replace => write!(f, "Replace"),
             ChanAllocType::Additional => write!(f, "Additional"),
             ChanAllocType::QuitAndGo => write!(f, "QuitAndGo"),
-            ChanAllocType::ReplaceWithCarrierSignalling => {
-                write!(f, "ReplaceWithCarrierSignalling")
-            }
+            ChanAllocType::ReplaceWithCarrierSignalling => write!(f, "ReplaceWithCarrierSignalling"),
         }
     }
 }

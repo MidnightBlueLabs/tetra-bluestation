@@ -356,7 +356,7 @@ pub fn build_subscriber_affiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
     buf
 }
 
-/// Build a subscriber de-affiliation message
+/// Build a subscriber deaffiliation message
 pub fn build_subscriber_deaffiliate(issi: u32, groups: &[u32]) -> Vec<u8> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

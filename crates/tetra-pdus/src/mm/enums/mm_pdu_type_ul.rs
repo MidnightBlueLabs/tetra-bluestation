@@ -75,9 +75,7 @@ impl core::fmt::Display for MmPduTypeUl {
             MmPduTypeUl::UOtar => write!(f, "UOtar"),
             MmPduTypeUl::UInformationProvide => write!(f, "UInformationProvide"),
             MmPduTypeUl::UAttachDetachGroupIdentity => write!(f, "UAttachDetachGroupIdentity"),
-            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => {
-                write!(f, "UAttachDetachGroupIdentityAck")
-            }
+            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => write!(f, "UAttachDetachGroupIdentityAck"),
             MmPduTypeUl::UTeiProvide => write!(f, "UTeiProvide"),
             MmPduTypeUl::UDisableStatus => write!(f, "UDisableStatus"),
             MmPduTypeUl::MmPduFunctionNotSupported => write!(f, "MmPduFunctionNotSupported"),

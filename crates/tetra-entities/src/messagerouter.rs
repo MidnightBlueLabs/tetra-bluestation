@@ -1,4 +1,6 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tetra_config::SharedConfig;
 use tetra_core::{TdmaTime, tetra_entities::TetraEntity};
@@ -181,10 +183,20 @@ impl MessageRouter {
     }
 
     /// Runs the full stack either forever or for a specified number of ticks.
-    pub fn run_stack(&mut self, num_ticks: Option<usize>) {
+    /// If `running` is provided, the loop will exit when the flag is set to false
+    /// (e.g. by a Ctrl+C signal handler), allowing entities to be dropped cleanly.
+    pub fn run_stack(&mut self, num_ticks: Option<usize>, running: Option<Arc<AtomicBool>>) {
         let mut ticks: usize = 0;
 
         loop {
+            // Check if we've been asked to stop (e.g. Ctrl+C)
+            if let Some(ref flag) = running {
+                if !flag.load(Ordering::Relaxed) {
+                    eprintln!("\n[INFO] Shutting down gracefully...");
+                    break;
+                }
+            }
+
             // Send tick_start event
             self.tick_start();
 

@@ -80,9 +80,7 @@ impl core::fmt::Display for MmPduTypeDl {
             MmPduTypeDl::DLocationUpdateReject => write!(f, "DLocationUpdateReject"),
             MmPduTypeDl::DLocationUpdateProceeding => write!(f, "DLocationUpdateProceeding"),
             MmPduTypeDl::DAttachDetachGroupIdentity => write!(f, "DAttachDetachGroupIdentity"),
-            MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement => {
-                write!(f, "DAttachDetachGroupIdentityAck")
-            }
+            MmPduTypeDl::DAttachDetachGroupIdentityAcknowledgement => write!(f, "DAttachDetachGroupIdentityAck"),
             MmPduTypeDl::DMmStatus => write!(f, "DMmStatus"),
             MmPduTypeDl::MmPduFunctionNotSupported => write!(f, "MmPduFunctionNotSupported"),
         }

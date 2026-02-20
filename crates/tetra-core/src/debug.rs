@@ -221,23 +221,25 @@ pub fn get_default_stdout_filter() -> EnvFilter {
         // Quinn / QUIC debug logging
         .add_directive("quinn=info".parse().unwrap())
         .add_directive("quinn_proto=info".parse().unwrap())
+
         // Hide continuous logs from lower layers
         .add_directive("tetra_entities::messagerouter=warn".parse().unwrap())
         .add_directive("tetra_core::bitbuffer=warn".parse().unwrap())
+
         // Phy
         .add_directive("tetra_entities::phy::components=warn".parse().unwrap())
         .add_directive("tetra_entities::phy::phy_bs=info".parse().unwrap())
+
         // Lmac
         .add_directive("tetra_entities::lmac=info".parse().unwrap())
+
         // Umac
-        .add_directive(
-            "tetra_entities::umac::subcomp::slotter=debug"
-                .parse()
-                .unwrap(),
-        )
+        .add_directive("tetra_entities::umac::subcomp::slotter=debug".parse().unwrap())
         .add_directive("tetra_entities::umac=debug".parse().unwrap())
+
         // Llc
         .add_directive("tetra_entities::llc=debug".parse().unwrap())
+
         // Higher layers
         .add_directive("tetra_entities::mle=trace".parse().unwrap())
         .add_directive("tetra_entities::cmce=trace".parse().unwrap())
