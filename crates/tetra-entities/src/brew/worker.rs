@@ -92,6 +92,10 @@ pub struct BrewConfig {
     pub groups: Vec<u32>,
     /// Reconnection delay
     pub reconnect_delay: Duration,
+    /// Enable inbound downlink jitter buffer for Brew voice
+    pub jitter_buffer: bool,
+    /// Emit adaptive jitter telemetry in logs
+    pub jitter_log: bool,
 }
 
 // ─── TLS helper ──────────────────────────────────────────────────

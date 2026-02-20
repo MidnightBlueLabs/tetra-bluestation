@@ -22,6 +22,10 @@ pub struct CfgBrew {
     pub groups: Vec<u32>,
     /// Reconnection delay in seconds
     pub reconnect_delay_secs: u64,
+    /// Enable inbound downlink jitter buffer for Brew voice
+    pub jitter_buffer: bool,
+    /// Emit adaptive jitter telemetry in logs
+    pub jitter_log: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -44,6 +48,12 @@ pub struct CfgBrewDto {
     /// Reconnection delay in seconds
     #[serde(default = "default_brew_reconnect_delay")]
     pub reconnect_delay_secs: u64,
+    /// Enable inbound downlink jitter buffer for Brew voice
+    #[serde(default = "default_brew_jitter_buffer")]
+    pub jitter_buffer: bool,
+    /// Emit adaptive jitter telemetry in logs
+    #[serde(default)]
+    pub jitter_log: bool,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -57,6 +67,10 @@ fn default_brew_reconnect_delay() -> u64 {
     15
 }
 
+fn default_brew_jitter_buffer() -> bool {
+    true
+}
+
 /// Convert a CfgBrewDto (from TOML) into a CfgBrew (used in the stack config)
 pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
     CfgBrew {
@@ -68,5 +82,7 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         issi: src.issi,
         groups: src.groups,
         reconnect_delay_secs: src.reconnect_delay_secs,
+        jitter_buffer: src.jitter_buffer,
+        jitter_log: src.jitter_log,
     }
 }

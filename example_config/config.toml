@@ -173,3 +173,11 @@ voice_service = true  # Not yet implemented but may be needed to keep certain MS
 
 # Reconnection delay (seconds)
 # reconnect_delay_secs = 15
+
+# Optional: enable inbound Brew jitter buffer (recommended for variable-latency links).
+# Set false to use immediate frame injection (legacy behavior).
+# jitter_buffer = true
+
+# Optional: log adaptive jitter buffer playout telemetry for inbound Brew calls.
+# This is written through normal tracing (typically visible in debug_log file).
+# jitter_log = false
