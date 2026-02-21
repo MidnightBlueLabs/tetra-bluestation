@@ -36,6 +36,11 @@ pub struct TetraAddress {
     /// We maintain this field to allow us to pass still-encrypted SSIs up the stack if we want to
     pub encrypted: bool,
 }
+impl PartialEq for TetraAddress {
+    fn eq(&self, other: &Self) -> bool {
+        self.ssi == other.ssi
+    }
+}
 
 impl TetraAddress {
     pub fn new(ssi: u32, ssi_type: SsiType) -> Self {

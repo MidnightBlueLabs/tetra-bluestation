@@ -49,6 +49,10 @@ pub enum CallControl {
     /// Floor released: speaker stopped transmitting (entering hangtime).
     /// Sent to UMAC to enter hangtime signalling mode and to Brew to stop forwarding audio.
     FloorReleased { call_id: u16, ts: u8 },
+    /// Hint from UMAC: likely a rapid PTT re-press (bounce) during hangtime on a traffic timeslot.
+    /// Generated when an MS sends MAC-ACCESS on a traffic timeslot that is currently in hangtime.
+    /// CMCE may choose to immediately re-grant the floor without waiting for full L3 setup.
+    UplinkPttBounce { ts: u8, ssi: u32 },
     /// Call ended: the call is being torn down.
     /// Sent to UMAC to clear hangtime state and to Brew to clean up call tracking.
     CallEnded { call_id: u16, ts: u8 },

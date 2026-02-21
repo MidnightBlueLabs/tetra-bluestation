@@ -150,6 +150,36 @@ impl BsChannelScheduler {
         );
     }
 
+    /// Refresh the hangtime guard window for an already-hanging traffic timeslot.
+    ///
+    /// Useful when we need to keep a slot in traffic mode briefly to transmit urgent
+    /// FACCH/stealing signalling while hangtime is otherwise enabled.
+    pub fn kick_hangtime_guard(&mut self, ts: u8, guard: u8) {
+        if !(1..=4).contains(&ts) {
+            return;
+        }
+        let idx = ts as usize - 1;
+        if !self.hangtime[idx] {
+            return;
+        }
+        if self.hangtime_guard[idx] < guard {
+            self.hangtime_guard[idx] = guard;
+            tracing::debug!(
+                "BsChannelScheduler: hangtime guard refreshed for ts {} (guard={})",
+                ts,
+                guard
+            );
+        }
+    }
+
+    /// Returns true if hangtime mode is enabled for this timeslot (regardless of guard/pending stealing).
+    pub fn hangtime_active(&self, ts: u8) -> bool {
+        if !(1..=4).contains(&ts) {
+            return false;
+        }
+        self.hangtime[ts as usize - 1]
+    }
+
     fn is_hangtime_effective(&self, ts: u8) -> bool {
         let idx = ts as usize - 1;
         if !self.hangtime[idx] {

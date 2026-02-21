@@ -76,6 +76,22 @@ impl BsDefrag {
         self.buffers[ts].insert(ssi, buf);
     }
 
+    /// Discard any active defragmentation buffer for the given SSI in the given timeslot.
+    /// Used for strict ETSI handling of stolen second half-slot fragmentation (23.8.4.1.4).
+    pub fn discard(&mut self, ssi: u32, t: TdmaTime) {
+        let ts = (t.t - 1) as usize;
+        if let Some(mut buf) = self.buffers[ts].remove(&ssi) {
+            tracing::warn!(
+                "defrag_buffer discard ts {} ssi {} (state: {:?}, frags: {})",
+                t.t,
+                ssi,
+                buf.state,
+                buf.num_frags
+            );
+            buf.reset();
+        }
+    }
+
     pub fn insert_next(&mut self, bitbuffer: &mut BitBuffer, ssi: u32, t: TdmaTime) {
         let ts = (t.t - 1) as usize;
         let buf = match self.buffers[ts].get_mut(&ssi) {

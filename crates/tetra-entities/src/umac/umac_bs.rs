@@ -33,9 +33,47 @@ use tetra_saps::{SapMsg, SapMsgInner};
 use crate::lmac::components::scrambler;
 use crate::umac::subcomp::bs_sched::{BsChannelScheduler, PrecomputedUmacPdus, TCH_S_CAP};
 use crate::umac::subcomp::fillbits;
-use crate::{MessageQueue, TetraEntityTrait};
+use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
 
 use super::subcomp::bs_defrag::BsDefrag;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UlSecondHalfDecision {
+    NotStolen,
+    /// Second half slot stolen, no fragmentation (length_ind = 1111102)
+    StolenNoFrag,
+    /// Second half slot stolen, start of fragmentation (length_ind = 1111112)
+    StolenFragStart,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UlSecondHalfHint {
+    decision: UlSecondHalfDecision,
+    /// For C-plane signalling (MAC-DATA) we always have an SSI; for U-plane (MAC-U-SIGNAL) we don't.
+    ssi: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UlSecondHalfCtx {
+    active: bool,
+    time: TdmaTime,
+    ssi: u32,
+    /// True when the first half slot indicated start of fragmentation (length_ind = 1111112) and we must see MAC-END in block2.
+    expect_mac_end: bool,
+    mac_end_seen: bool,
+}
+
+impl Default for UlSecondHalfCtx {
+    fn default() -> Self {
+        Self {
+            active: false,
+            time: TdmaTime::default(),
+            ssi: 0,
+            expect_mac_end: false,
+            mac_end_seen: false,
+        }
+    }
+}
 
 pub struct UmacBs {
     self_component: TetraEntity,
@@ -48,6 +86,8 @@ pub struct UmacBs {
 
     /// Subcomponents
     defrag: BsDefrag,
+    /// Tracks whether the current UL STCH block1 indicated that block2 is stolen (and whether block2 must contain MAC-END).
+    ul_second_half_ctx: [UlSecondHalfCtx; 4],
     // event_label_store: EventLabelStore,
     /// Contains UL/DL scheduling logic
     /// Access to this field is used only by testing code
@@ -66,6 +106,7 @@ impl UmacBs {
             dltime: TdmaTime::default(),
             endpoint_id: 1,
             defrag: BsDefrag::new(),
+            ul_second_half_ctx: [UlSecondHalfCtx::default(); 4],
             // event_label_store: EventLabelStore::new(),
             channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps),
         }
@@ -219,6 +260,33 @@ impl UmacBs {
         queue.push_back(msg);
     }
 
+    /// Signal to LMAC that the 2nd half-slot (block2) in this UL traffic timeslot is also stolen
+    /// for signalling (STCH+STCH).
+    ///
+    /// The indicator is carried in-band (e.g. MAC-DATA length_ind=0x3E/0x3F (1111102/1111112) or
+    /// MAC-U-SIGNAL second_half_stolen=1) and must be acted on before the PHY delivers block2 to LMAC.
+    fn signal_ul_second_half_stolen(queue: &mut MessageQueue, ul_time: TdmaTime) {
+        tracing::info!(
+            "signal_ul_second_half_stolen: notifying LMAC to treat block2 as STCH at {}",
+            ul_time
+        );
+        let req = tetra_saps::tmv::TmvConfigureReq {
+            is_traffic: Some(true),
+            second_half_stolen: Some(true),
+            time: Some(ul_time),
+            ..Default::default()
+        };
+
+        let msg = SapMsg {
+            sap: Sap::TmvSap,
+            src: TetraEntity::Umac,
+            dest: TetraEntity::Lmac,
+            dltime: ul_time,
+            msg: SapMsgInner::TmvConfigureReq(req),
+        };
+        queue.push_prio(msg, MessagePrio::Immediate);
+    }
+
     fn rx_tmv_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::trace!("rx_tmv_prim");
         match message.msg {
@@ -266,6 +334,44 @@ impl UmacBs {
     pub fn rx_tmv_sch(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_tmv_sch");
 
+        let (rx_lchan, rx_block_num, rx_crc_pass, rx_time) = {
+            let SapMsgInner::TmvUnitdataInd(prim) = &message.msg else {
+                panic!()
+            };
+            (prim.logical_channel, prim.block_num, prim.crc_pass, message.dltime)
+        };
+
+        // Strict ETSI TS 100 392-2, 23.8.4.1.4: if the first half slot indicated
+        // length_ind=1111112 (start of fragmentation) and second half stolen, then block2 shall contain MAC-END.
+        // If block2 is not decodeable, or doesn't include MAC-END, we must discard the stored first fragment.
+        if rx_lchan == LogicalChannel::Stch && rx_block_num == PhyBlockNum::Block2 {
+            let ts_idx = (rx_time.t - 1) as usize;
+            let ctx = &mut self.ul_second_half_ctx[ts_idx];
+            if ctx.active && ctx.time == rx_time && ctx.expect_mac_end {
+                if !rx_crc_pass {
+                    tracing::warn!(
+                        "UL STCH block2 CRC fail while expecting MAC-END (ts {} ssi {}); discarding first fragment",
+                        rx_time.t,
+                        ctx.ssi
+                    );
+                    self.defrag.discard(ctx.ssi, rx_time);
+                    *ctx = UlSecondHalfCtx::default();
+                    return;
+                }
+                ctx.mac_end_seen = false;
+            }
+        }
+
+        // If the block failed CRC, we treat it as non-decodable and avoid parsing its contents.
+        // (Except for the special-case above, which already performed the required discard.)
+        if !rx_crc_pass {
+            tracing::debug!("rx_tmv_sch: dropping {:?} {:?} due to CRC fail", rx_lchan, rx_block_num);
+            return;
+        }
+
+        let mut last_second_half_hint: Option<UlSecondHalfHint> = None;
+        let mut any_frag_start_ssi: Option<u32> = None;
+
         // Iterate until no more messages left in mac block
         loop {
             // Extract info from inner block
@@ -290,7 +396,13 @@ impl UmacBs {
 
                     match pdu_type {
                         MacPduType::MacResourceMacData => {
-                            self.rx_mac_data(queue, &mut message);
+                            let hint = self.rx_mac_data(queue, &mut message);
+                            if rx_lchan == LogicalChannel::Stch && rx_block_num == PhyBlockNum::Block1 {
+                                last_second_half_hint = Some(hint);
+                                if hint.decision == UlSecondHalfDecision::StolenFragStart {
+                                    any_frag_start_ssi = hint.ssi;
+                                }
+                            }
                         }
                         MacPduType::MacFragMacEnd => {
                             // Also need third bit; designates mac-frag versus mac-end
@@ -303,7 +415,10 @@ impl UmacBs {
                         MacPduType::SuppMacUSignal => {
                             // STCH determines which subtype is relevant
                             if lchan == LogicalChannel::Stch {
-                                self.rx_ul_mac_u_signal(queue, &mut message);
+                                let hint = self.rx_ul_mac_u_signal(queue, &mut message);
+                                if rx_lchan == LogicalChannel::Stch && rx_block_num == PhyBlockNum::Block1 {
+                                    last_second_half_hint = Some(hint);
+                                }
                             } else {
                                 // Supplementary MAC PDU type
                                 if bits & 1 == 0 {
@@ -350,14 +465,74 @@ impl UmacBs {
                 }
             }
         }
+
+        if rx_lchan == LogicalChannel::Stch && rx_block_num == PhyBlockNum::Block1 {
+            if let Some(hint) = last_second_half_hint {
+                match hint.decision {
+                    UlSecondHalfDecision::StolenNoFrag => {
+                        // The last PDU (or only PDU) in block1 indicated that block2 is stolen.
+                        // If we started defrag due to an earlier 1111112 PDU in the same half-slot, discard it.
+                        if let Some(ssi) = any_frag_start_ssi {
+                            self.defrag.discard(ssi, rx_time);
+                        }
+                        Self::signal_ul_second_half_stolen(queue, rx_time);
+                        self.ul_second_half_ctx[(rx_time.t - 1) as usize] = UlSecondHalfCtx::default();
+                    }
+                    UlSecondHalfDecision::StolenFragStart => {
+                        // Block2 must be STCH and should contain MAC-END with final fragment.
+                        Self::signal_ul_second_half_stolen(queue, rx_time);
+                        if let Some(ssi) = hint.ssi {
+                            let ts_idx = (rx_time.t - 1) as usize;
+                            self.ul_second_half_ctx[ts_idx] = UlSecondHalfCtx {
+                                active: true,
+                                time: rx_time,
+                                ssi,
+                                expect_mac_end: true,
+                                mac_end_seen: false,
+                            };
+                        } else {
+                            tracing::warn!("UL STCH block1 indicated stolen fragmentation but SSI is unknown");
+                        }
+                    }
+                    UlSecondHalfDecision::NotStolen => {
+                        // If we started defrag due to an earlier PDU with 1111112 but it wasn't the last PDU, discard it.
+                        if let Some(ssi) = any_frag_start_ssi {
+                            self.defrag.discard(ssi, rx_time);
+                        }
+                        self.ul_second_half_ctx[(rx_time.t - 1) as usize] = UlSecondHalfCtx::default();
+                    }
+                }
+            }
+        }
+
+        if rx_lchan == LogicalChannel::Stch && rx_block_num == PhyBlockNum::Block2 {
+            let ts_idx = (rx_time.t - 1) as usize;
+            let ctx = &mut self.ul_second_half_ctx[ts_idx];
+            if ctx.active && ctx.time == rx_time && ctx.expect_mac_end {
+                if !ctx.mac_end_seen {
+                    tracing::warn!(
+                        "UL STCH block2 did not include MAC-END (ts {} ssi {}); discarding first fragment",
+                        rx_time.t,
+                        ctx.ssi
+                    );
+                    self.defrag.discard(ctx.ssi, rx_time);
+                }
+                *ctx = UlSecondHalfCtx::default();
+            }
+        }
     }
 
-    fn rx_mac_data(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
+    fn rx_mac_data(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) -> UlSecondHalfHint {
         tracing::trace!("rx_mac_data");
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
         assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+
+        let mut second_half_hint = UlSecondHalfHint {
+            decision: UlSecondHalfDecision::NotStolen,
+            ssi: None,
+        };
 
         let pdu = match MacData::from_bitbuf(&mut prim.pdu) {
             Ok(pdu) => {
@@ -366,40 +541,53 @@ impl UmacBs {
             }
             Err(e) => {
                 tracing::warn!("Failed parsing MacData: {:?} {}", e, prim.pdu.dump_bin());
-                return;
+                return second_half_hint;
             }
         };
 
         // Get addr, either from pdu addr field or by resolving the event label
         if pdu.event_label.is_some() {
             unimplemented_log!("event labels not implemented");
-            return;
+            return second_half_hint;
         }
         let addr = pdu.addr.unwrap();
 
+        second_half_hint.ssi = Some(addr.ssi);
+
         // Compute len and extract flags
-        let (mut pdu_len_bits, is_frag_start, second_half_stolen, is_null_pdu) = {
+        let (mut pdu_len_bits, is_frag_start, is_null_pdu) = {
             if let Some(len_ind) = pdu.length_ind {
                 // We have a lenght ind, either clear length, a stolen slot indication, or a fragmentation start
                 match len_ind {
                     0b000000 => {
                         // Null PDU
-                        (if pdu.event_label.is_some() { 23 } else { 37 }, false, false, true)
+                        (if pdu.event_label.is_some() { 23 } else { 37 }, false, true)
                     }
 
                     0b000010..0b111000 => {
                         // tracing::trace!("rx_mac_data: length_ind {}", len_ind);
-                        (len_ind as usize * 8, false, false, false)
+                        (len_ind as usize * 8, false, false)
                     }
                     0b111110 => {
                         // Second half slot stolen in STCH
-                        unimplemented_log!("rx_mac_data: SECOND HALF SLOT STOLEN IN STCH but signal not implemented");
-                        (prim.pdu.get_len(), false, true, false)
+                        second_half_hint.decision = UlSecondHalfDecision::StolenNoFrag;
+                        tracing::info!(
+                            "UL MAC-DATA indicates 2nd half stolen (length_ind=0x3E) at {}",
+                            message.dltime
+                        );
+                        (prim.pdu.get_len(), false, false)
                     }
                     0b111111 => {
                         // Start of fragmentation
-                        // tracing::trace!("rx_mac_data: frag_start");
-                        (prim.pdu.get_len(), true, false, false)
+                        // In STCH block1, this indicates 1111112 (start of fragmentation with second half stolen).
+                        if prim.logical_channel == LogicalChannel::Stch && prim.block_num == PhyBlockNum::Block1 {
+                            second_half_hint.decision = UlSecondHalfDecision::StolenFragStart;
+                            tracing::info!(
+                                "UL MAC-DATA indicates stolen fragmentation start (length_ind=0x3F) at {}",
+                                message.dltime
+                            );
+                        }
+                        (prim.pdu.get_len(), true, false)
                     }
                     _ => panic!("rx_mac_data: Invalid length_ind {}", len_ind),
                 }
@@ -409,7 +597,7 @@ impl UmacBs {
                     "rx_mac_data: cap_req {}",
                     if pdu.frag_flag.unwrap() { "with frag_start" } else { "" }
                 );
-                (prim.pdu.get_len(), pdu.frag_flag.unwrap(), false, false)
+                (prim.pdu.get_len(), pdu.frag_flag.unwrap(), false)
             }
         };
 
@@ -442,13 +630,13 @@ impl UmacBs {
         if is_null_pdu {
             // TODO not sure if there is scenarios in which we want to pass a null pdu to the LLC
             // tracing::warn!("rx_mac_data: Null PDU not passed to LLC");
-            return;
+            return second_half_hint;
         }
 
         // Decrypt if needed
         if pdu.encrypted {
             unimplemented_log!("rx_mac_data: Encryption mode > 0");
-            return;
+            return second_half_hint;
         }
 
         // Handle reservation if present
@@ -468,9 +656,6 @@ impl UmacBs {
         if is_frag_start {
             // Fragmentation start, add to defragmenter
             self.defrag.insert_first(&mut prim.pdu, message.dltime, addr, None);
-        } else if second_half_stolen {
-            // TODO FIXME maybe not elif here
-            tracing::warn!("rx_mac_data: SECOND HALF SLOT STOLEN IN STCH but not implemented");
         } else {
             // Pass directly to LLC
             let sdu = {
@@ -526,6 +711,8 @@ impl UmacBs {
         prim.pdu.set_raw_end(orig_end);
         prim.pdu.set_raw_pos(prim.pdu.get_raw_start() + pdu_len_bits + num_fill_bits);
         prim.pdu.set_raw_start(prim.pdu.get_raw_pos());
+
+        second_half_hint
     }
 
     fn rx_mac_access(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
@@ -609,6 +796,30 @@ impl UmacBs {
         if pdu.is_null_pdu() {
             // tracing::warn!("rx_mac_access: Null PDU not passed to LLC");
             return;
+        }
+
+        // Aggressive PTT bounce: if this traffic timeslot is in hangtime, a MAC-ACCESS from an SSI
+        // often corresponds to a rapid re-press (many real radios do this before/without a full U-SETUP).
+        // Notify CMCE so it can immediately re-grant the floor.
+        //
+        // IMPORTANT: do NOT refresh the hangtime guard here.
+        // Many radios retry MAC-ACCESS while waiting for a random-access ACK; refreshing the guard
+        // on every retry would keep the slot stuck in traffic mode, preventing SCH/F signalling
+        // (including the ACK itself) from being transmitted — causing the call to stall.
+        if (2..=4).contains(&message.dltime.t) && addr.ssi_type == SsiType::Ssi && self.channel_scheduler.hangtime_active(message.dltime.t) {
+            queue.push_prio(
+                SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Umac,
+                    dest: TetraEntity::Cmce,
+                    dltime: message.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::UplinkPttBounce {
+                        ts: message.dltime.t,
+                        ssi: addr.ssi,
+                    }),
+                },
+                MessagePrio::Immediate,
+            );
         }
 
         // Schedule acknowledgement of this message
@@ -796,6 +1007,15 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+
+        // Mark MAC-END seen for strict STCH+STCH stolen fragmentation handling.
+        if prim.logical_channel == LogicalChannel::Stch && prim.block_num == PhyBlockNum::Block2 {
+            let ts_idx = (message.dltime.t - 1) as usize;
+            let ctx = &mut self.ul_second_half_ctx[ts_idx];
+            if ctx.active && ctx.time == message.dltime && ctx.expect_mac_end && ctx.ssi == slot_owner {
+                ctx.mac_end_seen = true;
+            }
+        }
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, message.dltime) {
             unimplemented!("rx_mac_end_ul: Encryption not supported");
         }
@@ -969,8 +1189,13 @@ impl UmacBs {
 
     /// UL MAC-U-SIGNAL on STCH: extract TM-SDU and forward to LLC → MLE → CMCE.
     /// This carries signaling like U-TX CEASED / U-TX DEMAND on the traffic channel.
-    fn rx_ul_mac_u_signal(&self, queue: &mut MessageQueue, message: &mut SapMsg) {
+    fn rx_ul_mac_u_signal(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) -> UlSecondHalfHint {
         tracing::trace!("rx_ul_mac_u_signal");
+
+        let mut second_half_hint = UlSecondHalfHint {
+            decision: UlSecondHalfDecision::NotStolen,
+            ssi: None,
+        };
 
         // Extract sdu and parse pdu
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
@@ -984,19 +1209,22 @@ impl UmacBs {
             }
             Err(e) => {
                 tracing::warn!("Failed parsing MacUSignal: {:?} {}", e, prim.pdu.dump_bin());
-                return;
+                return second_half_hint;
             }
         };
 
         if pdu.second_half_stolen {
-            tracing::warn!("rx_ul_mac_u_signal: second_half_stolen not implemented");
-            return;
+            second_half_hint.decision = UlSecondHalfDecision::StolenNoFrag;
+            tracing::info!(
+                "UL MAC-U-SIGNAL indicates 2nd half stolen (second_half_stolen=1) at {}",
+                message.dltime
+            );
         }
 
         // The remaining bits after the MAC-U-SIGNAL header are the TM-SDU (LLC PDU)
         if prim.pdu.get_len_remaining() == 0 {
             tracing::trace!("rx_ul_mac_u_signal: empty TM-SDU");
-            return;
+            return second_half_hint;
         }
 
         let sdu = BitBuffer::from_bitbuffer_pos(&prim.pdu);
@@ -1024,6 +1252,8 @@ impl UmacBs {
             }),
         };
         queue.push_back(m);
+
+        second_half_hint
     }
 
     /// TMA-SAP MAC-U-BLCK
@@ -1353,6 +1583,11 @@ impl UmacBs {
             }
             CallControl::CallEnded { ts, .. } => {
                 self.channel_scheduler.set_hangtime(ts, false);
+            }
+
+            // UplinkPttBounce is an UL→CMCE hint.
+            CallControl::UplinkPttBounce { .. } => {
+                tracing::trace!("rx_control: ignoring UplinkPttBounce (not for UMAC)");
             }
 
             // NetworkCall* are for CMCE ↔ Brew, not UMAC (for now)

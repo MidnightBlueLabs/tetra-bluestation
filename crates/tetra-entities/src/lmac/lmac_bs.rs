@@ -52,8 +52,11 @@ pub struct LmacBs {
     /// keep this keyed by timeslot rather than a single "latest" value.
     uplink_phy_chan: [PhysicalChannel; 4],
 
-    /// Signalled by Umac. Set to true when in a traffic burst, the 1st stolen block shows that the 2nd slot is also stolen
-    second_block_stolen: bool,
+    /// Per-timeslot UL indication from Umac that the 2nd block in this timeslot is also stolen (STCH+STCH).
+    ///
+    /// This is needed because the indicator is signalled in-band in the 1st stolen block (UMAC parses it),
+    /// but the LMAC must classify the 2nd block before decoding it.
+    ul_second_block_stolen: [bool; 4],
     // Details about current burst, parsed from BBK broadcast block
     // cur_burst: CurBurst,
 }
@@ -83,7 +86,7 @@ impl LmacBs {
 
             dltime: TdmaTime::default(),
             uplink_phy_chan: [PhysicalChannel::Unallocated; 4],
-            second_block_stolen: false,
+            ul_second_block_stolen: [false; 4],
         }
     }
 
@@ -186,8 +189,26 @@ impl LmacBs {
             return;
         }
 
-        let (decoded, crc_ok) = errorcontrol::decode_tp(lchan, blk.block, self.scrambling_code);
+        // Keep a copy of the raw block so we can fall back to SCH/F decode if needed
+        let train_type = blk.train_type;
+        let burst_type = blk.burst_type;
+        let block_type = blk.block_type;
+        let block_num = blk.block_num;
+
+        let mut type5 = blk.block;
+        type5.seek(0);
+        let mut type5_copy = tetra_core::BitBuffer::from_bitbuffer_pos(&type5);
+        type5_copy.seek(0);
+
+        let (decoded, crc_ok) = errorcontrol::decode_tp(lchan, type5, self.scrambling_code);
         let Some(acelp_bits) = decoded else {
+            // In aggressive hangtime bounce mode we may still see SCH/F signalling bursts on this slot.
+            // Try decoding as full-slot control before giving up.
+            if train_type == TrainingSequence::NormalTrainSeq1 && burst_type == BurstType::NUB {
+                let blk_cp = TpUnitdataInd { train_type, burst_type, block_type, block_num, block: type5_copy };
+                self.rx_blk_control(queue, blk_cp, LogicalChannel::SchF, ul_time);
+                return;
+            }
             tracing::warn!("rx_blk_traffic: decode_tp returned None");
             return;
         };
@@ -234,9 +255,12 @@ impl LmacBs {
             tracing::info!("rx_blk_cp {:?} CRC: {}", lchan, if crc_pass { "ok" } else { "WRONG" });
         }
 
-        // TODO FIXME, for now, we're not passing broken CRC msgs up to Lmac
-        // If we see purpose, we may pass it up in the future
-        if !crc_pass {
+        // NOTE (ETSI + real captures): We MUST sometimes forward CRC-failed STCH blocks to UMAC.
+        // Example: UL STCH+STCH with length_ind=0b111111 (0x3F) starts fragmentation in block1,
+        // and block2 must contain MAC-END. If block2 CRC fails, UMAC must discard the stored
+        // first fragment immediately to avoid stale defrag state and hard-to-debug failures.
+        // For SCH/HU and SCH/F we still drop CRC-failed blocks to avoid noise.
+        if !crc_pass && lchan != LogicalChannel::Stch {
             return;
         }
 
@@ -265,20 +289,29 @@ impl LmacBs {
         tracing::debug!("rx_tp_prim: msg {:?}", message);
 
         let ul_time = message.dltime;
-        let SapMsgInner::TpUnitdataInd(prim) = message.msg else { panic!() };
+        let SapMsgInner::TpUnitdataInd(prim) = message.msg else {
+            panic!()
+        };
+
+        // We move `prim` into rx handlers below. Cache any small copyable fields we still need after.
+        let block_num = prim.block_num;
 
         // let pchan = self.determine_phy_chan_ul();
         let pchan = self.uplink_phy_chan[ul_time.t as usize - 1];
-        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, self.second_block_stolen);
+        let lchan = Self::determine_logical_channel_ul(
+            &prim,
+            pchan == PhysicalChannel::Tp,
+            self.ul_second_block_stolen[ul_time.t as usize - 1],
+        );
 
         // Sanity checks
         assert!(
-            prim.block_num != PhyBlockNum::Block1 || !self.second_block_stolen,
-            "second_block_stolen must be false when receiving block1"
+            prim.block_num != PhyBlockNum::Block1 || !self.ul_second_block_stolen[ul_time.t as usize - 1],
+            "ul_second_block_stolen must be false when receiving block1"
         );
         assert!(
-            pchan == PhysicalChannel::Tp || !self.second_block_stolen,
-            "second_block_stolen must be false when not in a traffic burst"
+            pchan == PhysicalChannel::Tp || !self.ul_second_block_stolen[ul_time.t as usize - 1],
+            "ul_second_block_stolen must be false when not in a traffic burst"
         );
 
         match lchan {
@@ -290,13 +323,37 @@ impl LmacBs {
                 self.rx_blk_control(queue, prim, lchan, ul_time);
             }
         }
+
+        // If the 2nd block was classified as stolen, clear the flag after consuming it
+        // so it can't leak into subsequent blocks within the same tick.
+        if block_num == PhyBlockNum::Block2 {
+            self.ul_second_block_stolen[ul_time.t as usize - 1] = false;
+        }
     }
 
-    // fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
-    //     tracing::trace!("rx_tmv_configure_req");
-    //     let SapMsgInner::TmvConfigureReq(_prim) = &mut message.msg else {panic!()};
-    //     unimplemented_log!("rx_tmv_configure_req");
-    // }
+    fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
+        tracing::trace!("rx_tmv_configure_req");
+        let SapMsgInner::TmvConfigureReq(prim) = message.msg else {
+            panic!()
+        };
+
+        // Update scrambling code if requested
+        if let Some(sc) = prim.scrambling_code {
+            self.scrambling_code = sc;
+        }
+
+        // The second-half-stolen indicator is signalled in-band in the 1st stolen block,
+        // but the LMAC must classify the 2nd block before decoding it.
+        if let Some(true) = prim.second_half_stolen {
+            let ts = prim.time.unwrap_or(message.dltime).t;
+            if (1..=4).contains(&ts) {
+                tracing::info!("LMAC: ul_second_block_stolen set for ts {} (time {})", ts, prim.time.unwrap_or(message.dltime));
+                self.ul_second_block_stolen[ts as usize - 1] = true;
+            } else {
+                tracing::warn!("rx_tmv_configure_req: invalid ts {} for second_half_stolen", ts);
+            }
+        }
+    }
 
     /// Request from Umac to transmit a message
     fn rx_tmv_unitdata_req_slot(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -382,9 +439,9 @@ impl LmacBs {
         tracing::trace!("rx_tmv_prim");
 
         match message.msg {
-            // SapMsgInner::TmvConfigureReq(_) => {
-            //     self.rx_tmv_configure_req(queue, message);
-            // }
+            SapMsgInner::TmvConfigureReq(_) => {
+                self.rx_tmv_configure_req(queue, message);
+            }
             SapMsgInner::TmvUnitdataReq(_) => {
                 self.rx_tmv_unitdata_req_slot(queue, message);
             }
@@ -443,6 +500,6 @@ impl TetraEntityTrait for LmacBs {
 
     fn tick_start(&mut self, _queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
-        self.second_block_stolen = false;
+        self.ul_second_block_stolen = [false; 4];
     }
 }

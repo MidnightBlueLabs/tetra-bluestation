@@ -87,7 +87,18 @@ struct UlForwardedCall {
     dest_gssi: u32,
     /// Number of voice frames forwarded
     frame_count: u64,
+
+    /// Whether the UL transmission is currently active (PTT pressed)
+    tx_active: bool,
+
+    /// When tx_active transitioned to false (used to debounce short PTT re-presses)
+    tx_stopped_since: Option<Instant>,
 }
+
+// When a radio releases PTT, we enter hangtime. Users often re-press quickly.
+// If we send GROUP_IDLE immediately, the subsequent GROUP_TX restart adds latency.
+// Debounce short re-presses by delaying GROUP_IDLE a little.
+const UL_PTT_IDLE_DEBOUNCE_MS: u64 = 700;
 
 #[derive(Debug)]
 struct JitterFrame {
@@ -651,6 +662,8 @@ impl TetraEntityTrait for BrewEntity {
         self.process_events(queue);
         // Feed one buffered frame at each traffic playout opportunity.
         self.drain_jitter_playout(queue);
+        // Debounce short UL PTT re-presses by delaying GROUP_IDLE.
+        self.expire_ul_ptt_idle_debounce();
         // Expire hanging calls that have exceeded hangtime
         self.expire_hanging_calls(queue);
     }
@@ -714,7 +727,43 @@ impl BrewEntity {
             return;
         }
 
-        // Generate a UUID for this Brew session
+        // If we already have a forwarded UL call on this timeslot, it might be a quick re-PTT
+        // during hangtime. In that case, avoid tearing down / restarting the Brew session.
+        if let Some(existing) = self.ul_forwarded.get_mut(&ts) {
+            // If it's the same group, treat as resume (speaker may change)
+            if existing.dest_gssi == dest_gssi {
+                tracing::info!(
+                    "BrewEntity: resuming local UL call during hangtime: ts={} call_id={}→{} src={}→{} gssi={} uuid={}",
+                    ts,
+                    existing.call_id,
+                    call_id,
+                    existing.source_issi,
+                    source_issi,
+                    dest_gssi,
+                    existing.uuid
+                );
+                existing.call_id = call_id;
+                existing.source_issi = source_issi;
+                existing.tx_active = true;
+                existing.tx_stopped_since = None;
+                return;
+            }
+
+            // Different group on same ts: close old session first
+            tracing::warn!(
+                "BrewEntity: replacing UL forwarded call on ts={} old_gssi={} new_gssi={}, sending GROUP_IDLE for old uuid={}",
+                ts,
+                existing.dest_gssi,
+                dest_gssi,
+                existing.uuid
+            );
+            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
+                uuid: existing.uuid,
+                cause: 0,
+            });
+        }
+
+        // New forwarded UL call
         let uuid = Uuid::new_v4();
         tracing::info!(
             "BrewEntity: forwarding local call to TetraPack: call_id={} src={} gssi={} ts={} uuid={}",
@@ -743,13 +792,15 @@ impl BrewEntity {
                 source_issi,
                 dest_gssi,
                 frame_count: 0,
+                tx_active: true,
+                tx_stopped_since: None,
             },
         );
     }
 
     /// Handle notification that a local UL call has ended.
     fn handle_local_call_tx_stopped(&mut self, call_id: u16, ts: u8) {
-        if let Some(fwd) = self.ul_forwarded.remove(&ts) {
+        if let Some(fwd) = self.ul_forwarded.get_mut(&ts) {
             if fwd.call_id != call_id {
                 tracing::warn!(
                     "BrewEntity: call_id mismatch on ts={}: expected {} got {}",
@@ -758,20 +809,19 @@ impl BrewEntity {
                     call_id
                 );
             }
+            fwd.tx_active = false;
+            fwd.tx_stopped_since = Some(Instant::now());
             tracing::info!(
-                "BrewEntity: local call transmission stopped, sending GROUP_IDLE to TetraPack: uuid={} frames={}",
+                "BrewEntity: UL tx stopped on ts={} (debounce {}ms before GROUP_IDLE): uuid={} frames={}",
+                ts,
+                UL_PTT_IDLE_DEBOUNCE_MS,
                 fwd.uuid,
                 fwd.frame_count
             );
-            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
-                uuid: fwd.uuid,
-                cause: 0, // Normal release
-            });
         }
     }
 
     fn handle_local_call_end(&mut self, call_id: u16, ts: u8) {
-        // Check if ul_forwarded entry still exists (might have been removed by handle_local_call_tx_stopped)
         if let Some(fwd) = self.ul_forwarded.remove(&ts) {
             if fwd.call_id != call_id {
                 tracing::warn!(
@@ -781,13 +831,46 @@ impl BrewEntity {
                     call_id
                 );
             }
-            tracing::debug!(
-                "BrewEntity: local call ended (already sent GROUP_IDLE during tx_stopped): uuid={} frames={}",
+
+            tracing::info!(
+                "BrewEntity: local UL call ended, sending GROUP_IDLE to TetraPack: uuid={} frames={}",
                 fwd.uuid,
                 fwd.frame_count
             );
-        } else {
-            tracing::debug!("BrewEntity: local call ended on ts={} (already cleaned up during tx_stopped)", ts);
+            let _ = self.command_sender.send(BrewCommand::SendGroupIdle { uuid: fwd.uuid, cause: 0 });
+        }
+    }
+
+    fn expire_ul_ptt_idle_debounce(&mut self) {
+        if self.ul_forwarded.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        let mut to_close: Vec<u8> = Vec::new();
+
+        for (&ts, fwd) in self.ul_forwarded.iter() {
+            if fwd.tx_active {
+                continue;
+            }
+            let Some(since) = fwd.tx_stopped_since else {
+                continue;
+            };
+            if now.duration_since(since) >= std::time::Duration::from_millis(UL_PTT_IDLE_DEBOUNCE_MS) {
+                to_close.push(ts);
+            }
+        }
+
+        for ts in to_close {
+            if let Some(fwd) = self.ul_forwarded.remove(&ts) {
+                tracing::info!(
+                    "BrewEntity: debounce expired, sending GROUP_IDLE for ts={} uuid={} frames={}",
+                    ts,
+                    fwd.uuid,
+                    fwd.frame_count
+                );
+                let _ = self.command_sender.send(BrewCommand::SendGroupIdle { uuid: fwd.uuid, cause: 0 });
+            }
         }
     }
 
