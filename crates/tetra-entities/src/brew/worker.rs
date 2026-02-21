@@ -92,8 +92,6 @@ pub struct BrewConfig {
     pub groups: Vec<u32>,
     /// Reconnection delay
     pub reconnect_delay: Duration,
-    /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
-    pub jitter_initial_latency_frames: u8,
 }
 
 // ─── TLS helper ──────────────────────────────────────────────────

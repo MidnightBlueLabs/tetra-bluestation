@@ -30,6 +30,7 @@ use tetra_saps::{
 
 use crate::{
     MessageQueue,
+    MessagePrio,
     cmce::components::circuit_mgr::{CircuitMgr, CircuitMgrCmd},
 };
 
@@ -69,6 +70,15 @@ struct ActiveCall {
     tx_active: bool,
     /// When PTT was released (for hangtime). None if transmitting.
     hangtime_start: Option<TdmaTime>,
+    /// Last time UL voice activity was detected on the traffic channel.
+    /// Used to auto-enter hangtime if the floor was granted but voice disappeared.
+    last_tx_activity: Option<TdmaTime>,
+
+    /// Last time we sent an aggressive bounce re-grant (anti-spam / avoid "biting" state)
+    last_bounce_grant: Option<TdmaTime>,
+
+    /// Last time we requested a MAC-layer slot grant due to a bounce (separate anti-spam).
+    last_bounce_mac_grant: Option<TdmaTime>,
 }
 
 impl CcBsSubentity {
@@ -441,6 +451,12 @@ impl CcBsSubentity {
         };
         let calling_party = prim.received_tetra_address;
 
+        // Extract UL message routing info (handle, link_id, endpoint_id) for
+        // individually-addressed responses.
+        let ul_handle = prim.handle;
+        let ul_link_id = prim.link_id;
+        let ul_endpoint_id = prim.endpoint_id;
+
         let pdu = match USetup::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
                 tracing::debug!("<- U-SETUP {:?}", pdu);
@@ -466,6 +482,156 @@ impl CcBsSubentity {
         let dest_gssi = dest_gssi as u32;
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
 
+        // === Fast re-PTT / late-entry behavior ===
+        // Real radios may send U-SETUP again when re-pressing PTT during hangtime (instead of U-TX DEMAND).
+        // If we already have an active call for this GSSI, reuse it rather than allocating a new circuit.
+        // - If the call is in hangtime: treat as an implicit floor request and grant immediately.
+        // - If someone else is transmitting: treat as late-entry join (no floor).
+        if let Some((existing_call_id, ts, usage, in_hangtime, someone_talking)) = self
+            .active_calls
+            .iter()
+            .find(|(_, c)| c.dest_gssi == dest_gssi)
+            .map(|(&call_id, c)| {
+                (
+                    call_id,
+                    c.ts,
+                    c.usage,
+                    !c.tx_active && c.hangtime_start.is_some(),
+                    c.tx_active,
+                )
+            })
+        {
+
+            tracing::info!(
+                "rx_u_setup: reusing existing call for gssi={} call_id={} ts={} (hangtime={} tx_active={})",
+                dest_gssi,
+                existing_call_id,
+                ts,
+                in_hangtime,
+                someone_talking
+            );
+
+            // 1) Always respond to the calling MS so it doesn't timeout.
+            self.send_d_call_proceeding(queue, &message, &pdu, existing_call_id);
+
+            // 2) Send D-CONNECT to the calling MS with correct routing (handle/link/endpoint)
+            // and with channel allocation for the already-active circuit.
+            let mut timeslots = [false; 4];
+            timeslots[ts as usize - 1] = true;
+
+            let tx_grant = if in_hangtime {
+                TransmissionGrant::Granted
+            } else {
+                TransmissionGrant::GrantedToOtherUser
+            };
+
+            let d_connect = DConnect {
+                call_identifier: existing_call_id,
+                call_time_out: CallTimeout::T5m,
+                hook_method_selection: pdu.hook_method_selection,
+                simplex_duplex_selection: pdu.simplex_duplex_selection,
+                transmission_grant: tx_grant,
+                transmission_request_permission: false,
+                call_ownership: false,
+                call_priority: None,
+                basic_service_information: None,
+                temporary_address: None,
+                notification_indicator: None,
+                facility: None,
+                proprietary: None,
+            };
+
+            tracing::info!("-> {:?}", d_connect);
+            let mut connect_sdu = BitBuffer::new_autoexpand(30);
+            d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+            connect_sdu.seek(0);
+
+            queue.push_back(SapMsg {
+                sap: Sap::LcmcSap,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Mle,
+                dltime: message.dltime,
+                msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                    sdu: connect_sdu,
+                    handle: ul_handle,
+                    endpoint_id: ul_endpoint_id,
+                    link_id: ul_link_id,
+                    layer2service: 0,
+                    pdu_prio: 0,
+                    layer2_qos: 0,
+                    stealing_permission: false,
+                    stealing_repeats_flag: false,
+                    chan_alloc: Some(CmceChanAllocReq {
+                        usage: Some(usage),
+                        alloc_type: ChanAllocType::Replace,
+                        carrier: None,
+                        timeslots,
+                        ul_dl_assigned: UlDlAssignment::Both,
+                    }),
+                    main_address: calling_party,
+                }),
+            });
+
+            // 3) If this is re-PTT during hangtime, immediately grant the floor and exit hangtime.
+            if in_hangtime {
+                if let Some(call) = self.active_calls.get_mut(&existing_call_id) {
+                    call.tx_active = true;
+                    call.hangtime_start = None;
+                    call.source_issi = calling_party.ssi;
+                    call.last_tx_activity = Some(self.dltime);
+
+                    // Update routing for local calls so subsequent individually-addressed messages
+                    // (if any) go to the right MS.
+                    if let CallOrigin::Local { caller_addr } = &mut call.origin {
+                        *caller_addr = calling_party;
+                    }
+                }
+
+                // Inform the group who now has the floor.
+                self.send_d_tx_granted_facch(queue, existing_call_id, calling_party.ssi, dest_gssi, ts);
+
+                // Resume traffic mode (exit hangtime) in UMAC.
+                queue.push_prio(
+                    SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Umac,
+                    dltime: message.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                        call_id: existing_call_id,
+                        source_issi: calling_party.ssi,
+                        dest_gssi,
+                        ts,
+                    }),
+                    },
+                    MessagePrio::Immediate,
+                );
+
+                // Notify Brew (speaker change) only if the call is local.
+                if self.config.config().brew.is_some() {
+                    if let Some(call) = self.active_calls.get(&existing_call_id) {
+                        if matches!(call.origin, CallOrigin::Local { .. }) {
+                            queue.push_back(SapMsg {
+                                sap: Sap::Control,
+                                src: TetraEntity::Cmce,
+                                dest: TetraEntity::Brew,
+                                dltime: message.dltime,
+                                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                                    call_id: existing_call_id,
+                                    source_issi: calling_party.ssi,
+                                    dest_gssi,
+                                    ts,
+                                }),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Existing call handled.
+            return;
+        }
+
         // Allocate circuit (DL+UL for group call)
         let circuit = match {
             let mut state = self.config.state_write();
@@ -484,7 +650,7 @@ impl CcBsSubentity {
         };
 
         tracing::info!(
-            "rx_u_setup: call from ISSI {} to GSSI {} → ts={} call_id={} usage={}",
+            "rx_u_setup: call from ISSI {} to GSSI {} â ts={} call_id={} usage={}",
             calling_party.ssi,
             dest_gssi,
             circuit.ts,
@@ -498,16 +664,6 @@ impl CcBsSubentity {
         // Build channel allocation timeslot mask for this call
         let mut timeslots = [false; 4];
         timeslots[circuit.ts as usize - 1] = true;
-
-        // Extract UL message routing info (handle, link_id, endpoint_id) for
-        // individually-addressed responses. These are needed so MLE can route
-        // the response back to the correct radio via the established LLC link.
-        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
-        let ul_handle = prim.handle;
-        let ul_link_id = prim.link_id;
-        let ul_endpoint_id = prim.endpoint_id;
 
         // === 1) Send D-CALL-PROCEEDING to the calling MS (individually addressed) ===
         // This acknowledges the U-SETUP and keeps the radio from timing out.
@@ -594,7 +750,7 @@ impl CcBsSubentity {
         let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), message.dltime, dest_addr);
         queue.push_back(setup_msg);
 
-        // Track the active local call — caller is granted the floor, so tx_active = true
+        // Track the active local call â caller is granted the floor, so tx_active = true
         self.active_calls.insert(
             circuit.call_id,
             ActiveCall {
@@ -607,11 +763,33 @@ impl CcBsSubentity {
                 usage: circuit.usage,
                 tx_active: true,
                 hangtime_start: None,
+                last_tx_activity: Some(self.dltime),
+                last_bounce_grant: None,
+                last_bounce_mac_grant: None,
             },
         );
 
-        // Notify Brew entity about this local call if Brew is loaded.
-        // It can then forward to TetraPack if the group is subscribed
+        // Notify UMAC of initial floor ownership for this new local call.
+        // Without this, UMAC can't map TS1 MAC-ACCESS during hangtime back to the traffic slot,
+        // and rapid re-PTT becomes very slow on many real terminals.
+        queue.push_prio(
+            SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: message.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id: circuit.call_id,
+                    source_issi: calling_party.ssi,
+                    dest_gssi,
+                    ts: circuit.ts,
+                }),
+            },
+            MessagePrio::Immediate,
+        );
+
+        // Notify Brew entity about floor grant on this local call if Brew is loaded.
+        // It can then forward to TetraPack if the group is subscribed.
         if self.config.config().brew.is_some() {
             let msg = SapMsg {
                 sap: Sap::Control,
@@ -713,9 +891,22 @@ impl CcBsSubentity {
 
     /// Check if any active calls in hangtime have expired, and if so, release them
     fn check_hangtime_expiry(&mut self, queue: &mut MessageQueue) {
-        // Hangtime: ~5 seconds = 5 * 18 * 4 = 360 frames (approximately)
-        const HANGTIME_FRAMES: i32 = 5 * 18 * 4;
+        // Hangtime: keep the traffic slot reserved briefly after PTT release.
+        //
+        // Field behaviour (Motorola MS): long hangtime makes group switching feel “sticky” and
+        // blocks rapid re-PTT because the MS won’t always restart the full L3 flow while the call
+        // is still hanging. Shortening this improves user experience and reduces channel
+        // occupancy.
+        //
+        // 1 second = 1 * 18 * 4 = 72 frames (approximately)
+        const HANGTIME_FRAMES: i32 = 1 * 18 * 4;
+        // Voice inactivity timeout: if floor is granted but no UL voice for ~2 seconds,
+        // auto-enter hangtime.  This prevents the "stuck floor" situation where the MS
+        // already released PTT (U-TX CEASED was processed) but a spurious UplinkTchActivity
+        // immediately re-granted the floor.
+        const VOICE_INACTIVITY_FRAMES: i32 = 2 * 18 * 4;
 
+        // 1) Expire hangtime â release call
         let expired: Vec<u16> = self
             .active_calls
             .iter()
@@ -732,6 +923,70 @@ impl CcBsSubentity {
         for call_id in expired {
             tracing::info!("Hangtime expired for call_id={}, releasing", call_id);
             self.release_call(queue, call_id);
+        }
+
+        // 2) Detect voice inactivity â auto-enter hangtime
+        // If tx_active == true but last_tx_activity is older than the threshold,
+        // the MS stopped transmitting without us receiving U-TX CEASED properly.
+        let stale: Vec<(u16, u8, u32)> = self
+            .active_calls
+            .iter()
+            .filter_map(|(&call_id, call)| {
+                if call.tx_active {
+                    if let Some(last_act) = call.last_tx_activity {
+                        if last_act.age(self.dltime) > VOICE_INACTIVITY_FRAMES {
+                            return Some((call_id, call.ts, call.dest_gssi));
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for (call_id, ts, dest_gssi) in stale {
+            tracing::info!(
+                "Voice inactivity timeout for call_id={} ts={}, auto-entering hangtime",
+                call_id,
+                ts
+            );
+            if let Some(call) = self.active_calls.get_mut(&call_id) {
+                call.tx_active = false;
+                call.hangtime_start = Some(self.dltime);
+                call.last_tx_activity = None;
+            }
+
+            // Send D-TX CEASED via FACCH so group members hear the "floor free" beep
+            self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
+
+            // Notify UMAC to enter hangtime signalling mode
+            queue.push_prio(
+                SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Umac,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+                },
+                MessagePrio::Immediate,
+            );
+
+            // Notify Brew
+            if self.config.config().brew.is_some() {
+                let is_local = self
+                    .active_calls
+                    .get(&call_id)
+                    .map(|c| matches!(c.origin, CallOrigin::Local { .. }))
+                    .unwrap_or(false);
+                if is_local {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Brew,
+                        dltime: self.dltime,
+                        msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+                    });
+                }
+            }
         }
     }
 
@@ -815,7 +1070,7 @@ impl CcBsSubentity {
         //     tracing::error!("Basic service information not supported: {}", pdu.basic_service_information);
         //     return;
         // };
-        // request_to_transmit_send_data can be false for speech group calls — the MS
+        // request_to_transmit_send_data can be false for speech group calls â the MS
         // implicitly requests to transmit by initiating the call. No action needed.
         if pdu.clir_control != 0 {
             unimplemented_log!("clir_control not supported: {}", pdu.clir_control);
@@ -906,14 +1161,17 @@ impl CcBsSubentity {
         queue.push_back(msg);
 
         // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
-        // This stops downlink TCH fill frames (zeros) and enables UL CommonAndAssigned so MS can request the floor.
-        queue.push_back(SapMsg {
+        // This stops downlink TCH fill frames and enables UL CommonAndAssigned so MS can request the floor.
+        queue.push_prio(
+            SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
             dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-        });
+            },
+            MessagePrio::Immediate,
+        );
 
         // Notify Brew to stop forwarding audio for local calls
         if self.config.config().brew.is_some() {
@@ -962,6 +1220,7 @@ impl CcBsSubentity {
         call.tx_active = true;
         call.hangtime_start = None;
         call.source_issi = requesting_party.ssi;
+        call.last_tx_activity = Some(self.dltime);
 
         // Update caller_addr for local calls
         if let CallOrigin::Local { caller_addr } = &mut call.origin {
@@ -1000,7 +1259,8 @@ impl CcBsSubentity {
         queue.push_back(msg);
 
         // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
-        queue.push_back(SapMsg {
+        queue.push_prio(
+            SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
@@ -1011,7 +1271,9 @@ impl CcBsSubentity {
                 dest_gssi: dest_addr.ssi,
                 ts,
             }),
-        });
+            },
+            MessagePrio::Immediate,
+        );
 
         // Notify Brew only for local calls (speaker change = new FloorGranted for new speaker)
         if self.config.config().brew.is_some() {
@@ -1076,6 +1338,14 @@ impl CcBsSubentity {
             CallControl::NetworkCallEnd { brew_uuid } => {
                 self.rx_network_call_end(queue, brew_uuid);
             }
+            CallControl::UplinkPttBounce { ts, ssi } => {
+                self.rx_uplink_ptt_bounce(queue, ts, ssi);
+            }
+
+            CallControl::UplinkTchActivity { ts, ssi } => {
+                self.rx_uplink_tch_activity(queue, ts, ssi);
+            }
+
             _ => {
                 tracing::warn!("Unexpected CallControl message: {:?}", call_control);
             }
@@ -1097,6 +1367,7 @@ impl CcBsSubentity {
             call.source_issi = source_issi;
             call.tx_active = true;
             call.hangtime_start = None;
+            call.last_tx_activity = Some(self.dltime);
 
             if let CallOrigin::Network { brew_uuid: old_uuid } = call.origin {
                 // Update UUID if different (shouldn't happen but handle it)
@@ -1117,19 +1388,23 @@ impl CcBsSubentity {
             // Send D-TX GRANTED via FACCH to notify radios of new speaker
             self.send_d_tx_granted_facch(queue, call_id_val, source_issi, dest_gssi, ts);
 
-            // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                    call_id: call_id_val,
-                    source_issi,
-                    dest_gssi,
-                    ts,
-                }),
-            });
+            // Notify UMAC to exit hangtime signalling mode immediately (network calls can otherwise
+            // produce tail-noise during hangtime because UMAC would keep sending TCH fill frames).
+            queue.push_prio(
+                SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Umac,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                        call_id: call_id_val,
+                        source_issi,
+                        dest_gssi,
+                        ts,
+                    }),
+                },
+                MessagePrio::Immediate,
+            );
 
             // Respond to Brew with existing call resources
             if self.config.config().brew.is_some() {
@@ -1146,7 +1421,10 @@ impl CcBsSubentity {
                     }),
                 });
             }
+
+            // Speaker change handled on existing call; do not allocate a new circuit.
             return;
+
         }
 
         // New network call - allocate circuit
@@ -1276,7 +1554,28 @@ impl CcBsSubentity {
                 usage,
                 tx_active: true,
                 hangtime_start: None,
+                last_tx_activity: Some(self.dltime),
+                last_bounce_grant: None,
+                last_bounce_mac_grant: None,
             },
+        );
+
+        // Notify UMAC of initial floor ownership for this new network call.
+        // This keeps UMAC's last_floor_owner in sync for hangtime / rapid re-PTT mapping.
+        queue.push_prio(
+            SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id,
+                    source_issi,
+                    dest_gssi,
+                    ts,
+                }),
+            },
+            MessagePrio::Immediate,
         );
 
         // Respond to Brew with allocated resources
@@ -1329,25 +1628,246 @@ impl CcBsSubentity {
             // Send D-TX CEASED via FACCH
             self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
 
-            // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-            });
+            // Notify UMAC to enter hangtime signalling mode for network-originated calls.
+            // Without this, UMAC keeps sending TCH fill frames and some radios decode this as tail-noise.
+            queue.push_prio(
+                SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Umac,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+                },
+                MessagePrio::Immediate,
+            );
         } else {
             // Already in hangtime or idle, release immediately
             self.release_call(queue, call_id);
         }
     }
 
+    /// Handle aggressive PTT bounce hint from UMAC: a MAC-ACCESS was observed on a traffic slot
+    /// that is currently in hangtime. Many real radios do this on a rapid re-press, before/without
+    /// sending a full U-SETUP.
+    fn rx_uplink_ptt_bounce(&mut self, queue: &mut MessageQueue, ts: u8, ssi: u32) {
+        // Find a LOCAL call currently in hangtime on this timeslot
+        let Some((call_id, dest_gssi)) = self
+            .active_calls
+            .iter()
+            .find(|(_, c)| c.ts == ts && c.hangtime_start.is_some() && matches!(c.origin, CallOrigin::Local { .. }))
+            .map(|(id, c)| (*id, c.dest_gssi))
+        else {
+            tracing::trace!("rx_uplink_ptt_bounce: no local hangtime call on ts {} (ssi={})", ts, ssi);
+            return;
+        };
+
+        // Only treat this as a bounce if it is the same speaker (or the original local caller).
+        // Otherwise we require the normal L3 floor request path (U-TX DEMAND / U-SETUP).
+        let allowed = self.active_calls.get(&call_id).map(|c| {
+            if c.source_issi == ssi {
+                true
+            } else {
+                match &c.origin {
+                    CallOrigin::Local { caller_addr } => caller_addr.ssi == ssi,
+                    CallOrigin::Network { .. } => false,
+                }
+            }
+        }).unwrap_or(false);
+
+        if !allowed {
+            tracing::debug!(
+                "rx_uplink_ptt_bounce: ignoring MAC-ACCESS during hangtime from ssi={} (call_id={}, ts={}) - speaker mismatch",
+                ssi,
+                call_id,
+                ts
+            );
+            return;
+        }
+
+        // IMPORTANT: Do NOT transition CMCE/UMAC out of hangtime purely based on MAC-ACCESS.
+        // Many terminals retry MAC-ACCESS while waiting for ACK/GRANT; treating that as a real
+        // floor acquisition can "bite" the group call into a stuck state and may starve TS1 MM.
+        // We only do MAC-layer acceleration here. The authoritative transition happens when
+        // UMAC reports actual uplink TCH activity (UplinkTchActivity).
+
+        // Request a MAC-layer slot grant quickly (some terminals wait for this before sending L3/traffic).
+        // Anti-spam: do not issue this request on every MAC-ACCESS retry.
+        if let Some(call) = self.active_calls.get_mut(&call_id) {
+            if let Some(last) = call.last_bounce_mac_grant {
+                // 8 timeslots â 2 frames.
+                if last.age(self.dltime) >= 0 && last.age(self.dltime) < 8 {
+                    tracing::debug!(
+                        "rx_uplink_ptt_bounce: suppressing repeated MAC grant request (call_id={}, ts={}, ssi={}, age_ts={})",
+                        call_id,
+                        ts,
+                        ssi,
+                        last.age(self.dltime)
+                    );
+                } else {
+                    call.last_bounce_mac_grant = Some(self.dltime);
+                    queue.push_prio(
+                        SapMsg {
+                            sap: Sap::Control,
+                            src: TetraEntity::Cmce,
+                            dest: TetraEntity::Umac,
+                            dltime: self.dltime,
+                            msg: SapMsgInner::CmceCallControl(CallControl::PttBounceGrant { ts, ssi }),
+                        },
+                        MessagePrio::Immediate,
+                    );
+                }
+            } else {
+                call.last_bounce_mac_grant = Some(self.dltime);
+                queue.push_prio(
+                    SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Umac,
+                        dltime: self.dltime,
+                        msg: SapMsgInner::CmceCallControl(CallControl::PttBounceGrant { ts, ssi }),
+                    },
+                    MessagePrio::Immediate,
+                );
+            }
+        }
+
+        // Anti-spam for D-TX GRANTED: do not keep injecting stealing blocks, or hangtime never becomes effective.
+        // Use a longer window than the MAC grant request.
+        let should_send_dtx_granted = if let Some(call) = self.active_calls.get_mut(&call_id) {
+            if let Some(last) = call.last_bounce_grant {
+                // 64 timeslots â 16 frames (~900 ms).
+                if last.age(self.dltime) >= 0 && last.age(self.dltime) < 64 {
+                    tracing::debug!(
+                        "rx_uplink_ptt_bounce: suppressing repeated bounce D-TX GRANTED (call_id={}, ts={}, ssi={}, age_ts={})",
+                        call_id,
+                        ts,
+                        ssi,
+                        last.age(self.dltime)
+                    );
+                    false
+                } else {
+                    call.last_bounce_grant = Some(self.dltime);
+                    true
+                }
+            } else {
+                call.last_bounce_grant = Some(self.dltime);
+                true
+            }
+        } else {
+            false
+        };
+
+        if should_send_dtx_granted {
+            tracing::info!(
+                "rx_uplink_ptt_bounce: rapid re-PTT detected from ssi={} on call_id={} ts={} - sending immediate D-TX GRANTED",
+                ssi,
+                call_id,
+                ts
+            );
+
+            // Inform the group who has the floor (FACCH/stealing)
+            self.send_d_tx_granted_facch(queue, call_id, ssi, dest_gssi, ts);
+
+            // NOTE: Do NOT refresh hangtime here.  MAC-ACCESS capacity requests are
+            // only a *hint* of potential re-PTT. The authoritative floor acquisition
+            // happens via U-SETUP or U-TX DEMAND (handled by rx_u_setup / rx_u_tx_demand),
+            // which properly transition the call out of hangtime.
+            // Refreshing hangtime on every PttBounce created an infinite loop when normal
+            // signalling (BlAck) was misidentified as re-PTT attempts.
+        }
+    }
+
+    /// Handle authoritative uplink traffic activity while in hangtime.
+    ///
+    /// This is triggered by UMAC as soon as it successfully decodes uplink TCH bits (including
+    /// half-slot TCH on STCH+TCH). At this point we can safely transition the call back into
+    /// an active, floor-granted state.
+    fn rx_uplink_tch_activity(&mut self, queue: &mut MessageQueue, ts: u8, ssi: u32) {
+        let Some((call_id, dest_gssi, hangtime_start)) = self
+            .active_calls
+            .iter()
+            .find(|(_, c)| c.ts == ts && c.hangtime_start.is_some())
+            .map(|(id, c)| (*id, c.dest_gssi, c.hangtime_start.unwrap()))
+        else {
+            tracing::trace!("rx_uplink_tch_activity: no hangtime call on ts {} (ssi={})", ts, ssi);
+            return;
+        };
+
+        // Ignore UplinkTchActivity that occurs immediately after entering hangtime.
+        // After U-TX CEASED, there can be residual RF energy for ~1 frame, which can
+        // look like UL voice. But UMAC emits UplinkTchActivity only after a small debounce
+        // (typically ~2 frames), so this cooldown must be short; otherwise we can drop
+        // the only UL activity hint and the call stays stuck in hangtime.
+        const HANGTIME_ENTRY_COOLDOWN_SLOTS: i32 = 4; // 1 frame (~4 timeslots)
+        let age = hangtime_start.age(self.dltime);
+        if age >= 0 && age < HANGTIME_ENTRY_COOLDOWN_SLOTS {
+            tracing::debug!(
+                "rx_uplink_tch_activity: ignoring spurious UL activity on ts={} ssi={} (hangtime entered {}ts ago, cooldown={}ts)",
+                ts, ssi, age, HANGTIME_ENTRY_COOLDOWN_SLOTS
+            );
+            return;
+        }
+
+        // Transition to active talker state.
+        if let Some(call) = self.active_calls.get_mut(&call_id) {
+            call.tx_active = true;
+            call.hangtime_start = None;
+            call.source_issi = ssi;
+            call.last_tx_activity = Some(self.dltime);
+        }
+
+        tracing::info!(
+            "rx_uplink_tch_activity: UL voice detected for call_id={} ts={} ssi={} -> FloorGranted",
+            call_id,
+            ts,
+            ssi
+        );
+
+        // Notify UMAC to exit hangtime signalling mode immediately.
+        queue.push_prio(
+            SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id,
+                    source_issi: ssi,
+                    dest_gssi,
+                    ts,
+                }),
+            },
+            MessagePrio::Immediate,
+        );
+
+        // Inform the group who has the floor (FACCH/stealing).
+        self.send_d_tx_granted_facch(queue, call_id, ssi, dest_gssi, ts);
+
+        // Notify Brew so UL forwarding can resume quickly.
+        if self.config.config().brew.is_some() {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id,
+                    source_issi: ssi,
+                    dest_gssi,
+                    ts,
+                }),
+            });
+        }
+    }
+
+
     /// Send D-TX GRANTED via FACCH stealing
     fn send_d_tx_granted_facch(&mut self, queue: &mut MessageQueue, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
         let pdu = DTxGranted {
             call_identifier: call_id,
-            transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
+            // Broadcast grant: radios decide if they are the talker by comparing transmitting_party_address.
+            // Use Granted here so the talker will immediately open the mic on re-PTT / speaker change.
+            transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
             transmission_request_permission: false,
             encryption_control: false,
             reserved: false,

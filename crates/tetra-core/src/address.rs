@@ -28,7 +28,7 @@ impl core::fmt::Display for SsiType {
     }
 }
 
-#[derive(Copy, Debug, Clone)]
+#[derive(Copy, Debug, Clone, PartialEq)]
 pub struct TetraAddress {
     pub ssi: u32,
     pub ssi_type: SsiType,

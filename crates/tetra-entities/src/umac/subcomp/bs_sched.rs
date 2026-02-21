@@ -1,4 +1,5 @@
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, unimplemented_log};
+use tetra_core::address::SsiType;
 use tetra_saps::{
     control::call_control::Circuit,
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
@@ -140,6 +141,9 @@ impl BsChannelScheduler {
 
         let idx = ts as usize - 1;
         self.hangtime[idx] = active;
+        // Keep a very short guard window so that any in-flight FACCH/stealing (e.g. D-TX CEASED)
+        // can still be transmitted before we switch the whole slot back to SCH/F signalling.
+        // A long guard produces audible tail-noise on some radios.
         self.hangtime_guard[idx] = if active { 1 } else { 0 };
 
         tracing::info!(
@@ -149,6 +153,46 @@ impl BsChannelScheduler {
             self.hangtime_guard[idx]
         );
     }
+
+    /// Refresh the hangtime guard window for an already-hanging traffic timeslot.
+    ///
+    /// Used for aggressive PTT bounce: we briefly keep the slot in traffic mode so that
+    /// in-flight FACCH/stealing (e.g. D-TX GRANTED) can be transmitted even if hangtime is
+    /// otherwise effective (SCH/F signalling).
+    pub fn kick_hangtime_guard(&mut self, ts: u8, guard: u8) {
+        if !(1..=4).contains(&ts) {
+            return;
+        }
+        let idx = ts as usize - 1;
+        if !self.hangtime[idx] {
+            return;
+        }
+        if self.hangtime_guard[idx] < guard {
+            self.hangtime_guard[idx] = guard;
+            tracing::debug!("BsChannelScheduler: hangtime guard refreshed for ts {} (guard={})", ts, guard);
+        }
+    }
+
+    /// Returns true if hangtime mode is enabled for this timeslot (regardless of guard/pending stealing).
+    pub fn hangtime_active(&self, ts: u8) -> bool {
+        if !(1..=4).contains(&ts) {
+            return false;
+        }
+        self.hangtime[ts as usize - 1]
+    }
+
+    /// Returns true if hangtime is *effective* for this timeslot (guard elapsed and no pending stealing).
+    ///
+    /// During the hangtime guard window we keep the slot in traffic mode to flush any in-flight
+    /// FACCH/stealing blocks. In that period, UL TCH frames can still arrive (pipeline/dup bursts) and
+    /// must NOT be treated as a real re-PTT.
+    pub fn hangtime_effective(&self, ts: u8) -> bool {
+        if !(1..=4).contains(&ts) {
+            return false;
+        }
+        self.is_hangtime_effective(ts)
+    }
+
 
     fn is_hangtime_effective(&self, ts: u8) -> bool {
         let idx = ts as usize - 1;
@@ -386,8 +430,52 @@ impl BsChannelScheduler {
     /// Registers that we should transmit a MAC-RESOURCE or similar with a grant, somewhere this tick
     pub fn dl_enqueue_grant(&mut self, ts: u8, addr: TetraAddress, grant: BasicSlotgrant) {
         tracing::debug!("dl_enqueue_grant: ts {} enqueueing PDU {:?} for addr {}", ts, grant, addr);
+
+        fn merge_cap(a: BasicSlotgrantCapAlloc, b: BasicSlotgrantCapAlloc) -> BasicSlotgrantCapAlloc {
+            use BasicSlotgrantCapAlloc::*;
+            match (a, b) {
+                (FirstSubslotGranted, _) | (_, FirstSubslotGranted) => FirstSubslotGranted,
+                (SecondSubslotGranted, _) | (_, SecondSubslotGranted) => SecondSubslotGranted,
+                _ => if a.into_raw() >= b.into_raw() { a } else { b },
+            }
+        }
+
+        fn merge_delay(a: BasicSlotgrantGrantingDelay, b: BasicSlotgrantGrantingDelay) -> BasicSlotgrantGrantingDelay {
+            if a.into_raw() <= b.into_raw() { a } else { b }
+        }
+
+        let slot = ts as usize - 1;
+        // Coalesce duplicate grants for the same address. Sending multiple BasicSlotgrant elements
+        // (e.g. FirstSubslotGranted + Grant3Slots) in a short window can confuse or even crash some terminals.
+        if let Some(i) = self.dltx_queues[slot]
+            .iter()
+            .position(|e| matches!(e, DlSchedElem::Grant(a, _) if *a == addr))
+        {
+            if let DlSchedElem::Grant(_, old) = self.dltx_queues[slot].remove(i) {
+                let merged = BasicSlotgrant {
+                    capacity_allocation: merge_cap(old.capacity_allocation, grant.capacity_allocation),
+                    granting_delay: merge_delay(old.granting_delay, grant.granting_delay),
+                };
+                self.dltx_queues[slot].insert(i, DlSchedElem::Grant(addr, merged));
+                return;
+            }
+        }
+        if let Some(i) = self.dltx_next_slot_queue
+            .iter()
+            .position(|e| matches!(e, DlSchedElem::Grant(a, _) if *a == addr))
+        {
+            if let DlSchedElem::Grant(_, old) = self.dltx_next_slot_queue.remove(i) {
+                let merged = BasicSlotgrant {
+                    capacity_allocation: merge_cap(old.capacity_allocation, grant.capacity_allocation),
+                    granting_delay: merge_delay(old.granting_delay, grant.granting_delay),
+                };
+                self.dltx_next_slot_queue.insert(i, DlSchedElem::Grant(addr, merged));
+                return;
+            }
+        }
+
         let elem = DlSchedElem::Grant(addr, grant);
-        self.dltx_queues[ts as usize - 1].push(elem);
+        self.dltx_queues[slot].push(elem);
     }
 
     pub fn dl_enqueue_random_access_ack(&mut self, ts: u8, addr: TetraAddress) {
@@ -422,6 +510,17 @@ impl BsChannelScheduler {
     fn dl_enqueue_tma_frag_next_frame(&mut self, fragger: BsFragger) {
         tracing::debug!("dl_enqueue_tma_frag_next_frame: enqueueing {:?}", fragger);
         let elem = DlSchedElem::FragBuf(fragger);
+        // If the fragger hasn't started yet (no MAC header emitted), it likely failed due to
+        // insufficient remaining capacity in the current SCH/F. Put it at the front so it can
+        // get a clean slot next frame. This is especially important for group-call signalling
+        // with ChanAlloc elements, which has a relatively large MAC header.
+        if let DlSchedElem::FragBuf(ref f) = elem {
+            if !f.has_started() && (f.is_group_addr() || f.has_chan_alloc()) {
+                self.dltx_next_slot_queue.insert(0, elem);
+                return;
+            }
+        }
+
         self.dltx_next_slot_queue.push(elem);
     }
 
@@ -623,7 +722,23 @@ impl BsChannelScheduler {
     fn dl_build_block_from_signalling_schedule(&mut self, ts: TdmaTime) -> Option<BitBuffer> {
         let mut buf_opt = None;
 
+        // If any grant/ACK is pending, keep the SCH/F block focused on delivering them.
+        // This avoids starving random-access responses behind fragmented call-control / MM traffic.
+        let mut sent_grant_or_ack = false;
+
         while !self.dltx_queues[ts.t as usize - 1].is_empty() {
+            // Once we've started sending grants/ACKs, stop after we've drained all such items.
+            // Leave other signalling queued for the next frame.
+            if sent_grant_or_ack {
+                let q = &self.dltx_queues[ts.t as usize - 1];
+                if !q
+                    .iter()
+                    .any(|e| matches!(e, DlSchedElem::Grant(_, _) | DlSchedElem::RandomAccessAck(_)))
+                {
+                    break;
+                }
+            }
+
             let opt = self.dl_take_prioritized_sched_item(ts);
 
             match opt {
@@ -631,6 +746,36 @@ impl BsChannelScheduler {
                     match sched_elem {
                         DlSchedElem::Broadcast(_) => {
                             unimplemented_log!("finalize_ts_for_tick: Broadcast scheduling not implemented");
+                        }
+
+                        DlSchedElem::Grant(addr, grant) => {
+                            // Dedicated minimal MAC-RESOURCE for random-access response.
+                            tracing::debug!(
+                                "dl_build_block_from_signalling_schedule: sending GRANT on ts {} for {}",
+                                ts.t,
+                                addr
+                            );
+                            let mut buf = buf_opt.unwrap_or_else(|| BitBuffer::new(SCH_F_CAP));
+                            let pdu = Self::dl_make_minimal_resource(&addr, Some(grant), true);
+                            let mut fragger = BsFragger::new(pdu, BitBuffer::new(0));
+                            let _ = fragger.get_next_chunk(&mut buf);
+                            buf_opt = Some(buf);
+                            sent_grant_or_ack = true;
+                        }
+
+                        DlSchedElem::RandomAccessAck(addr) => {
+                            // Dedicated minimal MAC-RESOURCE for random-access response.
+                            tracing::debug!(
+                                "dl_build_block_from_signalling_schedule: sending ACK on ts {} for {}",
+                                ts.t,
+                                addr
+                            );
+                            let mut buf = buf_opt.unwrap_or_else(|| BitBuffer::new(SCH_F_CAP));
+                            let pdu = Self::dl_make_minimal_resource(&addr, None, true);
+                            let mut fragger = BsFragger::new(pdu, BitBuffer::new(0));
+                            let _ = fragger.get_next_chunk(&mut buf);
+                            buf_opt = Some(buf);
+                            sent_grant_or_ack = true;
                         }
 
                         DlSchedElem::Resource(pdu, sdu, repeat) => {
@@ -676,7 +821,6 @@ impl BsChannelScheduler {
                                 ts.t
                             );
                         }
-                        _ => panic!("finalize_ts_for_tick: Unexpected DlSchedElem type: {:?}", sched_elem),
                     }
                 }
                 None => {
@@ -714,8 +858,10 @@ impl BsChannelScheduler {
             // This is normal during hangtime or between voice bursts.
             BitBuffer::new(TCH_S_CAP)
         };
-
-        // Check for FACCH/stealing: take a queued Stealing item (highest priority signaling)
+        // On a traffic slot we can only transmit signalling using FACCH/stealing (STCH half-slot).
+        // IMPORTANT: Do not schedule TS1 control-plane grants/ACKs on a traffic TS.
+        // Those must be kept on TS1, otherwise other MS (e.g. switching groups) can miss
+        // their MAC-ACCESS acknowledgements and end up re-attaching ("disconnect").
         let stch_opt = {
             let q = &mut self.dltx_queues[ts.t as usize - 1];
             if let Some(i) = q.iter().position(|e| matches!(e, DlSchedElem::Stealing(_))) {
@@ -728,15 +874,24 @@ impl BsChannelScheduler {
             }
         };
 
-        // Warn about other queued signaling that can't be sent via stealing yet
+        // If something else remains queued on a traffic timeslot, it cannot be transmitted in traffic mode.
+        // Do NOT force SCH/F here (it will break an active call). Instead, leave it queued and log.
         if stch_opt.is_none() && !self.dltx_queues[ts.t as usize - 1].is_empty() {
-            tracing::warn!("dl_build_traffic_block: queued signaling on ts {} but no stealing item", ts.t);
+            tracing::warn!(
+                "dl_build_traffic_block: queued non-stealing signaling on active traffic ts {} (len={})",
+                ts.t,
+                self.dltx_queues[ts.t as usize - 1].len()
+            );
         }
 
         (tch_buf, stch_opt)
     }
 
-    /// Return first queued grant.
+    // NOTE: we intentionally do not promote non-stealing DL signaling into FACCH/stealing here.
+    // During hangtime we switch to SCH/F signalling (after a short guard), where MAC-RESOURCE/grants/acks
+    // can be transmitted normally without disrupting traffic.
+
+    /// Return first queued grant / random-access ACK.
     /// If none; return first in-progress fragmented message.
     /// If none; return first to-be-transmitted resource.
     /// If none, return None.
@@ -750,9 +905,51 @@ impl BsChannelScheduler {
         let slot = ts.t as usize - 1;
         let q = self.dltx_queues.get_mut(slot).unwrap();
 
-        // Return grants first
-        if let Some(i) = q.iter().position(|e| matches!(e, DlSchedElem::Grant(_, _))) {
+        // Return grants / random-access ACKs first
+        if let Some(i) = q
+            .iter()
+            .position(|e| matches!(e, DlSchedElem::Grant(_, _) | DlSchedElem::RandomAccessAck(_)))
+        {
             return Some(q.remove(i));
+        }
+
+        // On the primary control channel (TS1), do not let long-running group-call signalling
+        // (often fragmented) starve one-shot individual MM/location-update responses. If an MS
+        // doesn't get timely MM acks during group switching, it may time out and re-attach.
+        if ts.t == 1 {
+            // 0) If a group/ChanAlloc fragger hasn't even started yet, it *must* get a clean SCH/F.
+            // Otherwise it can end up in an endless does_not_fit loop (cap < hdr), which in turn
+            // delays call-control and can make MS UX look like "PTT stuck".
+            if let Some(i) = q.iter().position(|e| match e {
+                DlSchedElem::FragBuf(f) => !f.has_started() && (f.is_group_addr() || f.has_chan_alloc()),
+                _ => false,
+            }) {
+                return Some(q.remove(i));
+            }
+
+            // 1) One-shot MAC-RESOURCE to an individual address first
+            if let Some(i) = q.iter().position(|e| match e {
+                DlSchedElem::Resource(pdu, _, repeat) if *repeat == 0 => match &pdu.addr {
+                    Some(a) => a.ssi_type != SsiType::Gssi,
+                    None => true,
+                },
+                _ => false,
+            }) {
+                return Some(q.remove(i));
+            }
+
+            // 2) Any remaining one-shot MAC-RESOURCE next (incl. group/broadcast)
+            if let Some(i) = q.iter().position(|e| matches!(e, DlSchedElem::Resource(_, _, repeat) if *repeat == 0)) {
+                return Some(q.remove(i));
+            }
+
+            // 3) Prefer continuing individual fragments before group fragments
+            if let Some(i) = q.iter().position(|e| match e {
+                DlSchedElem::FragBuf(f) => !f.is_group_addr(),
+                _ => false,
+            }) {
+                return Some(q.remove(i));
+            }
         }
 
         // Return FragBufs next
@@ -802,8 +999,11 @@ impl BsChannelScheduler {
             false
         };
 
+        // NOTE: do NOT force SCH/F on an active traffic timeslot.
+        // Urgent control-plane items (random access ACK / grants) are promoted to FACCH/stealing instead.
         let dl_is_traffic = dl_circuit_active && !hang_effective;
-        let ul_is_traffic = ul_circuit_active && !hang_effective;
+        let ul_is_traffic = ul_circuit_active;
+
 
         // Build the block for this timeslot with anything scheduled (traffic or signalling)
         // For traffic timeslots, also check for FACCH/stealing (STCH half-slot)
@@ -852,8 +1052,8 @@ impl BsChannelScheduler {
             }
         } else {
             // Signalling mode (either no circuit, or hangtime on an allocated timeslot)
-            // Integrate all grants and random access acks into resources (either existing or new)
-            self.dl_integrate_sched_elems_for_timeslot(ts);
+            // NOTE: do not merge grants / random-access ACKs into existing resources here.
+            // They are kept as dedicated items so they can be prioritized and sent promptly.
 
             // Fill our signalling block with scheduled items (if any)
             let buf = self.dl_build_block_from_signalling_schedule(ts);

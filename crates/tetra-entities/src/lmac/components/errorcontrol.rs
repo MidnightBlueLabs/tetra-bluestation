@@ -377,6 +377,100 @@ pub fn decode_tp(lchan: LogicalChannel, type5_block: BitBuffer, scrambling_code:
     (Some(result), crc_ok)
 }
 
+/// Decode traffic plane from a **half-slot** Type-5 block (216 bits) corresponding to the
+/// **second** half of an uplink STCH+TCH burst (Normal training sequence 2, block2 = TCH).
+///
+/// The first half-slot is stolen for signalling and is not available. We treat the missing first
+/// half as erasures (0xFF) and still run the decoder. This typically yields a BFI (CRC fail) for
+/// the first frame(s), which is acceptable at PTT boundaries and avoids long re-PTT stalls.
+pub fn decode_tp_halfslot_block2(
+    lchan: LogicalChannel,
+    mut type5_half_block2: BitBuffer,
+    scrambling_code: u32,
+) -> (Option<BitBuffer>, bool) {
+    assert_eq!(lchan, LogicalChannel::TchS);
+    let params = errorcontrol_params::get_params(lchan);
+
+    // Extract received (scrambled) type5 bits for the 2nd half-slot.
+    type5_half_block2.seek(0);
+    let mut type5_half_arr = [0u8; MAX_TYPE345_HALFSLOT_BITS];
+    type5_half_block2.to_bitarr(&mut type5_half_arr);
+
+    // Generate full scrambling sequence and descramble only the second half.
+    let mut scr_bits = [0u8; MAX_TYPE345_BITS];
+    scrambler::tetra_scramb_get_bits(scrambling_code, &mut scr_bits[0..params.type345_bits]);
+
+    // Build type4 array with erasures for the missing first half (0xFF), and real bits for the second half.
+    let mut type4_arr = [0xFFu8; MAX_TYPE345_BITS];
+    for i in 0..MAX_TYPE345_HALFSLOT_BITS {
+        type4_arr[MAX_TYPE345_HALFSLOT_BITS + i] = type5_half_arr[i] ^ scr_bits[MAX_TYPE345_HALFSLOT_BITS + i];
+    }
+
+    // ── Matrix de-interleave type4 → type3 (reverse 24×18 transpose)
+    let mut type3_arr = [0xFFu8; MAX_TYPE345_BITS];
+    interleaver::matrix_deinterleave(24, 18, &type4_arr, &mut type3_arr);
+
+    // ── Split type3 into UEP classes and decode ────────────────────
+    const CLASS0_BITS: usize = 102;
+    const CLASS1_BITS: usize = 112;
+    const CLASS2_BITS: usize = 60;
+    const CLASS2_TYPE2: usize = 72; // 60 data + 8 CRC + 4 tail
+    const CLASS1_TYPE3: usize = 168; // punctured output size
+    const CLASS2_TYPE3: usize = 162; // punctured output size
+
+    let mut type1_arr = [0u8; MAX_TYPE1_BITS];
+
+    // Class 0: UNCODED (102 bits) — copy directly, mapping erasures to 0.
+    for (dst, &src) in type1_arr[0..CLASS0_BITS].iter_mut().zip(type3_arr[0..CLASS0_BITS].iter()) {
+        *dst = if src == 0xFF { 0 } else { src };
+    }
+
+    // Class 1 + Class 2: decoded together as one continuous Viterbi stream.
+    let crc_ok;
+    {
+        let class1_type3 = &type3_arr[CLASS0_BITS..CLASS0_BITS + CLASS1_TYPE3];
+        let mut mother_class1 = [0xFFu8; CLASS1_BITS * 3];
+        convenc::tetra_rcpc_depunct(RcpcPunctMode::Rate112_168, class1_type3, CLASS1_TYPE3, &mut mother_class1);
+
+        let class2_type3 = &type3_arr[CLASS0_BITS + CLASS1_TYPE3..CLASS0_BITS + CLASS1_TYPE3 + CLASS2_TYPE3];
+        let mut mother_class2 = [0xFFu8; CLASS2_TYPE2 * 3];
+        convenc::tetra_rcpc_depunct(RcpcPunctMode::Rate72_162, class2_type3, CLASS2_TYPE3, &mut mother_class2);
+
+        let mut combined_mother = [0xFFu8; (CLASS1_BITS + CLASS2_TYPE2) * 3];
+        combined_mother[..CLASS1_BITS * 3].copy_from_slice(&mother_class1);
+        combined_mother[CLASS1_BITS * 3..].copy_from_slice(&mother_class2);
+
+        let soft: Vec<viterbi::SoftBit> = combined_mother
+            .iter()
+            .map(|&b| match b {
+                0x00 => -1i8,
+                0x01 => 1i8,
+                0xFF => 0i8,
+                _ => 0i8,
+            })
+            .collect();
+
+        let decoder = viterbi::TetraCodecViterbiDecoder::new();
+        let decoded = decoder.decode(&soft);
+
+        type1_arr[CLASS0_BITS..CLASS0_BITS + CLASS1_BITS].copy_from_slice(&decoded[..CLASS1_BITS]);
+
+        let class2_decoded = &decoded[CLASS1_BITS..];
+        let data = &class2_decoded[0..CLASS2_BITS];
+        let received_crc = &class2_decoded[CLASS2_BITS..CLASS2_BITS + 8];
+        let expected_crc = speech_crc(data);
+        crc_ok = expected_crc[..] == received_crc[..];
+
+        type1_arr[CLASS0_BITS + CLASS1_BITS..CLASS0_BITS + CLASS1_BITS + CLASS2_BITS].copy_from_slice(data);
+    }
+
+    let channel_bits: [u8; 274] = type1_arr[0..274].try_into().unwrap();
+    let codec_bits = tch_reorder::channel_to_codec(&channel_bits);
+    let result = BitBuffer::from_bitarr(&codec_bits);
+
+    (Some(result), crc_ok)
+}
+
 /// Encodes AACH message from type1 to type5 bits
 pub fn encode_aach(buf: BitBuffer, scrambling_code: u32) -> BitBuffer {
     let mut type1 = buf;

@@ -33,6 +33,24 @@ impl BsFragger {
         }
     }
 
+    /// True if this fragger targets a group address (GSSI). Used to avoid starving MM responses on TS1.
+    pub fn is_group_addr(&self) -> bool {
+        matches!(
+            self.resource.addr,
+            Some(a) if a.ssi_type == tetra_core::address::SsiType::Gssi
+        )
+    }
+
+    /// True if the MAC-RESOURCE header has already been emitted (i.e. fragmentation is in progress).
+    pub fn has_started(&self) -> bool {
+        self.mac_hdr_is_written
+    }
+
+    /// True if the MAC-RESOURCE carries a ChanAlloc element.
+    pub fn has_chan_alloc(&self) -> bool {
+        self.resource.chan_alloc_element.is_some()
+    }
+
     /// Writes MAC-RESOURCE to dest_buf, starting fragmentation if needed.
     /// Then, writes as many SDU bits as possible.
     /// Returns true if the entire SDU was consumed, false if the PDU is fragmented
@@ -97,6 +115,17 @@ impl BsFragger {
             false
         } else {
             // We need to start fragmentation. No fill bits are needed
+            // Avoid starting fragmentation with a tiny first fragment. Some terminals are sensitive to
+            // interleaved / micro-fragmented MAC-RESOURCE sequences (especially group-call signalling with ChanAlloc).
+            let sdu_bits_avail = slot_cap_bits - hdr_len_bits;
+            let min_first_frag_bits = if self.is_group_addr() || self.resource.chan_alloc_element.is_some() { MIN_SLOT_CAP_FOR_FRAG } else { 0 };
+            if sdu_bits_avail < min_first_frag_bits {
+                tracing::debug!(
+                    "-> frag_start_too_small (cap={} hdr={} sdu_bits_avail={} min={}), trying again next frame",
+                    slot_cap_bits, hdr_len_bits, sdu_bits_avail, min_first_frag_bits
+                );
+                return false;
+            }
             self.resource.length_ind = 0b111111; // Start of fragmentation
             self.resource.fill_bits = false;
             assert!(num_fill_bits == 0, "Got {} fill bits upon frag start", num_fill_bits);

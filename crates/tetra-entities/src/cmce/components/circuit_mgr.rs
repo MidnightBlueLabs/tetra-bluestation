@@ -311,8 +311,10 @@ impl CircuitMgr {
                 if let Some(circuit) = circuit {
                     let age = circuit.ts_created.age(dltime);
 
-                    // Send D-SETUP for first 4 frames after circuit creation
-                    if age < 4 * 4 {
+                    // Send D-SETUP bursts briefly after circuit creation, but keep the
+                    // control channel usable for other MS (e.g. group switching / registration).
+                    // 2 frames is enough for robustness without starving random access ACKs.
+                    if age < 2 * 4 {
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));

@@ -16,33 +16,48 @@ pub enum MessagePrio {
 }
 
 pub struct MessageQueue {
-    messages: VecDeque<SapMsg>,
+    immediate: VecDeque<SapMsg>,
+    normal: VecDeque<SapMsg>,
 }
 
 impl MessageQueue {
     pub fn new() -> Self {
-        Self { messages: VecDeque::new() }
+        Self {
+            immediate: VecDeque::new(),
+            normal: VecDeque::new(),
+        }
     }
 
     pub fn push_back(&mut self, message: SapMsg) {
-        self.messages.push_back(message);
+        self.normal.push_back(message);
     }
 
     pub fn push_prio(&mut self, message: SapMsg, prio: MessagePrio) {
         match prio {
             MessagePrio::Immediate => {
-                // Insert at the front for immediate processing
-                self.messages.push_front(message);
+                // Keep FIFO order within the immediate priority queue.
+                self.immediate.push_back(message);
             }
             MessagePrio::Normal => {
-                // Insert at the back for normal processing
-                self.messages.push_back(message);
+                self.normal.push_back(message);
             }
         }
     }
 
     pub fn pop_front(&mut self) -> Option<SapMsg> {
-        self.messages.pop_front()
+        if let Some(m) = self.immediate.pop_front() {
+            Some(m)
+        } else {
+            self.normal.pop_front()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.immediate.is_empty() && self.normal.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.immediate.len() + self.normal.len()
     }
 }
 
@@ -63,7 +78,7 @@ impl MessageRouter {
     pub fn new(config: SharedConfig) -> Self {
         Self {
             entities: HashMap::new(),
-            msg_queue: MessageQueue { messages: VecDeque::new() },
+            msg_queue: MessageQueue::new(),
             _config: config,
             ts: TdmaTime::default(),
         }
@@ -125,13 +140,13 @@ impl MessageRouter {
     }
 
     pub fn deliver_all_messages(&mut self) {
-        while !self.msg_queue.messages.is_empty() {
+        while !self.msg_queue.is_empty() {
             self.deliver_message();
         }
     }
 
     pub fn get_msgqueue_len(&self) -> usize {
-        self.msg_queue.messages.len()
+        self.msg_queue.len()
     }
 
     pub fn tick_start(&mut self) {

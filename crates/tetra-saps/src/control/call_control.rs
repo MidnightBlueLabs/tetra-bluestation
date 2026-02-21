@@ -38,19 +38,43 @@ pub enum CallControl {
     /// Umac forwards to Lmac
     /// Contains (Direction, timeslot) of associated circuit
     Close(Direction, u8),
-    /// Floor granted: a speaker has been given transmission permission.
-    /// Sent to UMAC to exit hangtime (resume traffic mode) and to Brew to start forwarding voice.
+    /// Floor control: notifies UMAC (and optionally Brew) that the floor was granted to
+    /// `source_issi` on `ts` for `dest_gssi`.
+    ///
+    /// Applies to both locally-originated calls and network-originated (Brew) calls.
     FloorGranted {
         call_id: u16,
         source_issi: u32,
         dest_gssi: u32,
         ts: u8,
     },
-    /// Floor released: speaker stopped transmitting (entering hangtime).
-    /// Sent to UMAC to enter hangtime signalling mode and to Brew to stop forwarding audio.
+
+    /// Floor control: notifies UMAC (and optionally Brew) that the floor was released
+    /// (entering hangtime) for `call_id` on `ts`.
+    ///
+    /// Applies to both locally-originated calls and network-originated (Brew) calls.
     FloorReleased { call_id: u16, ts: u8 },
-    /// Call ended: the call is being torn down.
-    /// Sent to UMAC to clear hangtime state and to Brew to clean up call tracking.
+    /// Hint from UMAC: likely a rapid PTT re-press (bounce) during hangtime on a traffic timeslot.
+    /// Generated when an MS sends MAC-ACCESS on a traffic timeslot that is currently in hangtime.
+    /// CMCE may choose to immediately re-grant the floor without waiting for full L3 setup.
+    UplinkPttBounce { ts: u8, ssi: u32 },
+
+    /// Notification from UMAC to CMCE: uplink traffic activity detected on a traffic channel.
+    ///
+    /// Sent when UMAC receives UL TCH (speech/data) while CMCE considers the call in hangtime.
+    /// CMCE should treat this as evidence that the MS has re-acquired the floor.
+    UplinkTchActivity { ts: u8, ssi: u32 },
+
+    /// Request from CMCE to UMAC: issue a fast downlink slot-grant (MAC layer) for `ssi` on `ts`.
+    ///
+    /// Used to support rapid re-PTT during hangtime when some terminals only transmit MAC-ACCESS
+    /// retries and wait for a MAC grant/ack before they send full L3 signalling or traffic.
+    ///
+    /// This does NOT change CMCE call state by itself; it is purely a MAC-layer acceleration.
+    PttBounceGrant { ts: u8, ssi: u32 },
+
+    /// Call ended: notifies UMAC that the call is fully released and any hangtime state
+    /// should be cleared.
     CallEnded { call_id: u16, ts: u8 },
     /// Request CMCE to start a network-initiated group call
     /// Sent by Brew when TetraPack sends GROUP_TX

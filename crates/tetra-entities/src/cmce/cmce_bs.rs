@@ -1,10 +1,11 @@
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{Sap, TdmaTime, unimplemented_log};
-use tetra_saps::{SapMsg, SapMsgInner};
+use tetra_core::{BitBuffer, Sap, TdmaTime, unimplemented_log};
+use tetra_saps::{SapMsg, SapMsgInner, lcmc::LcmcMleUnitdataReq};
 
 use tetra_pdus::cmce::enums::cmce_pdu_type_ul::CmcePduTypeUl;
+use tetra_pdus::cmce::pdus::cmce_function_not_supported::CmceFunctionNotSupported;
 
 use super::subentities::cc_bs::CcBsSubentity;
 use super::subentities::sds_bs::SdsBsSubentity;
@@ -62,8 +63,46 @@ impl CmceBs {
                 // self.sds.route_xx_deliver(_queue, message);
             }
             CmcePduTypeUl::UFacility => {
-                unimplemented_log!("{:?}", pdu_type);
-                // self.ss.route_xx_deliver(_queue, message);
+                tracing::info!("Received UFacility from MS — replying with CMCE-FUNCTION-NOT-SUPPORTED");
+                // Build CMCE-FUNCTION-NOT-SUPPORTED PDU to let the MS know
+                // we don't support supplementary services, so it doesn't wait/freeze.
+                let fnsp = CmceFunctionNotSupported {
+                    not_supported_pdu_type: CmcePduTypeUl::UFacility.into_raw() as u8,
+                    call_identifier_present: false,
+                    call_identifier: None,
+                    function_not_supported_pointer: 0, // entire PDU not supported
+                    length_of_received_pdu_extract: None,
+                    received_pdu_extract: None,
+                };
+                let mut sdu = BitBuffer::new_autoexpand(32);
+                if let Err(e) = fnsp.to_bitbuf(&mut sdu) {
+                    tracing::warn!("Failed to serialize CmceFunctionNotSupported: {:?}", e);
+                    return;
+                }
+                sdu.seek(0);
+                let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
+                    return;
+                };
+                let resp = SapMsg {
+                    sap: Sap::LcmcSap,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Mle,
+                    dltime: message.dltime,
+                    msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                        sdu,
+                        handle: prim.handle,
+                        endpoint_id: prim.endpoint_id,
+                        link_id: prim.link_id,
+                        layer2service: 0,
+                        pdu_prio: 0,
+                        layer2_qos: 0,
+                        stealing_permission: false,
+                        stealing_repeats_flag: false,
+                        chan_alloc: None,
+                        main_address: prim.received_tetra_address,
+                    }),
+                };
+                _queue.push_back(resp);
             }
             CmcePduTypeUl::CmceFunctionNotSupported => {
                 unimplemented_log!("{:?}", pdu_type);

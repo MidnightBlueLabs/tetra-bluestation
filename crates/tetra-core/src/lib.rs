@@ -14,7 +14,6 @@ pub mod direction;
 pub mod freqs;
 pub mod pdu_parse_error;
 pub mod phy_types;
-pub mod ranges;
 pub mod tdma_time;
 pub mod tetra_common;
 pub mod tetra_entities;

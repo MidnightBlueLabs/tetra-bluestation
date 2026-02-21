@@ -52,13 +52,26 @@ impl Llc {
 
     /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number
     fn get_out_ack_n_if_any(&mut self, tn: u8, addr: TetraAddress) -> Option<u8> {
-        for i in 0..self.scheduled_out_acks.len() {
-            if self.scheduled_out_acks[i].t_start.t == tn && self.scheduled_out_acks[i].addr.ssi == addr.ssi {
-                let n = self.scheduled_out_acks[i].n;
-                self.scheduled_out_acks.remove(i);
-                return Some(n);
-            }
+        let ssi = addr.ssi;
+
+        // Prefer exact time-slot match, but fall back to any pending ACK for this SSI.
+        // Some UL/DL scheduling paths may jitter the associated t_start.
+        if let Some(i) = self
+            .scheduled_out_acks
+            .iter()
+            .position(|a| a.t_start.t == tn && a.addr.ssi == ssi)
+        {
+            let n = self.scheduled_out_acks[i].n;
+            self.scheduled_out_acks.remove(i);
+            return Some(n);
         }
+
+        if let Some(i) = self.scheduled_out_acks.iter().position(|a| a.addr.ssi == ssi) {
+            let n = self.scheduled_out_acks[i].n;
+            self.scheduled_out_acks.remove(i);
+            return Some(n);
+        }
+
         None
     }
 
@@ -85,23 +98,51 @@ impl Llc {
         ret
     }
 
-    /// Process incoming ACK. Remove outstanding ACK expectation. We ignore unexpected ones, might be a retransmission
+    /// Process incoming ACK. Remove outstanding ACK expectation.
+    /// On N-value mismatch, only reset the send-sequence counter (not pending ACKs).
+    /// Stale/late ACKs with no outstanding expectation are silently ignored.
     fn process_incoming_ack(&mut self, tn: u8, addr: TetraAddress, n: u8) {
-        for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].t_start.t == tn && self.expected_in_acks[i].addr.ssi == addr.ssi {
-                if self.expected_in_acks[i].n != n {
-                    tracing::warn!(
-                        "Received unexpected ACK for t: {} ssi: {} got n {}, expected {}",
-                        tn,
-                        addr.ssi,
-                        n,
-                        self.expected_in_acks[i].n
-                    );
-                }
-                self.expected_in_acks.remove(i);
-                return;
+        let ssi = addr.ssi;
+
+        // Prefer exact tn match.
+        if let Some(i) = self
+            .expected_in_acks
+            .iter()
+            .position(|a| a.t_start.t == tn && a.addr.ssi == ssi)
+        {
+            let expected = self.expected_in_acks[i].n;
+            if expected != n {
+                tracing::warn!(
+                    "Received unexpected ACK for t: {} ssi: {} got n {}, expected {} — resetting send seq",
+                    tn, ssi, n, expected
+                );
+                // Only reset the send sequence counter; do NOT drop scheduled outgoing
+                // ACKs or other expected ACKs, as that would cause the MS to timeout
+                // waiting for its ACK and eventually disconnect.
+                self.link_send_seq.remove(&ssi);
             }
+            self.expected_in_acks.remove(i);
+            return;
         }
+
+        // Fall back to any outstanding ACK expectation for this SSI (tn may drift).
+        if let Some(i) = self.expected_in_acks.iter().position(|a| a.addr.ssi == ssi) {
+            let expected = self.expected_in_acks[i].n;
+            if expected != n {
+                tracing::warn!(
+                    "Received unexpected ACK for t: {} ssi: {} got n {}, expected {} (tn drift) — resetting send seq",
+                    tn, ssi, n, expected
+                );
+                self.link_send_seq.remove(&ssi);
+            }
+            self.expected_in_acks.remove(i);
+            return;
+        }
+
+        // No expected ACK recorded — this is normal: late retransmission, piggybacked
+        // ACK on a BlData the MS sent, or ACK for a broadcast we didn't track.
+        // Silently ignore; do NOT reset BL state, as that would desynchronize the
+        // send sequence and potentially drop pending outgoing ACKs.
     }
 
     fn rx_tma_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -159,7 +200,9 @@ impl Llc {
             pdu_buf.seek(0);
             tracing::debug!("-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
             // Register that we expect an ACK back (acknowledged mode only)
-            self.register_expected_ack(message.dltime, prim.main_address, ns);
+            // In basic link acknowledged mode, the peer returns N(R) = next expected N(S).
+            // With 1-bit alternating sequence, that is ns ^ 1.
+            self.register_expected_ack(message.dltime, prim.main_address, ns ^ 1);
         } else {
             // BL-DATA (unacknowledged, with or without FCS)
             let pdu = BlData {
@@ -350,7 +393,8 @@ impl Llc {
         if let Some(ns) = ns {
             // Send ACK
             // let ul_time = message.dltime.add_timeslots(-2);
-            self.schedule_outgoing_ack(message.dltime, prim.main_address, ns);
+            // For alternating-bit basic link, acknowledge with next expected sequence (ns ^ 1)
+            self.schedule_outgoing_ack(message.dltime, prim.main_address, ns ^ 1);
         }
 
         // if nr is present, we have received an ACK on a previous message

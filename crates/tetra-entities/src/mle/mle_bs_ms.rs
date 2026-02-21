@@ -500,9 +500,14 @@ impl Mle {
         pdu.copy_bits(&mut prim.sdu, sdu_len);
         pdu.seek(0);
 
-        let (_addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
-        assert_eq!(link, prim.link_id);
-        assert_eq!(endpoint, prim.endpoint_id);
+        // Handle 0 is used by CMCE for group broadcasts (GSSI-addressed messages)
+        // that don't have a registered MLE connection. Skip the router lookup and
+        // use the prim's own link_id / endpoint_id directly.
+        if prim.handle != 0 {
+            let (_addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
+            assert_eq!(link, prim.link_id);
+            assert_eq!(endpoint, prim.endpoint_id);
+        }
         // Take Channel Allocation Request if any
         let chan_alloc = prim.chan_alloc.take();
 
