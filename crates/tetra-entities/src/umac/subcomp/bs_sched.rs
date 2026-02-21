@@ -69,6 +69,15 @@ pub struct BsChannelScheduler {
     ulsched: [[TimeslotSchedule; MACSCHED_NUM_FRAMES]; 4],
 
     circuits: CircuitMgr,
+
+    /// When true, the given timeslot is in call hangtime: keep circuit allocated but stop
+    /// sending traffic-plane TCH blocks. Instead, transmit signalling-plane idle (Null PDUs)
+    /// and signal UL usage as CommonAndAssigned so MS can request the floor.
+    hangtime: [bool; 4],
+
+    /// Guard frames after entering hangtime. While >0, we keep the slot in traffic mode to
+    /// allow any already-scheduled FACCH/stealing (e.g. D-TX CEASED) to go out reliably.
+    hangtime_guard: [u8; 4],
 }
 
 #[derive(Debug)]
@@ -115,7 +124,59 @@ impl BsChannelScheduler {
             dltx_queues: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             ulsched: EMPTY_SCHED,
             circuits: CircuitMgr::new(),
+            hangtime: [false, false, false, false],
+            hangtime_guard: [0, 0, 0, 0],
         }
+    }
+
+    /// Enter/leave hangtime for a traffic timeslot (2..=4).
+    /// When entering, we keep a short guard window in traffic mode so any FACCH/stealing
+    /// already scheduled for this slot can still be transmitted.
+    pub fn set_hangtime(&mut self, ts: u8, active: bool) {
+        if !(1..=4).contains(&ts) {
+            tracing::warn!("BsChannelScheduler::set_hangtime: invalid ts {}", ts);
+            return;
+        }
+
+        let idx = ts as usize - 1;
+        self.hangtime[idx] = active;
+        self.hangtime_guard[idx] = if active { 1 } else { 0 };
+
+        tracing::info!(
+            "BsChannelScheduler: hangtime {} for ts {} (guard={})",
+            if active { "ENABLED" } else { "DISABLED" },
+            ts,
+            self.hangtime_guard[idx]
+        );
+    }
+
+    fn is_hangtime_effective(&self, ts: u8) -> bool {
+        let idx = ts as usize - 1;
+        if !self.hangtime[idx] {
+            return false;
+        }
+        // If we're still in guard, keep traffic mode.
+        if self.hangtime_guard[idx] > 0 {
+            return false;
+        }
+        // If a stealing block is still queued for this slot, keep traffic mode.
+        !self.has_pending_stealing(ts)
+    }
+
+    fn has_pending_stealing(&self, ts: u8) -> bool {
+        let slot = ts as usize - 1;
+        self.dltx_queues
+            .get(slot)
+            .map(|q| q.iter().any(|e| matches!(e, DlSchedElem::Stealing(_))))
+            .unwrap_or(false)
+    }
+
+    fn generate_hangtime_idle_schf(&self) -> BitBuffer {
+        // Full-slot SCH/F carrying a Null PDU (idle).
+        let mut buf = BitBuffer::new(SCH_F_CAP);
+        let pdu = MacResource::null_pdu();
+        pdu.to_bitbuf(&mut buf);
+        buf
     }
 
     // pub fn set_scrambling_code(&mut self, scrambling_code: u32) {
@@ -381,10 +442,20 @@ impl BsChannelScheduler {
     }
 
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
+        // Clearing hangtime here is safe: if the circuit is gone, this timeslot is no longer in use.
+        if (1..=4).contains(&ts) {
+            self.hangtime[ts as usize - 1] = false;
+            self.hangtime_guard[ts as usize - 1] = 0;
+        }
         self.circuits.close_circuit(dir, ts)
     }
 
     pub fn create_circuit(&mut self, dir: Direction, circuit: Circuit) {
+        // New/updated circuit implies traffic mode.
+        if (1..=4).contains(&circuit.ts) {
+            self.hangtime[circuit.ts as usize - 1] = false;
+            self.hangtime_guard[circuit.ts as usize - 1] = 0;
+        }
         self.circuits.create_circuit(dir, circuit);
     }
 
@@ -720,8 +791,19 @@ impl BsChannelScheduler {
         self.precomps.mac_sysinfo1.hyperframe_number = Some(ts.h);
         self.precomps.mac_sysinfo2.hyperframe_number = Some(ts.h);
 
-        let dl_is_traffic = self.circuits.is_active(Direction::Dl, ts.t) && ts.f != 18;
-        let ul_is_traffic = self.circuits.is_active(Direction::Ul, ts.t) && ts.f != 18;
+        let dl_circuit_active = self.circuits.is_active(Direction::Dl, ts.t) && ts.f != 18;
+        let ul_circuit_active = self.circuits.is_active(Direction::Ul, ts.t) && ts.f != 18;
+
+        // During hangtime we stop sending traffic frames and switch to signalling mode.
+        // Keep traffic for a short guard window or while FACCH/stealing is still queued.
+        let hang_effective = if (2..=4).contains(&ts.t) {
+            self.is_hangtime_effective(ts.t)
+        } else {
+            false
+        };
+
+        let dl_is_traffic = dl_circuit_active && !hang_effective;
+        let ul_is_traffic = ul_circuit_active && !hang_effective;
 
         // Build the block for this timeslot with anything scheduled (traffic or signalling)
         // For traffic timeslots, also check for FACCH/stealing (STCH half-slot)
@@ -769,7 +851,7 @@ impl BsChannelScheduler {
                 }
             }
         } else {
-            // No active circuit, send scheduled signalling or default contents
+            // Signalling mode (either no circuit, or hangtime on an allocated timeslot)
             // Integrate all grants and random access acks into resources (either existing or new)
             self.dl_integrate_sched_elems_for_timeslot(ts);
 
@@ -788,13 +870,29 @@ impl BsChannelScheduler {
                     ul_phy_chan: ul_phy,
                 }
             } else {
-                // Put default SYNC/SYSINFO frame
-                TmvUnitdataReqSlot {
-                    ts,
-                    blk1: None,
-                    blk2: None,
-                    bbk: None,
-                    ul_phy_chan: ul_phy,
+                // If this is an allocated traffic slot in hangtime, keep it alive with an idle SCH/F (Null PDU).
+                // Otherwise, fall back to default SYNC/SYSINFO.
+                if hang_effective && dl_circuit_active {
+                    TmvUnitdataReqSlot {
+                        ts,
+                        blk1: Some(TmvUnitdataReq {
+                            logical_channel: LogicalChannel::SchF,
+                            mac_block: self.generate_hangtime_idle_schf(),
+                            scrambling_code: self.scrambling_code,
+                        }),
+                        blk2: None,
+                        bbk: None,
+                        ul_phy_chan: ul_phy,
+                    }
+                } else {
+                    // Put default SYNC/SYSINFO frame
+                    TmvUnitdataReqSlot {
+                        ts,
+                        blk1: None,
+                        blk2: None,
+                        bbk: None,
+                        ul_phy_chan: ul_phy,
+                    }
                 }
             }
         };
@@ -878,6 +976,15 @@ impl BsChannelScheduler {
         // self.dump_ul_schedule_full(true);
 
         // We now have our bbk, blk1 and (optional) blk2
+
+        // Decrement hangtime guard for this timeslot after we have built the slot.
+        if (2..=4).contains(&ts.t) {
+            let idx = ts.t as usize - 1;
+            if self.hangtime[idx] && self.hangtime_guard[idx] > 0 {
+                self.hangtime_guard[idx] -= 1;
+            }
+        }
+
         elem
     }
 
@@ -930,19 +1037,37 @@ impl BsChannelScheduler {
                     }
                 }
                 2..=4 => {
-                    // Additional channels, unallocated except we sent a chanalloc
-                    // Those are currently unimplemented, so, unallocated it is
+                    // Additional channels (TS2..TS4).
+                    // Normal operation: Traffic(usage) when a circuit is active, else Unallocated.
+                    // Hangtime: switch to signalling and allow MS to request the floor while the
+                    // channel remains allocated (UL CommonAndAssigned).
+                    let hang_effective = if (2..=4).contains(&ts.t) {
+                        self.is_hangtime_effective(ts.t)
+                    } else {
+                        false
+                    };
 
-                    aach.dl_usage = if let Some(usage) = dl_traffic_usage {
-                        AccessAssignDlUsage::Traffic(usage)
+                    if hang_effective && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
+                        aach.dl_usage = AccessAssignDlUsage::AssignedControl;
+                        aach.ul_usage = AccessAssignUlUsage::CommonAndAssigned;
+	                    // ACCESS-ASSIGN header=1 requires an access field for both UL subslots.
+	                    // Keep it consistent with TS1 defaults.
+	                    aach.f2_af = Some(AccessField {
+	                        access_code: 0,
+	                        base_frame_len: 4,
+	                    });
                     } else {
-                        AccessAssignDlUsage::Unallocated
-                    };
-                    aach.ul_usage = if let Some(usage) = ul_traffic_usage {
-                        AccessAssignUlUsage::Traffic(usage)
-                    } else {
-                        AccessAssignUlUsage::Unallocated
-                    };
+                        aach.dl_usage = if let Some(usage) = dl_traffic_usage {
+                            AccessAssignDlUsage::Traffic(usage)
+                        } else {
+                            AccessAssignDlUsage::Unallocated
+                        };
+                        aach.ul_usage = if let Some(usage) = ul_traffic_usage {
+                            AccessAssignUlUsage::Traffic(usage)
+                        } else {
+                            AccessAssignUlUsage::Unallocated
+                        };
+                    }
                 }
                 _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t),
             }

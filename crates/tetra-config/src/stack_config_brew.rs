@@ -22,6 +22,8 @@ pub struct CfgBrew {
     pub groups: Vec<u32>,
     /// Reconnection delay in seconds
     pub reconnect_delay_secs: u64,
+    /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
+    pub jitter_initial_latency_frames: u8,
 }
 
 #[derive(Default, Deserialize)]
@@ -44,6 +46,9 @@ pub struct CfgBrewDto {
     /// Reconnection delay in seconds
     #[serde(default = "default_brew_reconnect_delay")]
     pub reconnect_delay_secs: u64,
+    /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
+    #[serde(default)]
+    pub jitter_initial_latency_frames: u8,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -68,5 +73,6 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         issi: src.issi,
         groups: src.groups,
         reconnect_delay_secs: src.reconnect_delay_secs,
+        jitter_initial_latency_frames: src.jitter_initial_latency_frames,
     }
 }

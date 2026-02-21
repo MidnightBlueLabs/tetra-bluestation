@@ -381,14 +381,10 @@ impl MmBs {
             MmPduTypeUl::UOtar => unimplemented_log!("UOtar"),
             MmPduTypeUl::UInformationProvide => unimplemented_log!("UInformationProvide"),
             MmPduTypeUl::UAttachDetachGroupIdentity => self.rx_u_attach_detach_group_identity(queue, message),
-            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => {
-                unimplemented_log!("UAttachDetachGroupIdentityAcknowledgement")
-            }
+            MmPduTypeUl::UAttachDetachGroupIdentityAcknowledgement => unimplemented_log!("UAttachDetachGroupIdentityAcknowledgement"),
             MmPduTypeUl::UTeiProvide => unimplemented_log!("UTeiProvide"),
             MmPduTypeUl::UDisableStatus => unimplemented_log!("UDisableStatus"),
-            MmPduTypeUl::MmPduFunctionNotSupported => {
-                unimplemented_log!("MmPduFunctionNotSupported")
-            }
+            MmPduTypeUl::MmPduFunctionNotSupported => unimplemented_log!("MmPduFunctionNotSupported"),
         };
     }
 

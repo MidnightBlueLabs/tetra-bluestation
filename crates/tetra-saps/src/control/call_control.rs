@@ -38,19 +38,20 @@ pub enum CallControl {
     /// Umac forwards to Lmac
     /// Contains (Direction, timeslot) of associated circuit
     Close(Direction, u8),
-    /// Notifies Brew entity about a locally-initiated UL group call.
-    /// Brew checks if the GSSI is subscribed and starts forwarding voice to TetraPack.
-    LocalCallStart {
+    /// Floor granted: a speaker has been given transmission permission.
+    /// Sent to UMAC to exit hangtime (resume traffic mode) and to Brew to start forwarding voice.
+    FloorGranted {
         call_id: u16,
         source_issi: u32,
         dest_gssi: u32,
         ts: u8,
     },
-    /// Notifies Brew that transmission stopped on a local call (entering hangtime).
-    /// Brew should immediately stop forwarding audio to TetraPack.
-    LocalCallTxStopped { call_id: u16, ts: u8 },
-    /// Notifies Brew entity that a local UL call has ended
-    LocalCallEnd { call_id: u16, ts: u8 },
+    /// Floor released: speaker stopped transmitting (entering hangtime).
+    /// Sent to UMAC to enter hangtime signalling mode and to Brew to stop forwarding audio.
+    FloorReleased { call_id: u16, ts: u8 },
+    /// Call ended: the call is being torn down.
+    /// Sent to UMAC to clear hangtime state and to Brew to clean up call tracking.
+    CallEnded { call_id: u16, ts: u8 },
     /// Request CMCE to start a network-initiated group call
     /// Sent by Brew when TetraPack sends GROUP_TX
     NetworkCallStart {

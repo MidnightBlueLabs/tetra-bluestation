@@ -5,7 +5,7 @@ use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
 use crate::umac::enums::{access_assign_dl_usage::AccessAssignDlUsage, access_assign_ul_usage::AccessAssignUlUsage};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AccessField {
     // 2
     pub access_code: u8,
@@ -124,6 +124,14 @@ impl AccessAssign {
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
+        // Safe fallback when a caller sets UL usage to CommonAndAssigned / AssignedOnly
+        // but forgets to provide field2 (access field). Scheduler should still
+        // set f2_af explicitly; this just prevents runtime panics.
+        const DEFAULT_AF: AccessField = AccessField {
+            access_code: 0,
+            base_frame_len: 4,
+        };
+
         if self.dl_usage == AccessAssignDlUsage::CommonControl && self.ul_usage == AccessAssignUlUsage::CommonOnly {
             assert!(
                 self.f1_af1.is_some() && self.f2_af2.is_some(),
@@ -146,15 +154,17 @@ impl AccessAssign {
 
             let dl_usage = self.dl_usage.to_usage_marker();
             buf.write_bits(dl_usage as u64, 6);
-            buf.write_bits(self.f2_af.as_ref().unwrap().access_code as u64, 2);
-            buf.write_bits(self.f2_af.as_ref().unwrap().base_frame_len as u64, 4);
+            let af = self.f2_af.unwrap_or(DEFAULT_AF);
+            buf.write_bits(af.access_code as u64, 2);
+            buf.write_bits(af.base_frame_len as u64, 4);
         } else if self.ul_usage == AccessAssignUlUsage::AssignedOnly {
             let header = 2;
             buf.write_bits(header as u64, 2);
             let dl_usage = self.dl_usage.to_usage_marker();
             buf.write_bits(dl_usage as u64, 6);
-            buf.write_bits(self.f2_af.as_ref().unwrap().access_code as u64, 2);
-            buf.write_bits(self.f2_af.as_ref().unwrap().base_frame_len as u64, 4);
+            let af = self.f2_af.unwrap_or(DEFAULT_AF);
+            buf.write_bits(af.access_code as u64, 2);
+            buf.write_bits(af.base_frame_len as u64, 4);
         } else {
             // Both DL and UL usage given by usage markers
             let header = 3;

@@ -618,7 +618,7 @@ impl CcBsSubentity {
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
                 dltime: message.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                     call_id: circuit.call_id,
                     source_issi: calling_party.ssi,
                     dest_gssi,
@@ -627,21 +627,6 @@ impl CcBsSubentity {
             };
             queue.push_back(msg);
         }
-
-        // Also notify UMAC so it can gate UL voice loopback/forwarding
-        // let notify_umac = SapMsg {
-        //     sap: Sap::Control,
-        //     src: TetraEntity::Cmce,
-        //     dest: TetraEntity::Umac,
-        //     dltime: message.dltime,
-        //     msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
-        //         call_id: circuit.call_id,
-        //         source_issi: calling_party.ssi,
-        //         dest_gssi,
-        //         ts: circuit.ts,
-        //     }),
-        // };
-        // queue.push_back(notify_umac);
     }
 
     pub fn route_xx_deliver(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
@@ -779,6 +764,15 @@ impl CcBsSubentity {
                 Self::signal_umac_circuit_close(queue, circuit, self.dltime);
             }
 
+            // Ensure UMAC clears any hangtime override for this slot even if the circuit close is delayed.
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
+            });
+
             self.release_timeslot(ts);
 
             // Notify Brew only for local calls
@@ -789,21 +783,11 @@ impl CcBsSubentity {
                         src: TetraEntity::Cmce,
                         dest: TetraEntity::Brew,
                         dltime: self.dltime,
-                        msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
+                        msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
                     };
                     queue.push_back(notify);
                 }
             }
-
-            // Also notify UMAC to stop UL voice loopback/forwarding
-            // let notify_umac = SapMsg {
-            //     sap: Sap::Control,
-            //     src: TetraEntity::Cmce,
-            //     dest: TetraEntity::Umac,
-            //     dltime: self.dltime,
-            //     msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }),
-            // };
-            // queue.push_back(notify_umac);
         }
 
         // Clean up
@@ -921,6 +905,16 @@ impl CcBsSubentity {
         let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
         queue.push_back(msg);
 
+        // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
+        // This stops downlink TCH fill frames (zeros) and enables UL CommonAndAssigned so MS can request the floor.
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: self.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+        });
+
         // Notify Brew to stop forwarding audio for local calls
         if self.config.config().brew.is_some() {
             if is_local {
@@ -929,19 +923,10 @@ impl CcBsSubentity {
                     src: TetraEntity::Cmce,
                     dest: TetraEntity::Brew,
                     dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::LocalCallTxStopped { call_id, ts }),
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
                 });
             }
         }
-        // Also notify UMAC to stop UL voice loopback/forwarding
-        // let notify_umac = SapMsg {
-        //     sap: Sap::Control,
-        //     src: TetraEntity::Cmce,
-        //     dest: TetraEntity::Umac,
-        //     dltime: self.dltime,
-        //     msg: SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts: call.ts }),
-        // };
-        // queue.push_back(notify_umac);
     }
 
     /// Handle U-TX DEMAND: another radio requests floor during hangtime
@@ -989,40 +974,6 @@ impl CcBsSubentity {
         };
         let dest_addr = *dest_addr;
 
-        // // Update cached D-SETUP to reflect active transmission (floor taken)
-        // pdu.transmission_grant = TransmissionGrant::GrantedToOtherUser;
-        // pdu.transmission_request_permission = false;
-        //
-        // // Notify Brew so it can (re)start forwarding UL audio for this talkspurt
-        // let notify = SapMsg {
-        //     sap: Sap::Control,
-        //     src: TetraEntity::Cmce,
-        //     dest: TetraEntity::Brew,
-        //     dltime: self.dltime,
-        //     msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
-        //         call_id,
-        //         source_issi: requesting_party.ssi,
-        //         dest_gssi: dest_addr.ssi,
-        //         ts: call.ts,
-        //     }),
-        // };
-        // queue.push_back(notify);
-        //
-        // // Also notify UMAC to resume UL voice loopback/forwarding
-        // let notify_umac = SapMsg {
-        //     sap: Sap::Control,
-        //     src: TetraEntity::Cmce,
-        //     dest: TetraEntity::Umac,
-        //     dltime: self.dltime,
-        //     msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
-        //         call_id,
-        //         source_issi: requesting_party.ssi,
-        //         dest_gssi: dest_addr.ssi,
-        //         ts: call.ts,
-        //     }),
-        // };
-        // queue.push_back(notify_umac);
-
         // Send D-TX GRANTED via FACCH
         let d_tx_granted = DTxGranted {
             call_identifier: call_id,
@@ -1048,7 +999,21 @@ impl CcBsSubentity {
         let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
         queue.push_back(msg);
 
-        // Notify Brew only for local calls (speaker change = new LocalCallStart for new speaker)
+        // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: self.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                call_id,
+                source_issi: requesting_party.ssi,
+                dest_gssi: dest_addr.ssi,
+                ts,
+            }),
+        });
+
+        // Notify Brew only for local calls (speaker change = new FloorGranted for new speaker)
         if self.config.config().brew.is_some() {
             let Some(call) = self.active_calls.get(&call_id) else {
                 return;
@@ -1059,7 +1024,7 @@ impl CcBsSubentity {
                     src: TetraEntity::Cmce,
                     dest: TetraEntity::Brew,
                     dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+                    msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                         call_id,
                         source_issi: requesting_party.ssi,
                         dest_gssi: dest_addr.ssi,
@@ -1152,6 +1117,20 @@ impl CcBsSubentity {
             // Send D-TX GRANTED via FACCH to notify radios of new speaker
             self.send_d_tx_granted_facch(queue, call_id_val, source_issi, dest_gssi, ts);
 
+            // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id: call_id_val,
+                    source_issi,
+                    dest_gssi,
+                    ts,
+                }),
+            });
+
             // Respond to Brew with existing call resources
             if self.config.config().brew.is_some() {
                 queue.push_back(SapMsg {
@@ -1167,6 +1146,7 @@ impl CcBsSubentity {
                     }),
                 });
             }
+            return;
         }
 
         // New network call - allocate circuit
@@ -1348,6 +1328,15 @@ impl CcBsSubentity {
             }
             // Send D-TX CEASED via FACCH
             self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
+
+            // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+            });
         } else {
             // Already in hangtime or idle, release immediately
             self.release_call(queue, call_id);
