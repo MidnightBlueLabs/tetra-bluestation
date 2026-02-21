@@ -72,7 +72,6 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> MessageRouter {
             username: brew_cfg.username,
             password: brew_cfg.password,
             issi: brew_cfg.issi,
-            groups: brew_cfg.groups,
             reconnect_delay: Duration::from_secs(brew_cfg.reconnect_delay_secs),
             jitter_initial_latency_frames: brew_cfg.jitter_initial_latency_frames,
         };
