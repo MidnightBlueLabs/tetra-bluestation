@@ -458,8 +458,8 @@ impl TetraEntityTrait for BrewEntity {
             SapMsgInner::TmdCircuitDataInd(prim) => {
                 self.handle_ul_voice(prim.ts, prim.data);
             }
-            // Local call lifecycle notifications from CMCE
-            SapMsgInner::CmceCallControl(CallControl::LocalCallStart {
+            // Floor-control and call lifecycle notifications from CMCE
+            SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                 call_id,
                 source_issi,
                 dest_gssi,
@@ -467,10 +467,10 @@ impl TetraEntityTrait for BrewEntity {
             }) => {
                 self.handle_local_call_start(call_id, source_issi, dest_gssi, ts);
             }
-            SapMsgInner::CmceCallControl(CallControl::LocalCallTxStopped { call_id, ts }) => {
+            SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }) => {
                 self.handle_local_call_tx_stopped(call_id, ts);
             }
-            SapMsgInner::CmceCallControl(CallControl::LocalCallEnd { call_id, ts }) => {
+            SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }) => {
                 self.handle_local_call_end(call_id, ts);
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
