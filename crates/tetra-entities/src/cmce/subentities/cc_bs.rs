@@ -134,7 +134,7 @@ impl CcBsSubentity {
                 speech_service: Some(0),
             },
             transmission_grant: TransmissionGrant::NotGranted,
-            transmission_request_permission: false,
+            transmission_request_permission: true,
             call_priority: 0,
             notification_indicator: None,
             temporary_address: None,
@@ -574,7 +574,7 @@ impl CcBsSubentity {
             simplex_duplex_selection: pdu.simplex_duplex_selection,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
-            transmission_request_permission: false,
+            transmission_request_permission: true,
             call_priority: pdu.call_priority,
             notification_indicator: None,
             temporary_address: None,
@@ -713,8 +713,8 @@ impl CcBsSubentity {
 
     /// Check if any active calls in hangtime have expired, and if so, release them
     fn check_hangtime_expiry(&mut self, queue: &mut MessageQueue) {
-        // Hangtime: ~5 seconds = 5 * 18 * 4 = 360 frames (approximately)
-        const HANGTIME_FRAMES: i32 = 5 * 18 * 4;
+        // Hangtime: ~1 second = 1 * 18 * 4 = 72 frames (approximately)
+        const HANGTIME_FRAMES: i32 = 1 * 18 * 4;
 
         let expired: Vec<u16> = self
             .active_calls

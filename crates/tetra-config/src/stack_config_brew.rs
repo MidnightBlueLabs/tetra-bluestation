@@ -18,8 +18,6 @@ pub struct CfgBrew {
     pub password: Option<String>,
     /// ISSI to register with the TetraPack server
     pub issi: u32,
-    /// GSSIs (group IDs) to affiliate to
-    pub groups: Vec<u32>,
     /// Reconnection delay in seconds
     pub reconnect_delay_secs: u64,
     /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
@@ -41,8 +39,6 @@ pub struct CfgBrewDto {
     pub password: String,
     /// ISSI to register with the TetraPack server
     pub issi: u32,
-    /// GSSIs (group IDs) to affiliate to
-    pub groups: Vec<u32>,
     /// Reconnection delay in seconds
     #[serde(default = "default_brew_reconnect_delay")]
     pub reconnect_delay_secs: u64,
@@ -71,7 +67,6 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         username: Some(src.username.to_string()),
         password: Some(src.password),
         issi: src.issi,
-        groups: src.groups,
         reconnect_delay_secs: src.reconnect_delay_secs,
         jitter_initial_latency_frames: src.jitter_initial_latency_frames,
     }
