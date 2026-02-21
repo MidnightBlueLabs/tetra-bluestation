@@ -1132,6 +1132,7 @@ impl CcBsSubentity {
                     }),
                 });
             }
+            return;
         }
 
         // New network call - allocate circuit
