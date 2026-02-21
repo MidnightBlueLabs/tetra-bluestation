@@ -173,3 +173,7 @@ voice_service = true  # Not yet implemented but may be needed to keep certain MS
 
 # Reconnection delay (seconds)
 # reconnect_delay_secs = 15
+
+# Optional: additional initial latency compensation in frames for inbound Brew jitter playout.
+# Adaptive jitter buffering is always enabled; this adds fixed startup delay if needed.
+# jitter_initial_latency_frames = 0
