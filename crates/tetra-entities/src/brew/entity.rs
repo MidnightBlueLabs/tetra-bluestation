@@ -252,8 +252,6 @@ pub struct BrewEntity {
 
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
-    /// Listener counts per GSSI
-    group_listeners: HashMap<u32, usize>,
 
     /// Whether the worker is connected
     connected: bool,
@@ -289,7 +287,6 @@ impl BrewEntity {
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
-            group_listeners: HashMap::new(),
             // next_call_id: 100, // Start at 100 to avoid collision with CMCE
             // next_usage: 10,    // Start at 10 to avoid collision
             connected: false,
@@ -338,63 +335,7 @@ impl BrewEntity {
         }
     }
 
-    fn has_listener(&self, gssi: u32) -> bool {
-        self.group_listeners.get(&gssi).copied().unwrap_or(0) > 0
-    }
-
-    fn inc_group_listener(&mut self, gssi: u32) {
-        let entry = self.group_listeners.entry(gssi).or_insert(0);
-        *entry += 1;
-    }
-
-    fn dec_group_listener(&mut self, gssi: u32) {
-        if let Some(entry) = self.group_listeners.get_mut(&gssi) {
-            if *entry <= 1 {
-                self.group_listeners.remove(&gssi);
-            } else {
-                *entry -= 1;
-            }
-        }
-    }
-
-    fn drop_group_calls_if_unlistened(&mut self, queue: &mut MessageQueue, gssi: u32) {
-        if self.has_listener(gssi) {
-            return;
-        }
-
-        let active_uuids: Vec<Uuid> = self
-            .active_calls
-            .iter()
-            .filter(|(_, call)| call.dest_gssi == gssi)
-            .map(|(uuid, _)| *uuid)
-            .collect();
-
-        for uuid in active_uuids {
-            if let Some(call) = self.active_calls.remove(&uuid) {
-                tracing::info!("BrewEntity: dropping active call uuid={} gssi={} (no listeners)", uuid, gssi);
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Brew,
-                    dest: TetraEntity::Cmce,
-                    dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: call.uuid }),
-                });
-            }
-        }
-
-        if let Some(hanging) = self.hanging_calls.remove(&gssi) {
-            tracing::info!("BrewEntity: dropping hanging call gssi={} ts={} (no listeners)", gssi, hanging.ts);
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Brew,
-                dest: TetraEntity::Cmce,
-                dltime: self.dltime,
-                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: hanging.uuid }),
-            });
-        }
-    }
-
-    fn handle_subscriber_update(&mut self, queue: &mut MessageQueue, update: BrewSubscriberUpdate) {
+    fn handle_subscriber_update(&mut self, update: BrewSubscriberUpdate) {
         let issi = update.issi;
         let groups = update.groups;
 
@@ -410,8 +351,6 @@ impl BrewEntity {
                 if let Some(existing) = self.subscriber_groups.remove(&issi) {
                     for gssi in existing {
                         removed_groups.push(gssi);
-                        self.dec_group_listener(gssi);
-                        self.drop_group_calls_if_unlistened(queue, gssi);
                     }
                 }
                 if !removed_groups.is_empty() {
@@ -439,9 +378,6 @@ impl BrewEntity {
                         }
                     }
                 }
-                for gssi in &new_groups {
-                    self.inc_group_listener(*gssi);
-                }
 
                 if is_new {
                     tracing::info!("BrewEntity: affiliate from unknown issi={}, sending register", issi);
@@ -457,9 +393,7 @@ impl BrewEntity {
             }
             BrewSubscriberAction::Deaffiliate => {
                 let mut removed_groups = Vec::new();
-                let mut known_issi = false;
                 if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
-                    known_issi = true;
                     for gssi in groups {
                         if entry.remove(&gssi) {
                             removed_groups.push(gssi);
@@ -468,19 +402,11 @@ impl BrewEntity {
                 } else {
                     removed_groups = groups;
                 }
-                if known_issi {
-                    for gssi in &removed_groups {
-                        self.dec_group_listener(*gssi);
-                    }
-                }
 
                 if removed_groups.is_empty() {
                     tracing::debug!("BrewEntity: deaffiliate ignored (no matching groups) issi={}", issi);
                 } else {
                     tracing::info!("BrewEntity: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
-                    for gssi in &removed_groups {
-                        self.drop_group_calls_if_unlistened(queue, *gssi);
-                    }
                     let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
                         issi,
                         groups: removed_groups,
@@ -512,11 +438,6 @@ impl BrewEntity {
 
     /// Handle new group call from Brew, reusing hanging call circuits if available.
     fn handle_group_call_start(&mut self, queue: &mut MessageQueue, uuid: Uuid, source_issi: u32, dest_gssi: u32, priority: u8) {
-        if !self.has_listener(dest_gssi) {
-            tracing::info!("BrewEntity: ignoring GROUP_TX uuid={} gssi={} (no listeners)", uuid, dest_gssi);
-            return;
-        }
-
         // Check if this call is already active (speaker change or repeated GROUP_TX)
         if let Some(call) = self.active_calls.get_mut(&uuid) {
             // Only notify CMCE if the speaker actually changed
@@ -870,7 +791,7 @@ impl TetraEntityTrait for BrewEntity {
                 self.rx_network_call_ready(brew_uuid, call_id, ts, usage);
             }
             SapMsgInner::BrewSubscriberUpdate(update) => {
-                self.handle_subscriber_update(_queue, update);
+                self.handle_subscriber_update(update);
             }
             _ => {
                 tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
