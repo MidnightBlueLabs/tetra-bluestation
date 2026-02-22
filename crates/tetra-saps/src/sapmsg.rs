@@ -77,7 +77,7 @@ pub enum SapMsgInner {
     // CMCE -> UMAC control
     CmceCallControl(CallControl),
 
-    // MM -> Brew subscriber update
+    // MM -> Brew/CMCE subscriber update
     BrewSubscriberUpdate(BrewSubscriberUpdate),
 
     // LTPD-SAP (MLE-LTPD)
