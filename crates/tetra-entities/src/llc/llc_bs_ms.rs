@@ -4,7 +4,10 @@ use std::panic;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, TdmaTime, TetraAddress, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, unimplemented_log};
+use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
+use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
+use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
 use tetra_saps::tla::{TlaTlDataIndBl, TlaTlUnitdataIndBl};
 use tetra_saps::tma::TmaUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
@@ -20,6 +23,8 @@ pub struct AckData {
     pub addr: TetraAddress,
     pub t_start: TdmaTime,
     pub n: u8,
+    /// Timeslot on which the original message was received
+    pub ts: u8,
 }
 
 pub struct Llc {
@@ -46,8 +51,13 @@ impl Llc {
     }
 
     /// Schedule an ACK to be sent at a later time
-    pub fn schedule_outgoing_ack(&mut self, t: TdmaTime, addr: TetraAddress, n: u8) {
-        self.scheduled_out_acks.push(AckData { t_start: t, n, addr });
+    pub fn schedule_outgoing_ack(&mut self, dltime: TdmaTime, addr: TetraAddress, ns: u8) {
+        self.scheduled_out_acks.push(AckData {
+            t_start: dltime,
+            n: ns,
+            addr,
+            ts: dltime.t,
+        });
     }
 
     /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number
@@ -73,7 +83,12 @@ impl Llc {
 
     /// Register that we expect an ACK for this link (acknowledged mode only)
     fn register_expected_ack(&mut self, t: TdmaTime, addr: TetraAddress, n: u8) {
-        self.expected_in_acks.push(AckData { t_start: t, n, addr });
+        self.expected_in_acks.push(AckData {
+            t_start: t,
+            n,
+            addr,
+            ts: t.t,
+        });
     }
 
     fn format_ack_list(ack_list: &Vec<AckData>) -> String {
@@ -134,6 +149,44 @@ impl Llc {
         let SapMsgInner::TlaTlDataReqBl(mut prim) = message.msg else {
             panic!()
         };
+
+        // Use unacknowledged mode (BL-UDATA) when:
+        // 1. STCH (stolen half-slot) — no established LLC link on STCH.
+        // 2. GSSI-addressed messages — per ETSI EN 300 392-2, group-addressed
+        //    signaling on SCH/F must use BL-UDATA because there is no
+        //    established LLC link with individual group members. Using BL-DATA
+        //    causes radios (e.g. Sepura) to silently discard frames when the
+        //    ns sequence number doesn't match their V(R).
+        if prim.stealing_permission || prim.main_address.ssi_type == SsiType::Gssi {
+            let mut pdu_buf = BitBuffer::new_autoexpand(32);
+            let pdu = BlUdata { has_fcs: false };
+            pdu.to_bitbuf(&mut pdu_buf);
+            let sdu_len = prim.tl_sdu.get_len_remaining();
+            pdu_buf.copy_bits(&mut prim.tl_sdu, sdu_len);
+            pdu_buf.seek(0);
+            tracing::debug!("-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
+
+            let sapmsg = SapMsg {
+                sap: Sap::TmaSap,
+                src: self.entity(),
+                dest: TetraEntity::Umac,
+                dltime: message.dltime,
+                msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+                    req_handle: prim.req_handle,
+                    pdu: pdu_buf,
+                    main_address: prim.main_address,
+                    endpoint_id: prim.endpoint_id,
+                    stealing_permission: prim.stealing_permission,
+                    subscriber_class: prim.subscriber_class,
+                    air_interface_encryption: prim.air_interface_encryption,
+                    stealing_repeats_flag: prim.stealing_repeats_flag,
+                    data_category: prim.data_class_info,
+                    chan_alloc: prim.chan_alloc,
+                }),
+            };
+            queue.push_back(sapmsg);
+            return;
+        }
 
         // If an ack still needs to be sent, get the relevant expected sequence number
         let out_ack_n = self.get_out_ack_n_if_any(message.dltime.t, prim.main_address);
@@ -461,7 +514,11 @@ impl TetraEntityTrait for Llc {
         // Take oldest element from scheduled_out_acks, and remove it from the list
         let ret = !self.scheduled_out_acks.is_empty();
         while let Some(ack) = self.scheduled_out_acks.first() {
-            tracing::debug!("tick_end: auto-ack for ssi: {}, n: {}", ack.addr.ssi, ack.n);
+            tracing::debug!("tick_end: auto-ack for ssi: {}, n: {}, ts: {}", ack.addr.ssi, ack.n, ack.ts);
+
+            // Send BL-ACK via FACCH (stealing) on the traffic timeslot if the original
+            // message arrived on a traffic channel (TS2-4), otherwise via MCCH (TS1).
+            let steal = matches!(ack.ts, 2..=4);
 
             let mut pdu_buf = BitBuffer::new_autoexpand(5);
             let pdu = BlAck { has_fcs: false, nr: ack.n };
@@ -484,13 +541,25 @@ impl TetraEntityTrait for Llc {
                     pdu: pdu_buf,
                     main_address: ack.addr,
                     // scrambling_code: self.config.config().scrambling_code(),
-                    endpoint_id: 0,                 // todo fixme
-                    stealing_permission: false,     // TODO FIXME
+                    endpoint_id: 0, // todo fixme
+                    stealing_permission: steal,
                     subscriber_class: 0,            // TODO FIXME
                     air_interface_encryption: None, // TODO FIXME
                     stealing_repeats_flag: None,    // TODO FIXME
                     data_category: None,            // TODO FIXME
-                    chan_alloc: None,               // TODO FIXME
+                    chan_alloc: if steal {
+                        let mut timeslots = [false; 4];
+                        timeslots[(ack.ts - 1) as usize] = true;
+                        Some(CmceChanAllocReq {
+                            usage: None,
+                            timeslots,
+                            alloc_type: ChanAllocType::Replace,
+                            ul_dl_assigned: UlDlAssignment::Both,
+                            carrier: None,
+                        })
+                    } else {
+                        None
+                    },
                 }),
             };
             queue.push_back(sapmsg);

@@ -675,10 +675,20 @@ impl CcBsSubentity {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
                         // Get our cached D-SETUP, build a prim and send it down the stack
-                        let Some((pdu, dest_addr)) = self.cached_setups.get(&call_id) else {
+                        let Some((pdu, dest_addr)) = self.cached_setups.get_mut(&call_id) else {
                             tracing::error!("No cached D-SETUP for call id {}", call_id);
                             return;
                         };
+                        // Update transmission_grant based on current call state:
+                        // During hangtime (nobody transmitting), use NotGranted;
+                        // during active TX, use GrantedToOtherUser.
+                        if let Some(active) = self.active_calls.get(&call_id) {
+                            pdu.transmission_grant = if active.tx_active {
+                                TransmissionGrant::GrantedToOtherUser
+                            } else {
+                                TransmissionGrant::NotGranted
+                            };
+                        }
                         let dest_addr = *dest_addr;
                         let (sdu, chan_alloc) = Self::build_d_setup_prim(pdu, usage, ts, UlDlAssignment::Both);
                         let prim = Self::build_sapmsg(sdu, Some(chan_alloc), self.dltime, dest_addr);
@@ -889,7 +899,7 @@ impl CcBsSubentity {
         // Send D-TX CEASED via FACCH (stealing) to all group members
         let d_tx_ceased = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: true, // Allow other MSs to request the floor
+            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,
@@ -974,8 +984,8 @@ impl CcBsSubentity {
         };
         let dest_addr = *dest_addr;
 
-        // Send D-TX GRANTED via FACCH
-        let d_tx_granted = DTxGranted {
+        // ETSI 14.5.2.2.1 b): Send individual D-TX GRANTED (Granted) to requesting MS FIRST
+        let d_tx_granted_individual = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
             transmission_request_permission: false,
@@ -991,13 +1001,17 @@ impl CcBsSubentity {
             proprietary: None,
         };
 
-        tracing::info!("-> {:?}", d_tx_granted);
+        tracing::info!("-> D-TX GRANTED (individual, Granted) {:?}", d_tx_granted_individual);
         let mut sdu = BitBuffer::new_autoexpand(50);
-        d_tx_granted.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
+        d_tx_granted_individual.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
         sdu.seek(0);
 
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
+        let requesting_addr = TetraAddress::new(requesting_party.ssi, SsiType::Issi);
+        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, requesting_addr, ts);
         queue.push_back(msg);
+
+        // ETSI 14.5.2.2.1 b): Send group D-TX GRANTED (GrantedToOtherUser) to GSSI
+        self.send_d_tx_granted_facch(queue, call_id, requesting_party.ssi, dest_addr.ssi, ts);
 
         // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
         queue.push_back(SapMsg {
@@ -1375,7 +1389,7 @@ impl CcBsSubentity {
     fn send_d_tx_ceased_facch(&mut self, queue: &mut MessageQueue, call_id: u16, dest_gssi: u32, ts: u8) {
         let pdu = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: true,
+            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,

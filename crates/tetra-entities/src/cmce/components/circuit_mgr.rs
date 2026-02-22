@@ -311,8 +311,9 @@ impl CircuitMgr {
                 if let Some(circuit) = circuit {
                     let age = circuit.ts_created.age(dltime);
 
-                    // Send D-SETUP for first 4 frames after circuit creation
-                    if age < 4 * 4 {
+                    // Send D-SETUP for the initial frame + 1 backup frame after circuit creation.
+                    // Matches ETSI Annex D Figure D.2: 1 initial + 1 back-up on MCCH.
+                    if age < 1 * 4 {
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));

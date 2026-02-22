@@ -27,13 +27,14 @@ use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
 use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
 use tetra_saps::tma::{TmaReport, TmaReportInd, TmaUnitdataInd};
+use tetra_saps::tmv::TmvConfigureReq;
 use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::lmac::components::scrambler;
 use crate::umac::subcomp::bs_sched::{BsChannelScheduler, PrecomputedUmacPdus, TCH_S_CAP};
 use crate::umac::subcomp::fillbits;
-use crate::{MessageQueue, TetraEntityTrait};
+use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
 
 use super::subcomp::bs_defrag::BsDefrag;
 
@@ -393,7 +394,6 @@ impl UmacBs {
                     }
                     0b111110 => {
                         // Second half slot stolen in STCH
-                        unimplemented_log!("rx_mac_data: SECOND HALF SLOT STOLEN IN STCH but signal not implemented");
                         (prim.pdu.get_len(), false, true, false)
                     }
                     0b111111 => {
@@ -469,8 +469,19 @@ impl UmacBs {
             // Fragmentation start, add to defragmenter
             self.defrag.insert_first(&mut prim.pdu, message.dltime, addr, None);
         } else if second_half_stolen {
-            // TODO FIXME maybe not elif here
-            tracing::warn!("rx_mac_data: SECOND HALF SLOT STOLEN IN STCH but not implemented");
+            // Signal LMAC that Block2 is also stolen (STCH, not TCH).
+            // Must be Immediate priority so LMAC sees it before processing Block2.
+            let m = SapMsg {
+                sap: Sap::TmvSap,
+                src: self.self_component,
+                dest: TetraEntity::Lmac,
+                dltime: message.dltime,
+                msg: SapMsgInner::TmvConfigureReq(TmvConfigureReq {
+                    second_half_stolen: Some(true),
+                    ..Default::default()
+                }),
+            };
+            queue.push_prio(m, MessagePrio::Immediate);
         } else {
             // Pass directly to LLC
             let sdu = {

@@ -142,6 +142,13 @@ impl BsChannelScheduler {
         self.hangtime[idx] = active;
         self.hangtime_guard[idx] = if active { 1 } else { 0 };
 
+        // When leaving hangtime, drain stale signaling items that can only be consumed
+        // in signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED
+        // that still need FACCH delivery.
+        if !active {
+            self.dltx_queues[idx].retain(|e| matches!(e, DlSchedElem::Stealing(_)));
+        }
+
         tracing::info!(
             "BsChannelScheduler: hangtime {} for ts {} (guard={})",
             if active { "ENABLED" } else { "DISABLED" },
@@ -1050,12 +1057,12 @@ impl BsChannelScheduler {
                     if hang_effective && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
                         aach.dl_usage = AccessAssignDlUsage::AssignedControl;
                         aach.ul_usage = AccessAssignUlUsage::CommonAndAssigned;
-	                    // ACCESS-ASSIGN header=1 requires an access field for both UL subslots.
-	                    // Keep it consistent with TS1 defaults.
-	                    aach.f2_af = Some(AccessField {
-	                        access_code: 0,
-	                        base_frame_len: 4,
-	                    });
+                        // ACCESS-ASSIGN header=1 requires an access field for both UL subslots.
+                        // Keep it consistent with TS1 defaults.
+                        aach.f2_af = Some(AccessField {
+                            access_code: 0,
+                            base_frame_len: 4,
+                        });
                     } else {
                         aach.dl_usage = if let Some(usage) = dl_traffic_usage {
                             AccessAssignDlUsage::Traffic(usage)

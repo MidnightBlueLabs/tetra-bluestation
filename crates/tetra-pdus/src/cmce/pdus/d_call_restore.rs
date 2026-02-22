@@ -16,7 +16,7 @@ pub struct DCallRestore {
     /// Type1, 2 bits, Transmission grant
     pub transmission_grant: u8,
     /// Type1, 1 bits, Transmission request permission
-    /// Set to true to signal MSes they are allowed to send a U-TX DEMAND
+    /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
     pub transmission_request_permission: bool,
     /// Type1, 1 bits, Reset call time-out timer (T310)
     pub reset_call_time_out_timer_t310_: bool,
