@@ -68,8 +68,8 @@ pub enum CallControl {
         ts: u8,                // Allocated timeslot
         usage: u8,             // Usage number
     },
-    /// Request CMCE to end a network call
-    /// Sent by Brew when TetraPack sends GROUP_IDLE
+    /// Request ending a network call
+    /// Sent by Brew when TetraPack sends GROUP_IDLE, or by CMCE to make Brew drop a call
     NetworkCallEnd {
         brew_uuid: uuid::Uuid, // Identifies the call to end
     },
