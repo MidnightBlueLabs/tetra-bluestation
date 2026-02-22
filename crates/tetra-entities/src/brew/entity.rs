@@ -738,6 +738,30 @@ impl BrewEntity {
             tracing::warn!("BrewEntity: NetworkCallReady for unknown uuid={}", brew_uuid);
         }
     }
+
+    fn drop_network_call(&mut self, brew_uuid: Uuid) {
+        if let Some(call) = self.active_calls.remove(&brew_uuid) {
+            tracing::info!(
+                "BrewEntity: dropping network call uuid={} gssi={} (CMCE request)",
+                brew_uuid,
+                call.dest_gssi
+            );
+            self.dl_jitter.remove(&brew_uuid);
+            self.hanging_calls.remove(&call.dest_gssi);
+            return;
+        }
+
+        let hanging_gssi = self
+            .hanging_calls
+            .iter()
+            .find_map(|(gssi, hanging)| if hanging.uuid == brew_uuid { Some(*gssi) } else { None });
+        if let Some(gssi) = hanging_gssi {
+            tracing::info!("BrewEntity: dropping hanging call uuid={} gssi={} (CMCE request)", brew_uuid, gssi);
+            self.hanging_calls.remove(&gssi);
+        } else {
+            tracing::debug!("BrewEntity: drop requested for unknown uuid={}", brew_uuid);
+        }
+    }
 }
 
 // ─── TetraEntityTrait implementation ──────────────────────────────
@@ -781,6 +805,9 @@ impl TetraEntityTrait for BrewEntity {
             }
             SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }) => {
                 self.handle_local_call_end(call_id, ts);
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }) => {
+                self.drop_network_call(brew_uuid);
             }
             SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
