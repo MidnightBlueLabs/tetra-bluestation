@@ -42,6 +42,15 @@ impl MmBs {
             src: TetraEntity::Mm,
             dest: TetraEntity::Brew,
             dltime,
+            msg: SapMsgInner::BrewSubscriberUpdate(update.clone()),
+        };
+        queue.push_back(msg);
+
+        let msg = SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Cmce,
+            dltime,
             msg: SapMsgInner::BrewSubscriberUpdate(update),
         };
         queue.push_back(msg);
