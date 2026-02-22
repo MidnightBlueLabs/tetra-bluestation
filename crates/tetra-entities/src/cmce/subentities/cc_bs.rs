@@ -134,7 +134,7 @@ impl CcBsSubentity {
                 speech_service: Some(0),
             },
             transmission_grant: TransmissionGrant::NotGranted,
-            transmission_request_permission: true,
+            transmission_request_permission: false,
             call_priority: 0,
             notification_indicator: None,
             temporary_address: None,
@@ -889,7 +889,7 @@ impl CcBsSubentity {
         // Send D-TX CEASED via FACCH (stealing) to all group members
         let d_tx_ceased = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: true, // Allow other MSs to request the floor
+            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,
@@ -1375,7 +1375,7 @@ impl CcBsSubentity {
     fn send_d_tx_ceased_facch(&mut self, queue: &mut MessageQueue, call_id: u16, dest_gssi: u32, ts: u8) {
         let pdu = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: true,
+            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,
