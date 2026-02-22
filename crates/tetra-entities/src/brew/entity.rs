@@ -255,10 +255,6 @@ pub struct BrewEntity {
     /// Listener counts per GSSI
     group_listeners: HashMap<u32, usize>,
 
-    /// Circuit allocation state
-    // next_call_id: u16,
-    // next_usage: u8,
-
     /// Whether the worker is connected
     connected: bool,
 
