@@ -69,6 +69,9 @@ struct ActiveCall {
     tx_active: bool,
     /// When PTT was released (for hangtime). None if transmitting.
     hangtime_start: Option<TdmaTime>,
+    /// Brew session UUID — set when a network speaker is active on this call,
+    /// regardless of call origin. Cleared when the network speaker ends.
+    brew_uuid: Option<uuid::Uuid>,
 }
 
 impl CcBsSubentity {
@@ -607,6 +610,7 @@ impl CcBsSubentity {
                 usage: circuit.usage,
                 tx_active: true,
                 hangtime_start: None,
+                brew_uuid: None,
             },
         );
 
@@ -885,7 +889,6 @@ impl CcBsSubentity {
         tracing::info!("U-TX CEASED: PTT released on call_id={}, entering hangtime", call_id);
 
         let ts = call.ts;
-        let is_local = matches!(call.origin, CallOrigin::Local { .. });
         call.tx_active = false;
         call.hangtime_start = Some(self.dltime);
 
@@ -925,17 +928,15 @@ impl CcBsSubentity {
             msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
         });
 
-        // Notify Brew to stop forwarding audio for local calls
+        // Notify Brew to stop forwarding audio
         if self.config.config().brew.is_some() {
-            if is_local {
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Brew,
-                    dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-                });
-            }
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+            });
         }
     }
 
@@ -1027,26 +1028,23 @@ impl CcBsSubentity {
             }),
         });
 
-        // Notify Brew only for local calls (speaker change = new FloorGranted for new speaker)
+        // Notify Brew of speaker change (local MS taking floor)
         if self.config.config().brew.is_some() {
             let Some(call) = self.active_calls.get(&call_id) else {
                 return;
             };
-            if matches!(call.origin, CallOrigin::Local { .. }) {
-                let notify = SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Brew,
-                    dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                        call_id,
-                        source_issi: requesting_party.ssi,
-                        dest_gssi: dest_addr.ssi,
-                        ts: call.ts,
-                    }),
-                };
-                queue.push_back(notify);
-            }
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id,
+                    source_issi: requesting_party.ssi,
+                    dest_gssi: dest_addr.ssi,
+                    ts: call.ts,
+                }),
+            });
         }
     }
 
@@ -1111,6 +1109,7 @@ impl CcBsSubentity {
             call.source_issi = source_issi;
             call.tx_active = true;
             call.hangtime_start = None;
+            call.brew_uuid = Some(brew_uuid);
 
             if let CallOrigin::Network { brew_uuid: old_uuid } = call.origin {
                 // Update UUID if different (shouldn't happen but handle it)
@@ -1290,6 +1289,7 @@ impl CcBsSubentity {
                 usage,
                 tx_active: true,
                 hangtime_start: None,
+                brew_uuid: Some(brew_uuid),
             },
         );
 
@@ -1312,11 +1312,11 @@ impl CcBsSubentity {
 
     /// Handle network call end request
     fn rx_network_call_end(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid) {
-        // Find the call by brew_uuid
+        // Find the call by brew_uuid field (works for both Local and Network origin calls)
         let Some((call_id, call)) = self
             .active_calls
             .iter()
-            .find(|(_, c)| matches!(c.origin, CallOrigin::Network { brew_uuid: u } if u == brew_uuid))
+            .find(|(_, c)| c.brew_uuid == Some(brew_uuid))
             .map(|(id, c)| (*id, c.clone()))
         else {
             tracing::debug!("CMCE: network call end for unknown brew_uuid={}", brew_uuid);
@@ -1339,6 +1339,7 @@ impl CcBsSubentity {
             if let Some(active_call) = self.active_calls.get_mut(&call_id) {
                 active_call.tx_active = false;
                 active_call.hangtime_start = Some(self.dltime);
+                active_call.brew_uuid = None;
             }
             // Send D-TX CEASED via FACCH
             self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
