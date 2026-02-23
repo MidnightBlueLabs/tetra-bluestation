@@ -61,8 +61,8 @@ impl UmacBs {
     pub fn new(config: SharedConfig) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
-        let system_wide_services = Self::effective_system_wide_services(&config);
-        let precomps = Self::generate_precomps(&config, system_wide_services);
+        let system_wide_services = Self::get_system_wide_services_state(&config);
+        let precomps = Self::generate_precomps(&config);
         Self {
             self_component: TetraEntity::Umac,
             config,
@@ -78,7 +78,7 @@ impl UmacBs {
     /// Precomputes SYNC, SYSINFO messages (and subfield variants) for faster TX msg building
     /// Precomputed PDUs are passed to scheduler
     /// Needs to be re-invoked if any network parameter changes
-    pub fn generate_precomps(config: &SharedConfig, system_wide_services: bool) -> PrecomputedUmacPdus {
+    pub fn generate_precomps(config: &SharedConfig) -> PrecomputedUmacPdus {
         let c = config.config();
 
         // TODO FIXME make more/all parameters configurable
@@ -145,6 +145,7 @@ impl UmacBs {
             ext_services: Some(ext_services),
         };
 
+        let system_wide_services = Self::get_system_wide_services_state(config);
         let mle_sysinfo_pdu = DMleSysinfo {
             location_area: c.cell.location_area,
             subscriber_class: 65535, // All subscriber classes allowed
@@ -190,7 +191,9 @@ impl UmacBs {
         }
     }
 
-    fn effective_system_wide_services(config: &SharedConfig) -> bool {
+    /// Retrieve currently set value of system-wide services. If SwMI is active, this governs connection state
+    /// Otherwise, value from config is used.
+    fn get_system_wide_services_state(config: &SharedConfig) -> bool {
         let cfg = config.config();
         if cfg.brew.is_some() {
             config.state_read().network_connected
@@ -200,11 +203,11 @@ impl UmacBs {
     }
 
     fn refresh_system_wide_services(&mut self) {
-        let effective = Self::effective_system_wide_services(&self.config);
-        if effective != self.system_wide_services {
-            self.system_wide_services = effective;
-            self.channel_scheduler.set_system_wide_services(effective);
-            tracing::info!("UmacBs: system_wide_services {}", if effective { "ENABLED" } else { "DISABLED" });
+        let is_effective = Self::get_system_wide_services_state(&self.config);
+        if is_effective != self.system_wide_services {
+            self.system_wide_services = is_effective;
+            self.channel_scheduler.set_system_wide_services_state(is_effective);
+            tracing::info!("UmacBs: system_wide_services {}", if is_effective { "ENABLED" } else { "DISABLED" });
         }
     }
 

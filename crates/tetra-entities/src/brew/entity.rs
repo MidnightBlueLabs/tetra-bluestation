@@ -297,12 +297,10 @@ impl BrewEntity {
             match event {
                 BrewEvent::Connected => {
                     tracing::info!("BrewEntity: connected to TetraPack server");
-                    self.connected = true;
                     self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
                     tracing::warn!("BrewEntity: disconnected: {}", reason);
-                    self.connected = false;
                     self.set_network_connected(false);
                     // Release all active calls
                     self.release_all_calls(queue);
@@ -333,7 +331,8 @@ impl BrewEntity {
         }
     }
 
-    fn set_network_connected(&self, connected: bool) {
+    fn set_network_connected(&mut self, connected: bool) {
+        self.connected = connected;
         let mut state = self.config.state_write();
         if state.network_connected != connected {
             state.network_connected = connected;

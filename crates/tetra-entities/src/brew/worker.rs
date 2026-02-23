@@ -563,8 +563,9 @@ impl BrewWorker {
                     tracing::info!("BrewWorker: server sent close");
                     return Ok(());
                 }
-                Ok(_) => {
+                Ok(unsupported) => {
                     // Text or other — unexpected for Brew
+                    tracing::warn!("BrewWorker: unexpected WebSocket message type: {:?}", unsupported);
                 }
                 Err(tungstenite::Error::Io(ref e))
                     if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut =>

@@ -197,7 +197,7 @@ impl BsChannelScheduler {
     // }
 
     /// Update the System Wide Services flag in the broadcast SYSINFO.
-    pub fn set_system_wide_services(&mut self, enabled: bool) {
+    pub fn set_system_wide_services_state(&mut self, enabled: bool) {
         if self.precomps.mle_sysinfo.bs_service_details.system_wide_services != enabled {
             self.precomps.mle_sysinfo.bs_service_details.system_wide_services = enabled;
             tracing::info!(
