@@ -147,6 +147,7 @@ voice_service = true
 ###############################################################################
 
 # Brew protocol: Connect to TetraPack/BrandMeister server via TETRA Homebrew Protocol.
+# All groups that radios attach to are forwarded to Brew as affiliations.
 # Uncomment this section to automatically load and use Brew entity
 # See: https://wiki.tetrapack.online/books/tetra/page/brew
 
@@ -166,10 +167,6 @@ voice_service = true
 
 # ISSI to register with server. Usually, your DMR ID. 
 # issi = 012345
-
-# Comma separated list of Group IDs (GSSIs) to affiliate with
-# BlueStation will receive those groups from TetraPack/Brandmeister
-# groups = [91]
 
 # Reconnection delay (seconds)
 # reconnect_delay_secs = 15

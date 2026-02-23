@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tetra_config::SharedConfig;
 use tetra_core::TimeslotOwner;
@@ -18,6 +18,7 @@ use tetra_pdus::cmce::{
 use tetra_saps::{
     SapMsg, SapMsgInner,
     control::{
+        brew::{BrewSubscriberAction, BrewSubscriberUpdate},
         call_control::{CallControl, Circuit},
         enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
     },
@@ -42,6 +43,10 @@ pub struct CcBsSubentity {
     circuits: CircuitMgr,
     /// Active group calls: call_id -> call info
     active_calls: HashMap<u16, ActiveCall>,
+    /// Registered subscriber groups (ISSI -> set of GSSIs)
+    subscriber_groups: HashMap<u32, HashSet<u32>>,
+    /// Listener counts per GSSI
+    group_listeners: HashMap<u32, usize>,
 }
 
 /// Origin of a group call
@@ -82,6 +87,8 @@ impl CcBsSubentity {
             cached_setups: HashMap::new(),
             circuits: CircuitMgr::new(),
             active_calls: HashMap::new(),
+            subscriber_groups: HashMap::new(),
+            group_listeners: HashMap::new(),
         }
     }
 
@@ -240,6 +247,124 @@ impl CcBsSubentity {
         pdu.to_bitbuf(&mut sdu).expect("Failed to serialize DRelease");
         sdu.seek(0);
         sdu
+    }
+
+    fn has_listener(&self, gssi: u32) -> bool {
+        self.group_listeners.get(&gssi).copied().unwrap_or(0) > 0
+    }
+
+    fn inc_group_listener(&mut self, gssi: u32) {
+        let entry = self.group_listeners.entry(gssi).or_insert(0);
+        *entry += 1;
+    }
+
+    fn dec_group_listener(&mut self, gssi: u32) {
+        if let Some(entry) = self.group_listeners.get_mut(&gssi) {
+            if *entry <= 1 {
+                self.group_listeners.remove(&gssi);
+            } else {
+                *entry -= 1;
+            }
+        }
+    }
+
+    fn drop_group_calls_if_unlistened(&mut self, queue: &mut MessageQueue, gssi: u32) {
+        if self.has_listener(gssi) {
+            return;
+        }
+
+        let to_drop: Vec<(u16, CallOrigin)> = self
+            .active_calls
+            .iter()
+            .filter(|(_, call)| call.dest_gssi == gssi)
+            .map(|(call_id, call)| (*call_id, call.origin.clone()))
+            .collect();
+
+        for (call_id, origin) in to_drop {
+            tracing::info!("CMCE: dropping call_id={} gssi={} (no listeners)", call_id, gssi);
+            if let CallOrigin::Network { brew_uuid } = origin {
+                if self.config.config().brew.is_some() {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Brew,
+                        dltime: self.dltime,
+                        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                    });
+                }
+            }
+            self.release_call(queue, call_id);
+        }
+    }
+
+    pub fn handle_subscriber_update(&mut self, queue: &mut MessageQueue, update: BrewSubscriberUpdate) {
+        let issi = update.issi;
+        let groups = update.groups;
+
+        match update.action {
+            BrewSubscriberAction::Register => {
+                let known = self.subscriber_groups.contains_key(&issi);
+                self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
+                tracing::info!("CMCE: subscriber register issi={} known={}", issi, known);
+            }
+            BrewSubscriberAction::Deregister => {
+                if let Some(existing) = self.subscriber_groups.remove(&issi) {
+                    for gssi in existing {
+                        self.dec_group_listener(gssi);
+                        self.drop_group_calls_if_unlistened(queue, gssi);
+                    }
+                }
+                tracing::info!("CMCE: subscriber deregister issi={}", issi);
+            }
+            BrewSubscriberAction::Affiliate => {
+                let mut new_groups = Vec::new();
+                {
+                    let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
+                    for gssi in groups {
+                        if entry.insert(gssi) {
+                            new_groups.push(gssi);
+                        }
+                    }
+                }
+                for gssi in &new_groups {
+                    self.inc_group_listener(*gssi);
+                }
+
+                if new_groups.is_empty() {
+                    tracing::debug!("CMCE: affiliate ignored (no new groups) issi={}", issi);
+                } else {
+                    tracing::info!("CMCE: subscriber affiliate issi={} groups={:?}", issi, new_groups);
+                }
+            }
+            BrewSubscriberAction::Deaffiliate => {
+                let mut removed_groups = Vec::new();
+                let mut known_issi = false;
+                if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
+                    known_issi = true;
+                    for gssi in groups {
+                        if entry.remove(&gssi) {
+                            removed_groups.push(gssi);
+                        }
+                    }
+                } else {
+                    removed_groups = groups;
+                }
+                if known_issi {
+                    for gssi in &removed_groups {
+                        self.dec_group_listener(*gssi);
+                    }
+                }
+
+                if removed_groups.is_empty() {
+                    tracing::debug!("CMCE: deaffiliate ignored (no matching groups) issi={}", issi);
+                } else {
+                    tracing::info!("CMCE: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
+                    for gssi in &removed_groups {
+                        self.drop_group_calls_if_unlistened(queue, *gssi);
+                    }
+                }
+            }
+        }
     }
 
     fn send_d_call_proceeding(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu_request: &USetup, call_id: u16) {
@@ -469,6 +594,15 @@ impl CcBsSubentity {
         let dest_gssi = dest_gssi as u32;
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
 
+        if !self.has_listener(dest_gssi) {
+            tracing::info!(
+                "CMCE: rejecting U-SETUP from issi={} to gssi={} (no listeners)",
+                calling_party.ssi,
+                dest_gssi
+            );
+            return;
+        }
+
         // Allocate circuit (DL+UL for group call)
         let circuit = match {
             let mut state = self.config.state_write();
@@ -577,7 +711,7 @@ impl CcBsSubentity {
             simplex_duplex_selection: pdu.simplex_duplex_selection,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
-            transmission_request_permission: false,
+            transmission_request_permission: true,
             call_priority: pdu.call_priority,
             notification_indicator: None,
             temporary_address: None,
@@ -727,8 +861,8 @@ impl CcBsSubentity {
 
     /// Check if any active calls in hangtime have expired, and if so, release them
     fn check_hangtime_expiry(&mut self, queue: &mut MessageQueue) {
-        // Hangtime: ~5 seconds = 5 * 18 * 4 = 360 frames (approximately)
-        const HANGTIME_FRAMES: i32 = 5 * 18 * 4;
+        // Hangtime: ~1 second = 1 * 18 * 4 = 72 frames (approximately)
+        const HANGTIME_FRAMES: i32 = 1 * 18 * 4;
 
         let expired: Vec<u16> = self
             .active_calls
@@ -1096,6 +1230,25 @@ impl CcBsSubentity {
 
     /// Handle network-initiated group call start
     fn rx_network_call_start(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, source_issi: u32, dest_gssi: u32, _priority: u8) {
+        if !self.has_listener(dest_gssi) {
+            tracing::info!(
+                "CMCE: ignoring network call start uuid={} gssi={} (no listeners)",
+                brew_uuid,
+                dest_gssi
+            );
+            self.drop_group_calls_if_unlistened(queue, dest_gssi);
+            if self.config.config().brew.is_some() {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                });
+            }
+            return;
+        }
+
         // Check if there's an active call for this GSSI (speaker change scenario)
         if let Some((call_id, call)) = self.active_calls.iter_mut().find(|(_, c)| c.dest_gssi == dest_gssi) {
             // Speaker change during active or hangtime
