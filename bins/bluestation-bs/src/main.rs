@@ -31,6 +31,62 @@ fn load_config_from_toml(cfg_path: &str) -> SharedConfig {
     }
 }
 
+fn parse_workspace_version(cargo_toml: &str) -> Option<String> {
+    let mut in_workspace_package = false;
+    for raw_line in cargo_toml.lines() {
+        let line = raw_line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_workspace_package = line == "[workspace.package]";
+            continue;
+        }
+        if in_workspace_package && line.starts_with("version") {
+            let mut parts = line.splitn(2, '=');
+            let _key = parts.next()?;
+            let value = parts.next()?.trim().trim_matches('"').to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn fetch_upstream_main_version() -> Result<String, String> {
+    let url = "https://raw.githubusercontent.com/MidnightBlueLabs/tetra-bluestation/main/Cargo.toml";
+    let response = ureq::get(url)
+        .set("User-Agent", "tetra-bluestation-update-checker")
+        .call()
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    let body = response.into_string().map_err(|e| format!("response decode failed: {e}"))?;
+    parse_workspace_version(&body).ok_or_else(|| "failed to parse upstream workspace version".to_string())
+}
+
+fn print_update_status_if_enabled(cfg: &SharedConfig) {
+    if !cfg.config().check_updates {
+        return;
+    }
+
+    let local_version = env!("CARGO_PKG_VERSION");
+    match fetch_upstream_main_version() {
+        Ok(upstream_version) if upstream_version == local_version => {
+            eprintln!(
+                "\x1b[1;92m[UPDATE CHECK] Up to Date. Local version {} matches MidnightBlue main.\x1b[0m",
+                local_version
+            );
+        }
+        Ok(upstream_version) => {
+            eprintln!(
+                "\x1b[1;91m[UPDATE CHECK] OUTDATED. Local version {} != MidnightBlue main version {}.\x1b[0m",
+                local_version, upstream_version
+            );
+        }
+        Err(err) => {
+            eprintln!("\x1b[1;91m[UPDATE CHECK] Unable to verify updates: {}\x1b[0m", err);
+        }
+    }
+}
+
 /// Start base station stack
 fn build_bs_stack(cfg: &mut SharedConfig) -> MessageRouter {
     let mut router = MessageRouter::new(cfg.clone());
@@ -112,6 +168,7 @@ fn main() {
     let args = Args::parse();
     let mut cfg = load_config_from_toml(&args.config);
     let _log_guard = debug::setup_logging_default(cfg.config().debug_log.clone());
+    print_update_status_if_enabled(&cfg);
 
     let mut router = match cfg.config().stack_mode {
         StackMode::Mon => {

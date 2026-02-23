@@ -192,6 +192,8 @@ pub struct StackConfig {
     pub stack_mode: StackMode,
     #[serde(default)]
     pub debug_log: Option<String>,
+    #[serde(default)]
+    pub check_updates: bool,
 
     #[serde(default)]
     pub phy_io: CfgPhyIo,
@@ -215,6 +217,7 @@ impl StackConfig {
         StackConfig {
             stack_mode: mode,
             debug_log: None,
+            check_updates: false,
             phy_io: CfgPhyIo::default(),
             net: CfgNetInfo { mcc, mnc },
             cell: CfgCellInfo::default(),

@@ -47,3 +47,4 @@ crossbeam-channel = "0.5"
 tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1", features = ["v4"] }
 ctrlc = "3"
+ureq = { version = "2.12.1", features = ["tls"] }

@@ -18,3 +18,4 @@ ctrlc = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+ureq = { workspace = true }

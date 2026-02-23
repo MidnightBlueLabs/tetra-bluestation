@@ -62,6 +62,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
         debug_log: root.debug_log,
+        check_updates: root.check_updates.unwrap_or(false),
         phy_io: CfgPhyIo::default(),
         net: CfgNetInfo {
             mcc: root.net_info.mcc,
@@ -252,6 +253,7 @@ struct TomlConfigRoot {
     config_version: String,
     stack_mode: StackMode,
     debug_log: Option<String>,
+    check_updates: Option<bool>,
 
     // New phy_io structure
     #[serde(default)]

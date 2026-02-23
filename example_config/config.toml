@@ -10,6 +10,10 @@ stack_mode = "Bs"
 # Uncomment to record debug log. Files get large quickly and generate additional system load
 # debug_log = "./verbose_log.txt"
 
+# Optional startup update check against MidnightBlueLabs/tetra-bluestation main.
+# Prints bright green when up to date, bright red when outdated/unreachable.
+check_updates = false
+
 ###############################################################################
 
 # PHY layer i/o configuration
