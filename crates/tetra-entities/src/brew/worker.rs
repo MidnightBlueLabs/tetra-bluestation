@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
@@ -507,17 +507,57 @@ impl BrewWorker {
 
     /// Main WebSocket message processing loop
     fn message_loop(&mut self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
+        let heartbeat_interval = Duration::from_secs(2);
+        let heartbeat_timeout = Duration::from_secs(6);
+        let mut last_activity_at = Instant::now();
+        let mut last_ping_at = Instant::now();
+        let mut last_ping_id: Option<u64> = None;
+        let mut last_ping_sent_at: Option<Instant> = None;
+        let mut ping_seq: u64 = 0;
+
         loop {
+            let now = Instant::now();
+            if now.duration_since(last_ping_at) >= heartbeat_interval {
+                ping_seq = ping_seq.wrapping_add(1);
+                let payload = ping_seq.to_be_bytes().to_vec();
+                if let Err(e) = ws.send(Message::Ping(payload)) {
+                    return Err(format!("WebSocket ping failed: {}", e));
+                }
+                last_ping_at = now;
+                last_ping_id = Some(ping_seq);
+                last_ping_sent_at = Some(now);
+            }
+
+            if now.duration_since(last_activity_at) >= heartbeat_timeout {
+                return Err("heartbeat timeout".to_string());
+            }
+
             // ── Check for incoming WebSocket messages ──
             match ws.read() {
                 Ok(Message::Binary(data)) => {
+                    last_activity_at = Instant::now();
                     self.handle_incoming_binary(&data);
                 }
                 Ok(Message::Ping(payload)) => {
-                    let _ = ws.send(Message::Pong(payload));
+                    last_activity_at = Instant::now();
+                    if let Err(e) = ws.send(Message::Pong(payload)) {
+                        return Err(format!("WebSocket pong failed: {}", e));
+                    }
                 }
-                Ok(Message::Pong(_)) => {
-                    // Latency measurement — ignore for now
+                Ok(Message::Pong(payload)) => {
+                    let rx_at = Instant::now();
+                    last_activity_at = rx_at;
+                    if payload.len() == 8 {
+                        let mut buf = [0u8; 8];
+                        buf.copy_from_slice(&payload[..8]);
+                        let pong_id = u64::from_be_bytes(buf);
+                        if Some(pong_id) == last_ping_id {
+                            if let Some(sent_at) = last_ping_sent_at {
+                                let rtt = rx_at.duration_since(sent_at);
+                                tracing::trace!("BrewWorker: ping rtt_ms={:.1}", rtt.as_secs_f64() * 1000.0);
+                            }
+                        }
+                    }
                 }
                 Ok(Message::Close(_)) => {
                     tracing::info!("BrewWorker: server sent close");
