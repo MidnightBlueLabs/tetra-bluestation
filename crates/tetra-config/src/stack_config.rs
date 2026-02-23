@@ -112,6 +112,8 @@ pub struct CfgCellInfo {
     #[serde(default)]
     pub migration: bool,
     #[serde(default)]
+    pub system_wide_services: bool,
+    #[serde(default)]
     pub voice_service: bool,
     #[serde(default)]
     pub circuit_mode_data_service: bool,
@@ -157,6 +159,7 @@ impl Default for CfgCellInfo {
             priority_cell: false,
             no_minimum_mode: false,
             migration: false,
+            system_wide_services: false,
             voice_service: false,
             circuit_mode_data_service: false,
             sndcp_service: false,

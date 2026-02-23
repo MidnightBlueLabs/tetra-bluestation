@@ -191,8 +191,12 @@ impl UmacBs {
     }
 
     fn effective_system_wide_services(config: &SharedConfig) -> bool {
-        let network_connected = config.state_read().network_connected;
-        network_connected
+        let cfg = config.config();
+        if cfg.brew.is_some() {
+            config.state_read().network_connected
+        } else {
+            cfg.cell.system_wide_services
+        }
     }
 
     fn refresh_system_wide_services(&mut self) {

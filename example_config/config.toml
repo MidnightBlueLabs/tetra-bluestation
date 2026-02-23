@@ -122,7 +122,7 @@ colour_code = 1
 # migration = false
 
 # Service availability flags
-# System Wide Services flag is removed, it is based on connection to Brew
+system_wide_services = true  # If false, radios will operate in fallback mode (ignored when Brew enabled)
 voice_service = true
 # circuit_mode_data_service = true
 # sndcp_service = true
