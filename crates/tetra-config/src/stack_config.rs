@@ -112,8 +112,6 @@ pub struct CfgCellInfo {
     #[serde(default)]
     pub migration: bool,
     #[serde(default)]
-    pub system_wide_services: bool,
-    #[serde(default)]
     pub voice_service: bool,
     #[serde(default)]
     pub circuit_mode_data_service: bool,
@@ -159,7 +157,6 @@ impl Default for CfgCellInfo {
             priority_cell: false,
             no_minimum_mode: false,
             migration: false,
-            system_wide_services: false,
             voice_service: false,
             circuit_mode_data_service: false,
             sndcp_service: false,
@@ -293,10 +290,22 @@ impl StackConfig {
 }
 
 /// Mutable, stack-editable state (mutex-protected).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StackState {
     pub cell_load_ca: u8,
     pub timeslot_alloc: TimeslotAllocator,
+    /// Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
+    pub network_connected: bool,
+}
+
+impl Default for StackState {
+    fn default() -> Self {
+        Self {
+            cell_load_ca: 0,
+            timeslot_alloc: TimeslotAllocator::default(),
+            network_connected: false,
+        }
+    }
 }
 
 /// Global shared configuration: immutable config + mutable state.

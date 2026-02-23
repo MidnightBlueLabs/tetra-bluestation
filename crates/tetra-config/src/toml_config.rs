@@ -201,9 +201,6 @@ fn apply_cell_info_patch(dst: &mut CfgCellInfo, ci: CellInfoDto) {
     if let Some(v) = ci.migration {
         dst.migration = v;
     }
-    if let Some(v) = ci.system_wide_services {
-        dst.system_wide_services = v;
-    }
     if let Some(v) = ci.voice_service {
         dst.voice_service = v;
     }
@@ -368,7 +365,6 @@ struct CellInfoDto {
     pub priority_cell: Option<bool>,
     pub no_minimum_mode: Option<bool>,
     pub migration: Option<bool>,
-    pub system_wide_services: Option<bool>,
     pub voice_service: Option<bool>,
     pub circuit_mode_data_service: Option<bool>,
     pub sndcp_service: Option<bool>,

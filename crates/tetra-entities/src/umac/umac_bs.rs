@@ -42,6 +42,7 @@ pub struct UmacBs {
     self_component: TetraEntity,
     config: SharedConfig,
     dltime: TdmaTime,
+    system_wide_services: bool,
 
     /// This MAC's endpoint ID, for addressing by the higher layers
     /// When using only a single base radio, we can set this to a fixed value
@@ -60,11 +61,13 @@ impl UmacBs {
     pub fn new(config: SharedConfig) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
-        let precomps = Self::generate_precomps(&config);
+        let system_wide_services = Self::effective_system_wide_services(&config);
+        let precomps = Self::generate_precomps(&config, system_wide_services);
         Self {
             self_component: TetraEntity::Umac,
             config,
             dltime: TdmaTime::default(),
+            system_wide_services,
             endpoint_id: 1,
             defrag: BsDefrag::new(),
             // event_label_store: EventLabelStore::new(),
@@ -75,7 +78,7 @@ impl UmacBs {
     /// Precomputes SYNC, SYSINFO messages (and subfield variants) for faster TX msg building
     /// Precomputed PDUs are passed to scheduler
     /// Needs to be re-invoked if any network parameter changes
-    pub fn generate_precomps(config: &SharedConfig) -> PrecomputedUmacPdus {
+    pub fn generate_precomps(config: &SharedConfig, system_wide_services: bool) -> PrecomputedUmacPdus {
         let c = config.config();
 
         // TODO FIXME make more/all parameters configurable
@@ -151,7 +154,7 @@ impl UmacBs {
                 priority_cell: c.cell.priority_cell,
                 no_minimum_mode: c.cell.no_minimum_mode,
                 migration: c.cell.migration,
-                system_wide_services: c.cell.system_wide_services,
+                system_wide_services,
                 voice_service: true,
                 circuit_mode_data_service: false,
                 sndcp_service: false,
@@ -184,6 +187,23 @@ impl UmacBs {
             mle_sysinfo: mle_sysinfo_pdu,
             mac_sync: mac_sync_pdu,
             mle_sync: mle_sync_pdu,
+        }
+    }
+
+    fn effective_system_wide_services(config: &SharedConfig) -> bool {
+        let network_connected = config.state_read().network_connected;
+        network_connected
+    }
+
+    fn refresh_system_wide_services(&mut self) {
+        let effective = Self::effective_system_wide_services(&self.config);
+        if effective != self.system_wide_services {
+            self.system_wide_services = effective;
+            self.channel_scheduler.set_system_wide_services(effective);
+            tracing::info!(
+                "UmacBs: system_wide_services {}",
+                if effective { "ENABLED" } else { "DISABLED" }
+            );
         }
     }
 
@@ -1414,6 +1434,7 @@ impl TetraEntityTrait for UmacBs {
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
+        self.refresh_system_wide_services();
 
         if self.channel_scheduler.cur_dltime != ts && self.channel_scheduler.cur_dltime == (TdmaTime { t: 0, f: 0, m: 0, h: 0 }) {
             // Upon start of the system, we need to set the dl time for the channel scheduler
