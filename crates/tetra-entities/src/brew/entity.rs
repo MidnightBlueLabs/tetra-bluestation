@@ -337,10 +337,7 @@ impl BrewEntity {
         let mut state = self.config.state_write();
         if state.network_connected != connected {
             state.network_connected = connected;
-            tracing::info!(
-                "BrewEntity: backhaul {}",
-                if connected { "CONNECTED" } else { "DISCONNECTED" }
-            );
+            tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
         }
     }
 

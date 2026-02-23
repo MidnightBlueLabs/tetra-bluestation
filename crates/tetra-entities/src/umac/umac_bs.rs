@@ -200,10 +200,7 @@ impl UmacBs {
         if effective != self.system_wide_services {
             self.system_wide_services = effective;
             self.channel_scheduler.set_system_wide_services(effective);
-            tracing::info!(
-                "UmacBs: system_wide_services {}",
-                if effective { "ENABLED" } else { "DISABLED" }
-            );
+            tracing::info!("UmacBs: system_wide_services {}", if effective { "ENABLED" } else { "DISABLED" });
         }
     }
 
