@@ -196,6 +196,17 @@ impl BsChannelScheduler {
     //     unimplemented!("need to refresh some msgs possibly");
     // }
 
+    /// Update the System Wide Services flag in the broadcast SYSINFO.
+    pub fn set_system_wide_services_state(&mut self, enabled: bool) {
+        if self.precomps.mle_sysinfo.bs_service_details.system_wide_services != enabled {
+            self.precomps.mle_sysinfo.bs_service_details.system_wide_services = enabled;
+            tracing::info!(
+                "BsChannelScheduler: system_wide_services {}",
+                if enabled { "ENABLED" } else { "DISABLED" }
+            );
+        }
+    }
+
     /// Fully wipe the schedule
     pub fn purge_schedule(&mut self) {
         self.dltx_queues = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];

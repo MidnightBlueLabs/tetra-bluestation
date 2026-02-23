@@ -271,6 +271,11 @@ impl BrewEntity {
             })
             .expect("failed to spawn BrewWorker thread");
 
+        {
+            let mut state = config.state_write();
+            state.network_connected = false;
+        }
+
         Self {
             config,
             brew_config,
@@ -292,11 +297,11 @@ impl BrewEntity {
             match event {
                 BrewEvent::Connected => {
                     tracing::info!("BrewEntity: connected to TetraPack server");
-                    self.connected = true;
+                    self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
                     tracing::warn!("BrewEntity: disconnected: {}", reason);
-                    self.connected = false;
+                    self.set_network_connected(false);
                     // Release all active calls
                     self.release_all_calls(queue);
                 }
@@ -323,6 +328,15 @@ impl BrewEntity {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
                 }
             }
+        }
+    }
+
+    fn set_network_connected(&mut self, connected: bool) {
+        self.connected = connected;
+        let mut state = self.config.state_write();
+        if state.network_connected != connected {
+            state.network_connected = connected;
+            tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
         }
     }
 

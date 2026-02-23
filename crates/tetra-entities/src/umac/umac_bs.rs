@@ -42,6 +42,7 @@ pub struct UmacBs {
     self_component: TetraEntity,
     config: SharedConfig,
     dltime: TdmaTime,
+    system_wide_services: bool,
 
     /// This MAC's endpoint ID, for addressing by the higher layers
     /// When using only a single base radio, we can set this to a fixed value
@@ -60,11 +61,13 @@ impl UmacBs {
     pub fn new(config: SharedConfig) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
+        let system_wide_services = Self::get_system_wide_services_state(&config);
         let precomps = Self::generate_precomps(&config);
         Self {
             self_component: TetraEntity::Umac,
             config,
             dltime: TdmaTime::default(),
+            system_wide_services,
             endpoint_id: 1,
             defrag: BsDefrag::new(),
             // event_label_store: EventLabelStore::new(),
@@ -142,6 +145,7 @@ impl UmacBs {
             ext_services: Some(ext_services),
         };
 
+        let system_wide_services = Self::get_system_wide_services_state(config);
         let mle_sysinfo_pdu = DMleSysinfo {
             location_area: c.cell.location_area,
             subscriber_class: 65535, // All subscriber classes allowed
@@ -151,7 +155,7 @@ impl UmacBs {
                 priority_cell: c.cell.priority_cell,
                 no_minimum_mode: c.cell.no_minimum_mode,
                 migration: c.cell.migration,
-                system_wide_services: c.cell.system_wide_services,
+                system_wide_services,
                 voice_service: true,
                 circuit_mode_data_service: false,
                 sndcp_service: false,
@@ -184,6 +188,30 @@ impl UmacBs {
             mle_sysinfo: mle_sysinfo_pdu,
             mac_sync: mac_sync_pdu,
             mle_sync: mle_sync_pdu,
+        }
+    }
+
+    /// Retrieve currently set value of system-wide services. If SwMI is active, this governs connection state
+    /// Otherwise, value from config is used.
+    fn get_system_wide_services_state(config: &SharedConfig) -> bool {
+        let cfg = config.config();
+        if cfg.brew.is_some() {
+            config.state_read().network_connected
+        } else {
+            cfg.cell.system_wide_services
+        }
+    }
+
+    fn refresh_system_wide_services(&mut self) {
+        let is_effective = Self::get_system_wide_services_state(&self.config);
+        if is_effective != self.system_wide_services {
+            self.system_wide_services = is_effective;
+            self.channel_scheduler.set_system_wide_services_state(is_effective);
+            if is_effective {
+                tracing::info!("UmacBs: system_wide_services ENABLED");
+            } else {
+                tracing::warn!("UmacBs: system_wide_services DISABLED");
+            }
         }
     }
 
@@ -1414,6 +1442,7 @@ impl TetraEntityTrait for UmacBs {
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
+        self.refresh_system_wide_services();
 
         if self.channel_scheduler.cur_dltime != ts && self.channel_scheduler.cur_dltime == (TdmaTime { t: 0, f: 0, m: 0, h: 0 }) {
             // Upon start of the system, we need to set the dl time for the channel scheduler
