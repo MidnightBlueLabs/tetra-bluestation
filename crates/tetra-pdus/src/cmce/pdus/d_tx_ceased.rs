@@ -14,7 +14,7 @@ pub struct DTxCeased {
     /// Type1, 14 bits, Call identifier
     pub call_identifier: u16,
     /// Type1, 1 bits, Transmission request permission
-    /// Set to true to signal MSes they are allowed to send a U-TX DEMAND
+    /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
     pub transmission_request_permission: bool,
     /// Type2, 6 bits, Notification indicator
     pub notification_indicator: Option<u64>,

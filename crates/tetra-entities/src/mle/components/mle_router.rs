@@ -25,17 +25,18 @@ impl MleRouter {
         }
     }
 
-    pub fn create_handle(&mut self, addr: TetraAddress, link_id: LinkId, endpoint_id: EndpointId, ts: TdmaTime) -> u32 {
+    pub fn create_handle(&mut self, _addr: TetraAddress, _link_id: LinkId, _endpoint_id: EndpointId, _ts: TdmaTime) -> u32 {
         let handle = self.next_handle;
-        let conn = MleConnState {
-            handle,
-            addr,
-            link_id,
-            endpoint_id,
-            ts_created: ts,
-            ts_last_used: ts,
-        };
-        self.states.insert(handle, conn);
+        // TODO FIXME: Re-enable handle insertion once we start using this
+        // let conn = MleConnState {
+        //     handle,
+        //     addr,
+        //     link_id,
+        //     endpoint_id,
+        //     ts_created: ts,
+        //     ts_last_used: ts,
+        // };
+        // self.states.insert(handle, conn);
         self.next_handle += 1;
         handle
     }

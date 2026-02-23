@@ -335,9 +335,20 @@ impl SoapyIo {
                     // Re-compute total count from timestamp (gracefully handles lost samples).
                     let mut count = time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs);
 
-                    // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic.
+                    // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic
+                    // This is known to happen for LimeSDR Mini v2 after some time
                     let delta_from_expected = count - self.rx_next_count;
                     if delta_from_expected.abs() <= RX_TIMESTAMP_JITTER_TOLERANCE_SAMPLES {
+                        if delta_from_expected != 0 {
+                            // Re-anchor phase so persistent +/-1 sample offset is corrected
+                            let initial_time = self.initial_time.unwrap() + ticks_to_time_ns(delta_from_expected, self.rx_fs); // unwrap never fails
+                            self.initial_time = Some(initial_time);
+                            tracing::debug!(
+                                "RX timestamp jitter {} sample(s); re-anchoring initial_time by {} ns",
+                                delta_from_expected,
+                                ticks_to_time_ns(delta_from_expected, self.rx_fs)
+                            );
+                        }
                         count = self.rx_next_count;
                     }
 

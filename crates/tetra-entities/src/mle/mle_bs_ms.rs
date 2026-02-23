@@ -440,8 +440,8 @@ impl Mle {
         pdu.copy_bits(&mut prim.sdu, sdu_len);
         pdu.seek(0);
 
-        let (addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
-        assert_eq!(addr.ssi, prim.address.ssi);
+        // let (addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
+        // assert_eq!(addr.ssi, prim.address.ssi);
         let sapmsg = SapMsg {
             sap: Sap::TlaSap,
             src: self.self_component,
@@ -449,8 +449,8 @@ impl Mle {
             dltime: message.dltime,
             msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
                 main_address: prim.address,
-                link_id: link,
-                endpoint_id: endpoint,
+                link_id: 0,
+                endpoint_id: 0,
                 tl_sdu: pdu,
                 stealing_permission: false,
                 subscriber_class: 0, // TODO fixme
@@ -500,9 +500,9 @@ impl Mle {
         pdu.copy_bits(&mut prim.sdu, sdu_len);
         pdu.seek(0);
 
-        let (_addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
-        assert_eq!(link, prim.link_id);
-        assert_eq!(endpoint, prim.endpoint_id);
+        // let (_addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
+        // assert_eq!(link, prim.link_id);
+        // assert_eq!(endpoint, prim.endpoint_id);
         // Take Channel Allocation Request if any
         let chan_alloc = prim.chan_alloc.take();
 

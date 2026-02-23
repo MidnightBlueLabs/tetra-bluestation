@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use uuid::Uuid;
 
+use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::SharedConfig;
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
-use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
 use tetra_saps::control::brew::{BrewSubscriberAction, BrewSubscriberUpdate};
-use crate::{MessageQueue, TetraEntityTrait};
+use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
 
 use super::worker::{BrewCommand, BrewConfig, BrewEvent, BrewWorker};
 
@@ -192,10 +192,8 @@ impl VoiceJitterBuffer {
     }
 
     fn recompute_target(&mut self) {
-        let jitter_component =
-            ((self.jitter_us_ewma * 2.0) / BREW_EXPECTED_FRAME_INTERVAL_US).ceil() as usize;
-        let target =
-            BREW_JITTER_BASE_FRAMES + self.initial_latency_frames + jitter_component + self.underrun_boost;
+        let jitter_component = ((self.jitter_us_ewma * 2.0) / BREW_EXPECTED_FRAME_INTERVAL_US).ceil() as usize;
+        let target = BREW_JITTER_BASE_FRAMES + self.initial_latency_frames + jitter_component + self.underrun_boost;
         self.target_frames = target.clamp(BREW_JITTER_MIN_FRAMES, BREW_JITTER_TARGET_MAX_FRAMES);
     }
 
@@ -276,6 +274,11 @@ impl BrewEntity {
             })
             .expect("failed to spawn BrewWorker thread");
 
+        {
+            let mut state = config.state_write();
+            state.network_connected = false;
+        }
+
         Self {
             config,
             brew_config,
@@ -302,10 +305,11 @@ impl BrewEntity {
                     tracing::info!("BrewEntity: connected to TetraPack server");
                     self.connected = true;
                     self.resync_subscribers();
+                    self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
                     tracing::warn!("BrewEntity: disconnected: {}", reason);
-                    self.connected = false;
+                    self.set_network_connected(false);
                     // Release all active calls
                     self.release_all_calls(queue);
                 }
@@ -433,6 +437,15 @@ impl BrewEntity {
                     groups: gssi_list,
                 });
             }
+        }
+    }
+
+    fn set_network_connected(&mut self, connected: bool) {
+        self.connected = connected;
+        let mut state = self.config.state_write();
+        if state.network_connected != connected {
+            state.network_connected = connected;
+            tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
         }
     }
 

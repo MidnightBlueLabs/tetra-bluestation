@@ -292,11 +292,14 @@ impl LmacBs {
         }
     }
 
-    // fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
-    //     tracing::trace!("rx_tmv_configure_req");
-    //     let SapMsgInner::TmvConfigureReq(_prim) = &mut message.msg else {panic!()};
-    //     unimplemented_log!("rx_tmv_configure_req");
-    // }
+    fn rx_tmv_configure_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
+        let SapMsgInner::TmvConfigureReq(prim) = &message.msg else {
+            panic!()
+        };
+        if let Some(stolen) = prim.second_half_stolen {
+            self.second_block_stolen = stolen;
+        }
+    }
 
     /// Request from Umac to transmit a message
     fn rx_tmv_unitdata_req_slot(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -382,9 +385,9 @@ impl LmacBs {
         tracing::trace!("rx_tmv_prim");
 
         match message.msg {
-            // SapMsgInner::TmvConfigureReq(_) => {
-            //     self.rx_tmv_configure_req(queue, message);
-            // }
+            SapMsgInner::TmvConfigureReq(_) => {
+                self.rx_tmv_configure_req(queue, message);
+            }
             SapMsgInner::TmvUnitdataReq(_) => {
                 self.rx_tmv_unitdata_req_slot(queue, message);
             }

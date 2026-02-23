@@ -293,10 +293,22 @@ impl StackConfig {
 }
 
 /// Mutable, stack-editable state (mutex-protected).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StackState {
     pub cell_load_ca: u8,
     pub timeslot_alloc: TimeslotAllocator,
+    /// Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
+    pub network_connected: bool,
+}
+
+impl Default for StackState {
+    fn default() -> Self {
+        Self {
+            cell_load_ca: 0,
+            timeslot_alloc: TimeslotAllocator::default(),
+            network_connected: false,
+        }
+    }
 }
 
 /// Global shared configuration: immutable config + mutable state.
