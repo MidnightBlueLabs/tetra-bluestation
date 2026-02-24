@@ -1,8 +1,8 @@
-use crate::{MessageQueue, TetraEntityTrait};
+use crate::{MessageQueue, TetraEntityTrait, brew};
 use tetra_config::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
-use tetra_saps::control::brew::{BrewSubscriberAction, BrewSubscriberUpdate};
+use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
@@ -35,23 +35,46 @@ impl MmBs {
         }
     }
 
-    fn emit_brew_update(&self, queue: &mut MessageQueue, dltime: TdmaTime, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
-        let update = BrewSubscriberUpdate { issi, groups, action };
-        let msg = SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Mm,
-            dest: TetraEntity::Brew,
-            dltime,
-            msg: SapMsgInner::BrewSubscriberUpdate(update.clone()),
-        };
-        queue.push_back(msg);
+    fn emit_subscriber_update(
+        &self,
+        queue: &mut MessageQueue,
+        dltime: TdmaTime,
+        issi: u32,
+        groups: Vec<u32>,
+        action: BrewSubscriberAction,
+    ) {
+        // If brew is active, take all brew-routable groups and emit an update to brew entity
+        if brew::is_active(&self.config) {
+            let brew_groups = groups
+                .iter()
+                .filter(|gssi| brew::is_brew_routable(&self.config, **gssi))
+                .copied()
+                .collect::<Vec<u32>>();
+            if !brew_groups.is_empty() {
+                let brew_update = MmSubscriberUpdate {
+                    issi,
+                    groups: brew_groups,
+                    action,
+                };
+                let msg = SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Mm,
+                    dest: TetraEntity::Brew,
+                    dltime,
+                    msg: SapMsgInner::MmSubscriberUpdate(brew_update),
+                };
+                queue.push_back(msg);
+            }
+        }
 
+        // Always emit an update to the Cmce entity
+        let mm_update = MmSubscriberUpdate { issi, groups, action };
         let msg = SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Mm,
             dest: TetraEntity::Cmce,
             dltime,
-            msg: SapMsgInner::BrewSubscriberUpdate(update),
+            msg: SapMsgInner::MmSubscriberUpdate(mm_update),
         };
         queue.push_back(msg);
     }
@@ -84,9 +107,9 @@ impl MmBs {
         if let Some(client) = detached_client {
             if !client.groups.is_empty() {
                 let groups: Vec<u32> = client.groups.iter().copied().collect();
-                self.emit_brew_update(_queue, message.dltime, ssi, groups, BrewSubscriberAction::Deaffiliate);
+                self.emit_subscriber_update(_queue, message.dltime, ssi, groups, BrewSubscriberAction::Deaffiliate);
             }
-            self.emit_brew_update(_queue, message.dltime, ssi, Vec::new(), BrewSubscriberAction::Deregister);
+            self.emit_subscriber_update(_queue, message.dltime, ssi, Vec::new(), BrewSubscriberAction::Deregister);
         } else {
             tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
             // return;
@@ -139,7 +162,7 @@ impl MmBs {
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
                 Ok(_) => {
-                    self.emit_brew_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
+                    self.emit_subscriber_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
                 }
                 Err(e) => {
                     tracing::warn!("Failed registering roaming MS {}: {:?}", issi, e);
@@ -312,7 +335,7 @@ impl MmBs {
             match self.client_mgr.client_detach_all_groups(issi) {
                 Ok(_) => {
                     if !prior_groups.is_empty() {
-                        self.emit_brew_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                        self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
                     }
                 }
                 Err(e) => {
@@ -463,10 +486,10 @@ impl MmBs {
         }
 
         if !aff_groups.is_empty() {
-            self.emit_brew_update(queue, dltime, issi, aff_groups, BrewSubscriberAction::Affiliate);
+            self.emit_subscriber_update(queue, dltime, issi, aff_groups, BrewSubscriberAction::Affiliate);
         }
         if !deaff_groups.is_empty() {
-            self.emit_brew_update(queue, dltime, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
+            self.emit_subscriber_update(queue, dltime, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
         }
 
         accepted_groups

@@ -184,17 +184,6 @@ voice_service = true
 # Adaptive jitter buffering is always enabled; this adds fixed startup delay if needed.
 # jitter_initial_latency_frames = 0
 
-# Ranges 0-90 (including) cannot be routed over brew. 
-# You can congure local_ssi_ranges (see above) to guarantee certain ranges remain local
-# Additionally, you can have a brew-specific whitelist OR blacklist
-# Whitelist: 				only SSIs in one of these ranges may be routed over brew
-# Blacklist: 				local_ssi_ranges and blacklisted_ssi_ranges are NOT allowed over brew, others are allowed
-# No blacklist, whitelist: 	local_ssi_ranges are NOT allowed over brew, others are allowed
-# Range end is exclusive, so the range end number is NOT inside the range
-# whitelisted_ssi_ranges = [
-# 	[90,100],
-# 	[200,300]
-# ]
-# blacklisted_ssi_ranges = [
-# 	[90,100]
-# ]
+# Uncomment to allow only select SSIs to be transmitted over Brew
+# If left commented, all (outside of local_ssi_ranges) are allowed over Brew
+# whitelisted_ssis = [91]

@@ -11,13 +11,13 @@ use uuid::Uuid;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::SharedConfig;
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
-use tetra_saps::control::brew::{BrewSubscriberAction, BrewSubscriberUpdate};
+use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
 
 use super::worker::{BrewCommand, BrewEvent, BrewWorker};
 
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
-const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(1);
+const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(5);
 /// Minimum playout buffer depth in frames.
 const BREW_JITTER_MIN_FRAMES: usize = 2;
 /// Default playout buffer depth in frames.
@@ -340,7 +340,7 @@ impl BrewEntity {
         }
     }
 
-    fn handle_subscriber_update(&mut self, update: BrewSubscriberUpdate) {
+    fn handle_subscriber_update(&mut self, update: MmSubscriberUpdate) {
         let issi = update.issi;
         let groups = update.groups;
 
@@ -831,7 +831,7 @@ impl TetraEntityTrait for BrewEntity {
             }) => {
                 self.rx_network_call_ready(brew_uuid, call_id, ts, usage);
             }
-            SapMsgInner::BrewSubscriberUpdate(update) => {
+            SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
             }
             _ => {

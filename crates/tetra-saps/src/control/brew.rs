@@ -7,7 +7,7 @@ pub enum BrewSubscriberAction {
 }
 
 #[derive(Debug, Clone)]
-pub struct BrewSubscriberUpdate {
+pub struct MmSubscriberUpdate {
     pub issi: u32,
     pub groups: Vec<u32>,
     pub action: BrewSubscriberAction,

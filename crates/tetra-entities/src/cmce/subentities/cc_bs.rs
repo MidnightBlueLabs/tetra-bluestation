@@ -18,7 +18,7 @@ use tetra_pdus::cmce::{
 use tetra_saps::{
     SapMsg, SapMsgInner,
     control::{
-        brew::{BrewSubscriberAction, BrewSubscriberUpdate},
+        brew::{BrewSubscriberAction, MmSubscriberUpdate},
         call_control::{CallControl, Circuit},
         enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
     },
@@ -284,20 +284,21 @@ impl CcBsSubentity {
         for (call_id, origin) in to_drop {
             tracing::info!("CMCE: dropping call_id={} gssi={} (no listeners)", call_id, gssi);
             if let CallOrigin::Network { brew_uuid } = origin {
-                // No further gating needed as presence of brew_uuid proves it should be routed over brew
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Brew,
-                    dltime: self.dltime,
-                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
-                });
-            }
+                if brew::is_brew_routable(&self.config, gssi) {
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Brew,
+                        dltime: self.dltime,
+                        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                    });
+                };
+            };
             self.release_call(queue, call_id);
         }
     }
 
-    pub fn handle_subscriber_update(&mut self, queue: &mut MessageQueue, update: BrewSubscriberUpdate) {
+    pub fn handle_subscriber_update(&mut self, queue: &mut MessageQueue, update: MmSubscriberUpdate) {
         let issi = update.issi;
         let groups = update.groups;
 
@@ -861,8 +862,8 @@ impl CcBsSubentity {
 
     /// Check if any active calls in hangtime have expired, and if so, release them
     fn check_hangtime_expiry(&mut self, queue: &mut MessageQueue) {
-        // Hangtime: ~1 second = 1 * 18 * 4 = 72 frames (approximately)
-        const HANGTIME_FRAMES: i32 = 1 * 18 * 4;
+        // Hangtime: 5 multiframes = ~5 seconds
+        const HANGTIME_FRAMES: i32 = 5 * 18 * 4;
 
         let expired: Vec<u16> = self
             .active_calls
@@ -1232,6 +1233,8 @@ impl CcBsSubentity {
 
     /// Handle network-initiated group call start
     fn rx_network_call_start(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, source_issi: u32, dest_gssi: u32, _priority: u8) {
+        assert!(brew::is_brew_routable(&self.config, dest_gssi));
+
         if !self.has_listener(dest_gssi) {
             tracing::info!(
                 "CMCE: ignoring network call start uuid={} gssi={} (no listeners)",
@@ -1240,7 +1243,7 @@ impl CcBsSubentity {
             );
             self.drop_group_calls_if_unlistened(queue, dest_gssi);
 
-            // No further gating, as presence of brew_uuid proves it is a Brew call
+            // We already checked this is cleared for brew
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -1299,8 +1302,7 @@ impl CcBsSubentity {
                 }),
             });
 
-            // Respond to Brew with existing call resources
-            // No further gating, as presence of brew_uuid proves it is a Brew call
+            // Respond to Brew with existing call resources, we already ensured it is cleared for brew
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -1447,8 +1449,7 @@ impl CcBsSubentity {
             },
         );
 
-        // Respond to Brew with allocated resources
-        // No further gating, as presence of brew_uuid proves it is a Brew call
+        // Respond to Brew with allocated resources, we already ensured it is cleared for brew
         queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,

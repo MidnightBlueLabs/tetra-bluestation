@@ -4,7 +4,7 @@ use tetra_core::Sap;
 use tetra_core::TdmaTime;
 use tetra_core::tetra_entities::TetraEntity;
 
-use crate::control::brew::BrewSubscriberUpdate;
+use crate::control::brew::MmSubscriberUpdate;
 use crate::control::call_control::CallControl;
 use crate::tmd::TmdCircuitDataInd;
 use crate::tmd::TmdCircuitDataReq;
@@ -78,7 +78,7 @@ pub enum SapMsgInner {
     CmceCallControl(CallControl),
 
     // MM -> Brew/CMCE subscriber update
-    BrewSubscriberUpdate(BrewSubscriberUpdate),
+    MmSubscriberUpdate(MmSubscriberUpdate),
 
     // LTPD-SAP (MLE-LTPD)
     LtpdMleUnitdataInd(LtpdMleUnitdataInd),
@@ -109,7 +109,7 @@ impl Display for SapMsgInner {
             SapMsgInner::TlmbSysinfoInd(_) => write!(f, "TmbSysinfoInd"),
 
             // Control/Brew
-            SapMsgInner::BrewSubscriberUpdate(_) => write!(f, "BrewSubscriberUpdate"),
+            SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
 
             // TLB-SAP
             // SapMsgInner::TlbTlSyncInd(_) => write!(f, "TlbTlSyncInd"),
