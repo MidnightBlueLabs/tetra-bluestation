@@ -144,9 +144,19 @@ voice_service = true
 # Frame 18 extension support
 # frame_18_ext = false
 
+# Local SSI ranges for this cell. Traffic for these ranges will not leave the cell
+# This overrides any settings in brew section, if enabled. 
+# Also, incoming brew traffic on those rangges will be dropped
+# Range end is exclusive, so the range end number is NOT inside the ranges
+# local_ssi_ranges = [
+#     [0, 91],
+# ]
+
+
 ###############################################################################
 
 # Brew protocol: Connect to TetraPack/BrandMeister server via TETRA Homebrew Protocol.
+# All groups that radios attach to are forwarded to Brew as affiliations.
 # Uncomment this section to automatically load and use Brew entity
 # See: https://wiki.tetrapack.online/books/tetra/page/brew
 
@@ -167,13 +177,13 @@ voice_service = true
 # ISSI to register with server. Usually, your DMR ID. 
 # issi = 012345
 
-# Comma separated list of Group IDs (GSSIs) to affiliate with
-# BlueStation will receive those groups from TetraPack/Brandmeister
-# groups = [91]
-
 # Reconnection delay (seconds)
 # reconnect_delay_secs = 15
 
 # Optional: additional initial latency compensation in frames for inbound Brew jitter playout.
 # Adaptive jitter buffering is always enabled; this adds fixed startup delay if needed.
 # jitter_initial_latency_frames = 0
+
+# Uncomment to allow only select SSIs to be transmitted over Brew
+# If left commented, all (outside of local_ssi_ranges) are allowed over Brew
+# whitelisted_ssis = [91]

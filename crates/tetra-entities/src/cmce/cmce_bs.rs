@@ -109,6 +109,9 @@ impl TetraEntityTrait for CmceBs {
                 SapMsgInner::CmceCallControl(_) => {
                     self.cc.rx_call_control(queue, message);
                 }
+                SapMsgInner::MmSubscriberUpdate(update) => {
+                    self.cc.handle_subscriber_update(queue, update);
+                }
                 _ => {
                     panic!("Unexpected control message: {:?}", message.msg);
                 }

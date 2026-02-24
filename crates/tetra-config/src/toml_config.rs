@@ -4,6 +4,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 
 use serde::Deserialize;
+use tetra_core::ranges::SortedDisjointSsiRanges;
 use toml::Value;
 
 use super::stack_config_brew::{CfgBrewDto, apply_brew_patch};
@@ -237,6 +238,10 @@ fn apply_cell_info_patch(dst: &mut CfgCellInfo, ci: CellInfoDto) {
     if let Some(v) = ci.frame_18_ext {
         dst.frame_18_ext = v;
     }
+
+    if let Some(ranges) = ci.local_ssi_ranges {
+        dst.local_ssi_ranges = SortedDisjointSsiRanges::from_vec_tuple(ranges)
+    }
 }
 
 fn sorted_keys(map: &HashMap<String, Value>) -> Vec<&str> {
@@ -381,6 +386,8 @@ struct CellInfoDto {
     pub ts_reserved_frames: Option<u8>,
     pub u_plane_dtx: Option<bool>,
     pub frame_18_ext: Option<bool>,
+
+    pub local_ssi_ranges: Option<Vec<(u32, u32)>>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

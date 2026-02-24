@@ -1,19 +1,20 @@
 //! Brew protocol entity bridging TetraPack WebSocket to UMAC/MLE with hangtime-based circuit reuse
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use tetra_config::stack_config_brew::CfgBrew;
 use uuid::Uuid;
 
+use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::SharedConfig;
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
+use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
 
-use crate::{MessageQueue, TetraEntityTrait};
-
-use super::worker::{BrewCommand, BrewConfig, BrewEvent, BrewWorker};
+use super::worker::{BrewCommand, BrewEvent, BrewWorker};
 
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
 const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(5);
@@ -227,7 +228,8 @@ impl VoiceJitterBuffer {
 pub struct BrewEntity {
     config: SharedConfig,
 
-    brew_config: BrewConfig,
+    /// Also contained in the SharedConfig, but kept for fast, convenient access
+    brew_config: CfgBrew,
 
     dltime: TdmaTime,
 
@@ -248,6 +250,9 @@ pub struct BrewEntity {
     /// UL calls being forwarded to TetraPack, keyed by timeslot
     ul_forwarded: HashMap<u8, UlForwardedCall>,
 
+    /// Registered subscriber groups (ISSI -> set of GSSIs)
+    subscriber_groups: HashMap<u32, HashSet<u32>>,
+
     /// Whether the worker is connected
     connected: bool,
 
@@ -256,13 +261,14 @@ pub struct BrewEntity {
 }
 
 impl BrewEntity {
-    pub fn new(config: SharedConfig, brew_config: BrewConfig) -> Self {
+    pub fn new(config: SharedConfig) -> Self {
         // Create channels
         let (event_sender, event_receiver) = unbounded::<BrewEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
 
         // Spawn worker thread
-        let worker_config = brew_config.clone();
+        let brew_config = config.config().as_ref().brew.clone().unwrap(); // Never fails
+        let worker_config = config.clone();
         let handle = thread::Builder::new()
             .name("brew-worker".to_string())
             .spawn(move || {
@@ -286,6 +292,7 @@ impl BrewEntity {
             dl_jitter: HashMap::new(),
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
+            subscriber_groups: HashMap::new(),
             connected: false,
             worker_handle: Some(handle),
         }
@@ -297,6 +304,8 @@ impl BrewEntity {
             match event {
                 BrewEvent::Connected => {
                     tracing::info!("BrewEntity: connected to TetraPack server");
+                    self.connected = true;
+                    self.resync_subscribers();
                     self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
@@ -327,6 +336,107 @@ impl BrewEntity {
                 BrewEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
                 }
+            }
+        }
+    }
+
+    fn handle_subscriber_update(&mut self, update: MmSubscriberUpdate) {
+        let issi = update.issi;
+        let groups = update.groups;
+
+        match update.action {
+            BrewSubscriberAction::Register => {
+                let known = self.subscriber_groups.contains_key(&issi);
+                self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
+                tracing::info!("BrewEntity: subscriber register issi={} known={}", issi, known);
+                let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+            }
+            BrewSubscriberAction::Deregister => {
+                let mut removed_groups = Vec::new();
+                if let Some(existing) = self.subscriber_groups.remove(&issi) {
+                    for gssi in existing {
+                        removed_groups.push(gssi);
+                    }
+                }
+                if !removed_groups.is_empty() {
+                    tracing::info!(
+                        "BrewEntity: subscriber deaffiliate on deregister issi={} groups={:?}",
+                        issi,
+                        removed_groups
+                    );
+                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
+                        issi,
+                        groups: removed_groups,
+                    });
+                }
+                tracing::info!("BrewEntity: subscriber deregister issi={}", issi);
+                let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
+            }
+            BrewSubscriberAction::Affiliate => {
+                let is_new = !self.subscriber_groups.contains_key(&issi);
+                let mut new_groups = Vec::new();
+                {
+                    let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
+                    for gssi in groups {
+                        if entry.insert(gssi) {
+                            new_groups.push(gssi);
+                        }
+                    }
+                }
+
+                if is_new {
+                    tracing::info!("BrewEntity: affiliate from unknown issi={}, sending register", issi);
+                    let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+                }
+
+                if new_groups.is_empty() {
+                    tracing::debug!("BrewEntity: affiliate ignored (no new groups) issi={}", issi);
+                } else {
+                    tracing::info!("BrewEntity: subscriber affiliate issi={} groups={:?}", issi, new_groups);
+                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: new_groups });
+                }
+            }
+            BrewSubscriberAction::Deaffiliate => {
+                let mut removed_groups = Vec::new();
+                if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
+                    for gssi in groups {
+                        if entry.remove(&gssi) {
+                            removed_groups.push(gssi);
+                        }
+                    }
+                } else {
+                    removed_groups = groups;
+                }
+
+                if removed_groups.is_empty() {
+                    tracing::debug!("BrewEntity: deaffiliate ignored (no matching groups) issi={}", issi);
+                } else {
+                    tracing::info!("BrewEntity: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
+                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
+                        issi,
+                        groups: removed_groups,
+                    });
+                }
+            }
+        }
+    }
+
+    fn resync_subscribers(&self) {
+        if self.subscriber_groups.is_empty() {
+            tracing::debug!("BrewEntity: no subscribers to resync");
+            return;
+        }
+
+        tracing::info!("BrewEntity: resyncing {} subscribers to TetraPack", self.subscriber_groups.len());
+
+        for (issi, groups) in &self.subscriber_groups {
+            let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
+            if !groups.is_empty() {
+                let gssi_list: Vec<u32> = groups.iter().copied().collect();
+                let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
+                    issi: *issi,
+                    groups: gssi_list,
+                });
             }
         }
     }
@@ -496,12 +606,10 @@ impl BrewEntity {
 
     /// Clean up expired hanging call tracking hints (CMCE already released circuits)
     fn expire_hanging_calls(&mut self, _queue: &mut MessageQueue) {
-        const HANGTIME_SECS: u64 = 5;
-
         let expired: Vec<u32> = self
             .hanging_calls
             .iter()
-            .filter(|(_, h)| h.since.elapsed().as_secs() > HANGTIME_SECS)
+            .filter(|(_, h)| h.since.elapsed() >= GROUP_CALL_HANGTIME)
             .map(|(gssi, _)| *gssi)
             .collect();
 
@@ -644,6 +752,30 @@ impl BrewEntity {
             tracing::warn!("BrewEntity: NetworkCallReady for unknown uuid={}", brew_uuid);
         }
     }
+
+    fn drop_network_call(&mut self, brew_uuid: Uuid) {
+        if let Some(call) = self.active_calls.remove(&brew_uuid) {
+            tracing::info!(
+                "BrewEntity: dropping network call uuid={} gssi={} (CMCE request)",
+                brew_uuid,
+                call.dest_gssi
+            );
+            self.dl_jitter.remove(&brew_uuid);
+            self.hanging_calls.remove(&call.dest_gssi);
+            return;
+        }
+
+        let hanging_gssi = self
+            .hanging_calls
+            .iter()
+            .find_map(|(gssi, hanging)| if hanging.uuid == brew_uuid { Some(*gssi) } else { None });
+        if let Some(gssi) = hanging_gssi {
+            tracing::info!("BrewEntity: dropping hanging call uuid={} gssi={} (CMCE request)", brew_uuid, gssi);
+            self.hanging_calls.remove(&gssi);
+        } else {
+            tracing::debug!("BrewEntity: drop requested for unknown uuid={}", brew_uuid);
+        }
+    }
 }
 
 // ─── TetraEntityTrait implementation ──────────────────────────────
@@ -688,6 +820,9 @@ impl TetraEntityTrait for BrewEntity {
             SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }) => {
                 self.handle_local_call_end(call_id, ts);
             }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }) => {
+                self.drop_network_call(brew_uuid);
+            }
             SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,
@@ -695,6 +830,9 @@ impl TetraEntityTrait for BrewEntity {
                 usage,
             }) => {
                 self.rx_network_call_ready(brew_uuid, call_id, ts, usage);
+            }
+            SapMsgInner::MmSubscriberUpdate(update) => {
+                self.handle_subscriber_update(update);
             }
             _ => {
                 tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
@@ -713,16 +851,43 @@ impl BrewEntity {
             tracing::trace!("BrewEntity: not connected, ignoring local call start");
             return;
         }
+        // TODO: Check if local
+        // if dest_gssi == 9 {
+        //     tracing::debug!(
+        //         "BrewEntity: suppressing local call forwarding for TG 9 (call_id={} src={} ts={})",
+        //         call_id,
+        //         source_issi,
+        //         ts
+        //     );
+        //     return;
+        // }
 
-        // Check if this group is subscribed in Brew config
-        // let groups = &self.config.config().brew.groups;
-        let groups = &self.brew_config.groups;
-        if !groups.contains(&dest_gssi) {
-            tracing::debug!(
-                "BrewEntity: local call on GSSI {} not subscribed (subscribed: {:?}), not forwarding",
+        // If we're already forwarding on this timeslot, treat as a talker change/update
+        if let Some(fwd) = self.ul_forwarded.get_mut(&ts) {
+            if fwd.call_id != call_id || fwd.dest_gssi != dest_gssi {
+                tracing::warn!(
+                    "BrewEntity: updating forwarded call on ts={} (was call_id={} gssi={}) -> (call_id={} gssi={})",
+                    ts,
+                    fwd.call_id,
+                    fwd.dest_gssi,
+                    call_id,
+                    dest_gssi
+                );
+            }
+
+            fwd.call_id = call_id;
+            fwd.source_issi = source_issi;
+            fwd.dest_gssi = dest_gssi;
+            fwd.frame_count = 0;
+
+            // Send GROUP_TX update for the new talker
+            let _ = self.command_sender.send(BrewCommand::SendGroupTx {
+                uuid: fwd.uuid,
+                source_issi,
                 dest_gssi,
-                groups
-            );
+                priority: 0,
+                service: 0, // TETRA encoded speech
+            });
             return;
         }
 

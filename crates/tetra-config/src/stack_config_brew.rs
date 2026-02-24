@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use serde::Deserialize;
 use toml::Value;
 
 /// Brew protocol (TetraPack/BrandMeister) configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CfgBrew {
     /// TetraPack server hostname or IP
     pub host: String,
@@ -18,12 +18,12 @@ pub struct CfgBrew {
     pub password: Option<String>,
     /// ISSI to register with the TetraPack server
     pub issi: u32,
-    /// GSSIs (group IDs) to affiliate to
-    pub groups: Vec<u32>,
-    /// Reconnection delay in seconds
-    pub reconnect_delay_secs: u64,
+    /// Reconnection delay
+    pub reconnect_delay: Duration,
     /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
     pub jitter_initial_latency_frames: u8,
+
+    pub whitelisted_ssis: Option<Vec<u32>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -41,14 +41,14 @@ pub struct CfgBrewDto {
     pub password: String,
     /// ISSI to register with the TetraPack server
     pub issi: u32,
-    /// GSSIs (group IDs) to affiliate to
-    pub groups: Vec<u32>,
     /// Reconnection delay in seconds
     #[serde(default = "default_brew_reconnect_delay")]
     pub reconnect_delay_secs: u64,
     /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
     #[serde(default)]
     pub jitter_initial_latency_frames: u8,
+
+    pub whitelisted_ssis: Option<Vec<u32>>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -71,8 +71,8 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         username: Some(src.username.to_string()),
         password: Some(src.password),
         issi: src.issi,
-        groups: src.groups,
-        reconnect_delay_secs: src.reconnect_delay_secs,
+        reconnect_delay: Duration::from_secs(src.reconnect_delay_secs),
         jitter_initial_latency_frames: src.jitter_initial_latency_frames,
+        whitelisted_ssis: src.whitelisted_ssis,
     }
 }

@@ -1,13 +1,18 @@
 //! Brew WebSocket worker thread handling HTTP Digest Auth, TLS, and bidirectional Brew message exchange
 
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
+use tetra_config::SharedConfig;
+use tetra_config::stack_config_brew::CfgBrew;
 use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
 use uuid::Uuid;
+
+use crate::brew;
 
 use super::protocol::*;
 
@@ -53,8 +58,14 @@ pub enum BrewCommand {
     /// Register a subscriber (ISSI)
     RegisterSubscriber { issi: u32 },
 
+    /// Deregister a subscriber (ISSI)
+    DeregisterSubscriber { issi: u32 },
+
     /// Affiliate subscriber to groups
     AffiliateGroups { issi: u32, groups: Vec<u32> },
+
+    /// Deaffiliate subscriber from groups
+    DeaffiliateGroups { issi: u32, groups: Vec<u32> },
 
     /// Send GROUP_TX to TetraPack (local radio started transmitting on subscribed group)
     SendGroupTx {
@@ -73,30 +84,6 @@ pub enum BrewCommand {
 
     /// Disconnect gracefully
     Disconnect,
-}
-
-// ─── Configuration ────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct BrewConfig {
-    /// TetraPack server hostname or IP
-    pub host: String,
-    /// TetraPack server port
-    pub port: u16,
-    /// Use TLS (wss:// / https://)
-    pub tls: bool,
-    /// Optional username for HTTP Digest auth
-    pub username: Option<String>,
-    /// Optional password for HTTP Digest auth
-    pub password: Option<String>,
-    /// ISSI to register with the server
-    pub issi: u32,
-    /// GSSIs (group IDs) to affiliate to
-    pub groups: Vec<u32>,
-    /// Reconnection delay
-    pub reconnect_delay: Duration,
-    /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
-    pub jitter_initial_latency_frames: u8,
 }
 
 // ─── TLS helper ──────────────────────────────────────────────────
@@ -245,26 +232,37 @@ fn build_digest_response(
 // ─── Worker ───────────────────────────────────────────────────────
 
 pub struct BrewWorker {
-    config: BrewConfig,
+    config: SharedConfig,
+    brew_config: CfgBrew,
     /// Send events to the BrewEntity
     event_sender: Sender<BrewEvent>,
     /// Receive commands from the BrewEntity
     command_receiver: Receiver<BrewCommand>,
+    /// Registered subscribers and their affiliated groups (tracked from commands)
+    subscriber_groups: HashMap<u32, HashSet<u32>>,
 }
 
 impl BrewWorker {
-    pub fn new(config: BrewConfig, event_sender: Sender<BrewEvent>, command_receiver: Receiver<BrewCommand>) -> Self {
+    pub fn new(config: SharedConfig, event_sender: Sender<BrewEvent>, command_receiver: Receiver<BrewCommand>) -> Self {
+        let brew_config = config.config().brew.clone().unwrap(); // Never fails
         Self {
             config,
+            brew_config,
             event_sender,
             command_receiver,
+            subscriber_groups: HashMap::new(),
         }
     }
 
     /// Main worker entry point — runs until disconnect or fatal error
     pub fn run(&mut self) {
-        let scheme = if self.config.tls { "wss" } else { "ws" };
-        tracing::info!("BrewWorker starting, server {}://{}:{}", scheme, self.config.host, self.config.port);
+        let scheme = if self.brew_config.tls { "wss" } else { "ws" };
+        tracing::info!(
+            "BrewWorker starting, server {}://{}:{}",
+            scheme,
+            self.brew_config.host,
+            self.brew_config.port
+        );
 
         loop {
             // Attempt connection
@@ -276,8 +274,8 @@ impl BrewWorker {
                 Err(e) => {
                     tracing::error!("BrewWorker: connection error: {}", e);
                     let _ = self.event_sender.send(BrewEvent::Disconnected(e.clone()));
-                    tracing::info!("BrewWorker: reconnecting in {:?}", self.config.reconnect_delay);
-                    std::thread::sleep(self.config.reconnect_delay);
+                    tracing::info!("BrewWorker: reconnecting in {:?}", self.brew_config.reconnect_delay);
+                    std::thread::sleep(self.brew_config.reconnect_delay);
                 }
             }
         }
@@ -291,11 +289,11 @@ impl BrewWorker {
 
     /// Perform HTTP GET /brew/ with optional Digest Auth to get the WebSocket endpoint
     fn authenticate(&self) -> Result<String, String> {
-        let host = &self.config.host;
-        let port = self.config.port;
+        let host = &self.brew_config.host;
+        let port = self.brew_config.port;
 
         // ── First request (unauthenticated) ──
-        let mut stream = connect_stream(host, port, self.config.tls)?;
+        let mut stream = connect_stream(host, port, self.brew_config.tls)?;
 
         let request = format!(
             "GET /brew/ HTTP/1.1\r\n\
@@ -347,7 +345,7 @@ impl BrewWorker {
                 return Err(format!("unsupported auth scheme: {}", challenge));
             }
 
-            let (username, password) = match (&self.config.username, &self.config.password) {
+            let (username, password) = match (&self.brew_config.username, &self.brew_config.password) {
                 (Some(u), Some(p)) => (u.as_str(), p.as_str()),
                 _ => {
                     return Err("server requires auth but no username/password configured".to_string());
@@ -367,7 +365,7 @@ impl BrewWorker {
             // ── Second request (authenticated) ──
             // Drop old stream, open new connection
             drop(stream);
-            let mut stream2 = connect_stream(host, port, self.config.tls)?;
+            let mut stream2 = connect_stream(host, port, self.brew_config.tls)?;
 
             let auth_request = format!(
                 "GET /brew/ HTTP/1.1\r\n\
@@ -425,8 +423,8 @@ impl BrewWorker {
         let endpoint = self.authenticate()?;
 
         // Step 2: Connect WebSocket to the endpoint
-        let scheme = if self.config.tls { "wss" } else { "ws" };
-        let ws_url = format!("{}://{}:{}{}", scheme, self.config.host, self.config.port, endpoint);
+        let scheme = if self.brew_config.tls { "wss" } else { "ws" };
+        let ws_url = format!("{}://{}:{}{}", scheme, self.brew_config.host, self.brew_config.port, endpoint);
         tracing::info!("BrewWorker: connecting WebSocket to {}", ws_url);
 
         // Build request with User-Agent and subprotocol headers.
@@ -434,7 +432,7 @@ impl BrewWorker {
         // so we must request one to satisfy the RFC 6455 handshake validation.
         let request = tungstenite::http::Request::builder()
             .uri(&ws_url)
-            .header("Host", format!("{}:{}", self.config.host, self.config.port))
+            .header("Host", format!("{}:{}", self.brew_config.host, self.brew_config.port))
             .header("User-Agent", Self::user_agent())
             .header("Sec-WebSocket-Protocol", "brew")
             .header("Connection", "Upgrade")
@@ -463,7 +461,7 @@ impl BrewWorker {
             _ => {}
         }
 
-        // Step 3: Register subscriber and affiliate to groups
+        // Step 3: Register subscriber
         self.send_registration(&mut ws)?;
 
         // Step 4: Main message loop
@@ -471,39 +469,37 @@ impl BrewWorker {
     }
 
     /// Send initial registration and group affiliation
-    fn send_registration(&self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
+    fn send_registration(&mut self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
         // Register ISSI
-        let reg_msg = build_subscriber_register(self.config.issi, &self.config.groups);
+        let reg_msg = build_subscriber_register(self.brew_config.issi, &[]);
         ws.send(Message::Binary(reg_msg.into()))
             .map_err(|e| format!("failed to send registration: {}", e))?;
-        tracing::info!("BrewWorker: registered ISSI {}", self.config.issi);
-
-        // Affiliate to groups
-        if !self.config.groups.is_empty() {
-            let aff_msg = build_subscriber_affiliate(self.config.issi, &self.config.groups);
-            ws.send(Message::Binary(aff_msg.into()))
-                .map_err(|e| format!("failed to send affiliation: {}", e))?;
-            tracing::info!("BrewWorker: affiliated to groups {:?}", self.config.groups);
-        }
+        tracing::info!("BrewWorker: registered ISSI {}", self.brew_config.issi);
+        self.subscriber_groups.entry(self.brew_config.issi).or_insert_with(HashSet::new);
 
         Ok(())
     }
 
     /// Graceful teardown: DEAFFILIATE → DEREGISTER → WS close
     fn graceful_teardown(&self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
-        if !self.config.groups.is_empty() {
-            let deaff_msg = build_subscriber_deaffiliate(self.config.issi, &self.config.groups);
-            if let Err(e) = ws.send(Message::Binary(deaff_msg.into())) {
-                tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
-            } else {
-                tracing::info!("BrewWorker: deaffiliated from groups {:?}", self.config.groups);
+        for (issi, groups) in &self.subscriber_groups {
+            if !groups.is_empty() {
+                let mut group_list: Vec<u32> = groups.iter().copied().collect();
+                group_list.sort_unstable();
+                let deaff_msg = build_subscriber_deaffiliate(*issi, &group_list);
+                if let Err(e) = ws.send(Message::Binary(deaff_msg.into())) {
+                    tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
+                } else {
+                    tracing::info!("BrewWorker: deaffiliated issi={} groups={:?}", issi, group_list);
+                }
             }
-        }
-        let dereg_msg = build_subscriber_deregister(self.config.issi);
-        if let Err(e) = ws.send(Message::Binary(dereg_msg.into())) {
-            tracing::error!("BrewWorker: failed to send deregistration: {}", e);
-        } else {
-            tracing::info!("BrewWorker: deregistered ISSI {}", self.config.issi);
+
+            let dereg_msg = build_subscriber_deregister(*issi);
+            if let Err(e) = ws.send(Message::Binary(dereg_msg.into())) {
+                tracing::error!("BrewWorker: failed to send deregistration: {}", e);
+            } else {
+                tracing::info!("BrewWorker: deregistered ISSI {}", issi);
+            }
         }
         let _ = ws.close(None);
     }
@@ -595,15 +591,46 @@ impl BrewWorker {
                 };
                 match cmd {
                     BrewCommand::RegisterSubscriber { issi } => {
+                        self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
                         let msg = build_subscriber_register(issi, &[]);
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send registration: {}", e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent REGISTER issi={}", issi);
+                        }
+                    }
+                    BrewCommand::DeregisterSubscriber { issi } => {
+                        self.subscriber_groups.remove(&issi);
+                        let msg = build_subscriber_deregister(issi);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send deregistration: {}", e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent DEREGISTER issi={}", issi);
                         }
                     }
                     BrewCommand::AffiliateGroups { issi, groups } => {
+                        let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
+                        for gssi in &groups {
+                            entry.insert(*gssi);
+                        }
                         let msg = build_subscriber_affiliate(issi, &groups);
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send affiliation: {}", e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent AFFILIATE issi={} groups={:?}", issi, groups);
+                        }
+                    }
+                    BrewCommand::DeaffiliateGroups { issi, groups } => {
+                        if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
+                            for gssi in &groups {
+                                entry.remove(gssi);
+                            }
+                        }
+                        let msg = build_subscriber_deaffiliate(issi, &groups);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send deaffiliation: {}", e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent DEAFFILIATE issi={} groups={:?}", issi, groups);
                         }
                     }
                     BrewCommand::SendGroupTx {
@@ -651,6 +678,7 @@ impl BrewWorker {
                 BrewMessage::Frame(frame) => self.handle_frame(frame),
                 BrewMessage::Subscriber(sub) => {
                     tracing::debug!("BrewWorker: subscriber event type={}", sub.msg_type);
+                    // TODO FIXME we could check whether this call is indeed a brew ssi here
                     let _ = self.event_sender.send(BrewEvent::SubscriberEvent {
                         msg_type: sub.msg_type,
                         issi: sub.number,
@@ -659,6 +687,7 @@ impl BrewWorker {
                 }
                 BrewMessage::Error(err) => {
                     tracing::warn!("BrewWorker: server error type={}: {} bytes", err.error_type, err.data.len());
+                    // TODO FIXME we could check whether this call is indeed a brew ssi here
                     let _ = self.event_sender.send(BrewEvent::ServerError {
                         error_type: err.error_type,
                         data: err.data,
@@ -687,6 +716,10 @@ impl BrewWorker {
                         gt.priority,
                         gt.service
                     );
+                    if !brew::is_brew_routable(&self.config, gt.destination) {
+                        tracing::warn!("BrewWorker: dropping GROUP_TX to non-routable GSSI {}", gt.destination);
+                        return;
+                    };
                     let _ = self.event_sender.send(BrewEvent::GroupCallStart {
                         uuid: cc.identifier,
                         source_issi: gt.source,
@@ -699,6 +732,7 @@ impl BrewWorker {
             CALL_STATE_GROUP_IDLE => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
                 tracing::info!("BrewWorker: GROUP_IDLE uuid={} cause={}", cc.identifier, cause);
+                // TODO FIXME we could check whether this call is indeed a brew call here
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
                     cause,
@@ -707,6 +741,7 @@ impl BrewWorker {
             CALL_STATE_CALL_RELEASE => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
                 tracing::info!("BrewWorker: CALL_RELEASE uuid={} cause={}", cc.identifier, cause);
+                // TODO FIXME we could check whether this call is indeed a brew call here
                 let _ = self.event_sender.send(BrewEvent::GroupCallEnd {
                     uuid: cc.identifier,
                     cause,
@@ -723,6 +758,7 @@ impl BrewWorker {
         match frame.frame_type {
             FRAME_TYPE_TRAFFIC_CHANNEL => {
                 // Forward ACELP voice frame to entity
+                // TODO FIXME we could check whether this call is indeed a brew call here
                 let _ = self.event_sender.send(BrewEvent::VoiceFrame {
                     uuid: frame.identifier,
                     length_bits: frame.length_bits,
@@ -730,6 +766,7 @@ impl BrewWorker {
                 });
             }
             FRAME_TYPE_SDS_TRANSFER => {
+                // TODO FIXME we could check whether this call is indeed a brew ssi here
                 tracing::debug!(
                     "BrewWorker: SDS transfer uuid={} {} bytes (not yet handled)",
                     frame.identifier,
@@ -737,6 +774,7 @@ impl BrewWorker {
                 );
             }
             FRAME_TYPE_SDS_REPORT => {
+                // TODO FIXME we could check whether this call is indeed a brew ssi here
                 tracing::debug!("BrewWorker: SDS report uuid={}", frame.identifier);
             }
             ft => {

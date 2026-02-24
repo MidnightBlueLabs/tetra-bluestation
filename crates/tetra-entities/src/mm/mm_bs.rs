@@ -1,11 +1,12 @@
-use crate::{MessageQueue, TetraEntityTrait};
+use crate::{MessageQueue, TetraEntityTrait, brew};
 use tetra_config::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, assert_warn, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
+use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
-use crate::mm::components::client_state::MmClientMgr;
+use crate::mm::components::client_state::{MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
@@ -34,6 +35,50 @@ impl MmBs {
         }
     }
 
+    fn emit_subscriber_update(
+        &self,
+        queue: &mut MessageQueue,
+        dltime: TdmaTime,
+        issi: u32,
+        groups: Vec<u32>,
+        action: BrewSubscriberAction,
+    ) {
+        // If brew is active, take all brew-routable groups and emit an update to brew entity
+        if brew::is_active(&self.config) {
+            let brew_groups = groups
+                .iter()
+                .filter(|gssi| brew::is_brew_routable(&self.config, **gssi))
+                .copied()
+                .collect::<Vec<u32>>();
+            if !brew_groups.is_empty() {
+                let brew_update = MmSubscriberUpdate {
+                    issi,
+                    groups: brew_groups,
+                    action,
+                };
+                let msg = SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Mm,
+                    dest: TetraEntity::Brew,
+                    dltime,
+                    msg: SapMsgInner::MmSubscriberUpdate(brew_update),
+                };
+                queue.push_back(msg);
+            }
+        }
+
+        // Always emit an update to the Cmce entity
+        let mm_update = MmSubscriberUpdate { issi, groups, action };
+        let msg = SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Cmce,
+            dltime,
+            msg: SapMsgInner::MmSubscriberUpdate(mm_update),
+        };
+        queue.push_back(msg);
+    }
+
     fn rx_u_itsi_detach(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_itsi_detach");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
@@ -59,7 +104,13 @@ impl MmBs {
 
         let ssi = prim.received_address.ssi;
         let detached_client = self.client_mgr.remove_client(ssi);
-        if detached_client.is_none() {
+        if let Some(client) = detached_client {
+            if !client.groups.is_empty() {
+                let groups: Vec<u32> = client.groups.iter().copied().collect();
+                self.emit_subscriber_update(_queue, message.dltime, ssi, groups, BrewSubscriberAction::Deaffiliate);
+            }
+            self.emit_subscriber_update(_queue, message.dltime, ssi, Vec::new(), BrewSubscriberAction::Deregister);
+        } else {
             tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
             // return;
         };
@@ -107,20 +158,28 @@ impl MmBs {
 
         // Try to register the client
         let issi = prim.received_address.ssi;
-        match self.client_mgr.try_register_client(issi, true) {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("Failed registering roaming MS {}: {:?}", issi, e);
-                // unimplemented_log!("Handle failed registration of roaming MS");
-                return;
+        let is_new = !self.client_mgr.client_is_known(issi);
+        if is_new {
+            match self.client_mgr.try_register_client(issi, true) {
+                Ok(_) => {
+                    self.emit_subscriber_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed registering roaming MS {}: {:?}", issi, e);
+                    // unimplemented_log!("Handle failed registration of roaming MS");
+                    return;
+                }
             }
+        } else if let Err(e) = self.client_mgr.set_client_state(issi, MmClientState::Attached) {
+            tracing::warn!("Failed updating roaming MS {}: {:?}", issi, e);
+            return;
         }
 
         // Process optional GroupIdentityLocationDemand field
         let gila = if let Some(gild) = pdu.group_identity_location_demand {
             // Try to attach to requested groups, then build GroupIdentityLocationAccept element
             let accepted_groups = if let Some(giu) = &gild.group_identity_uplink {
-                Some(self.try_attach_detach_groups(issi, &giu))
+                Some(self.try_attach_detach_groups(queue, message.dltime, issi, &giu))
             } else {
                 None
             };
@@ -268,8 +327,17 @@ impl MmBs {
 
         // If group_identity_attach_detach_mode == 1, we first detach all groups
         if pdu.group_identity_attach_detach_mode == true {
+            let prior_groups: Vec<u32> = self
+                .client_mgr
+                .get_client_by_issi(issi)
+                .map(|client| client.groups.iter().copied().collect())
+                .unwrap_or_default();
             match self.client_mgr.client_detach_all_groups(issi) {
-                Ok(_) => {}
+                Ok(_) => {
+                    if !prior_groups.is_empty() {
+                        self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
                     return;
@@ -279,7 +347,7 @@ impl MmBs {
 
         // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
         // We can unwrap since we did compat check earlier
-        let accepted_gid = self.try_attach_detach_groups(issi, &pdu.group_identity_uplink.unwrap());
+        let accepted_gid = self.try_attach_detach_groups(queue, message.dltime, issi, &pdu.group_identity_uplink.unwrap());
 
         // Build reply PDU
         let pdu_response = DAttachDetachGroupIdentityAcknowledgement {
@@ -352,8 +420,17 @@ impl MmBs {
         };
     }
 
-    fn try_attach_detach_groups(&mut self, issi: u32, giu_vec: &Vec<GroupIdentityUplink>) -> Vec<GroupIdentityDownlink> {
+    fn try_attach_detach_groups(
+        &mut self,
+        queue: &mut MessageQueue,
+        dltime: TdmaTime,
+        issi: u32,
+        giu_vec: &Vec<GroupIdentityUplink>,
+    ) -> Vec<GroupIdentityDownlink> {
         let mut accepted_groups = Vec::new();
+        let mut aff_groups = Vec::new();
+        let mut deaff_groups = Vec::new();
+
         for giu in giu_vec.iter() {
             if giu.gssi.is_none() || giu.vgssi.is_some() || giu.address_extension.is_some() {
                 unimplemented_log!("Only support GroupIdentityUplink with address_type 0");
@@ -361,26 +438,60 @@ impl MmBs {
             }
 
             let gssi = giu.gssi.unwrap(); // can't fail
-            match self.client_mgr.client_group_attach(issi, gssi, true) {
-                Ok(_) => {
-                    // We have added the client to this group. Add an entry to the downlink response
-                    let gid = GroupIdentityDownlink {
-                        group_identity_attachment: Some(GroupIdentityAttachment {
-                            group_identity_attachment_lifetime: 3, // re-attach after location update
-                            class_of_usage: giu.class_of_usage.unwrap_or(0),
-                        }),
-                        group_identity_detachment_uplink: None,
-                        gssi: Some(giu.gssi.unwrap()),
-                        address_extension: None,
-                        vgssi: None,
-                    };
-                    accepted_groups.push(gid);
+            let is_detach = giu.group_identity_detachment_uplink.is_some();
+
+            if is_detach {
+                match self.client_mgr.client_group_attach(issi, gssi, false) {
+                    Ok(changed) => {
+                        if changed {
+                            deaff_groups.push(gssi);
+                        }
+                        let gid = GroupIdentityDownlink {
+                            group_identity_attachment: None,
+                            group_identity_detachment_uplink: giu.group_identity_detachment_uplink,
+                            gssi: Some(gssi),
+                            address_extension: None,
+                            vgssi: None,
+                        };
+                        accepted_groups.push(gid);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed detaching MS {} from group {}: {:?}", issi, gssi, e);
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed attaching MS {} to group {}: {:?}", issi, gssi, e);
+            } else {
+                match self.client_mgr.client_group_attach(issi, gssi, true) {
+                    Ok(changed) => {
+                        if changed {
+                            aff_groups.push(gssi);
+                        }
+                        // We have added the client to this group. Add an entry to the downlink response
+                        let gid = GroupIdentityDownlink {
+                            group_identity_attachment: Some(GroupIdentityAttachment {
+                                group_identity_attachment_lifetime: 3, // re-attach after location update
+                                class_of_usage: giu.class_of_usage.unwrap_or(0),
+                            }),
+                            group_identity_detachment_uplink: None,
+                            gssi: Some(gssi),
+                            address_extension: None,
+                            vgssi: None,
+                        };
+                        accepted_groups.push(gid);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed attaching MS {} to group {}: {:?}", issi, gssi, e);
+                    }
                 }
             }
         }
+
+        if !aff_groups.is_empty() {
+            self.emit_subscriber_update(queue, dltime, issi, aff_groups, BrewSubscriberAction::Affiliate);
+        }
+        if !deaff_groups.is_empty() {
+            self.emit_subscriber_update(queue, dltime, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
+        }
+
         accepted_groups
     }
 

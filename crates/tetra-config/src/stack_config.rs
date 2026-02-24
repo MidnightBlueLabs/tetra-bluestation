@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::TimeslotAllocator;
 use tetra_core::freqs::FreqInfo;
+use tetra_core::ranges::SortedDisjointSsiRanges;
 
 use crate::stack_config_brew::CfgBrew;
 
@@ -25,7 +26,7 @@ pub enum PhyBackend {
 }
 
 /// PHY layer I/O configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CfgPhyIo {
     /// Backend type: Soapysdr, File, or None
     pub backend: PhyBackend,
@@ -52,7 +53,7 @@ impl Default for CfgPhyIo {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CfgNetInfo {
     /// 10 bits, from 18.4.2.1 D-MLE-SYNC
     pub mcc: u16,
@@ -60,83 +61,57 @@ pub struct CfgNetInfo {
     pub mnc: u16,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CfgCellInfo {
     // 2 bits, from 18.4.2.1 D-MLE-SYNC
-    #[serde(default)]
     pub neighbor_cell_broadcast: u8,
     // 2 bits, from 18.4.2.1 D-MLE-SYNC
-    #[serde(default)]
     pub cell_load_ca: u8,
     // 1 bit, from 18.4.2.1 D-MLE-SYNC
-    #[serde(default)]
     pub late_entry_supported: bool,
 
     /// 12 bits, from MAC SYSINFO
-    #[serde(default = "default_main_carrier")]
     pub main_carrier: u16,
     /// 4 bits, from MAC SYSINFO
-    #[serde(default = "default_freq_band")]
     pub freq_band: u8,
     /// Offset in Hz from 25kHz aligned carrier. Options: 0, 6250, -6250, 12500 Hz
     /// Represented as 0-3 in SYSINFO
-    #[serde(default)]
     pub freq_offset_hz: i16,
     /// Index in duplex setting table. Sent in SYSINFO. Maps to a specific duplex spacing in Hz.
     /// Custom spacing can be provided optionally by setting
-    #[serde(default)]
     pub duplex_spacing_id: u8,
     /// Custom duplex spacing in Hz, for users that use a modified, non-standard duplex spacing table.
-    #[serde(default)]
     pub custom_duplex_spacing: Option<u32>,
     /// 1 bits, from MAC SYSINFO
-    #[serde(default)]
     pub reverse_operation: bool,
 
     // 14 bits, from 18.4.2.2 D-MLE-SYSINFO
-    #[serde(default)]
     pub location_area: u16,
     // 16 bits, from 18.4.2.2 D-MLE-SYSINFO
-    #[serde(default)]
     pub subscriber_class: u16,
 
     // 1-bit service flags
-    #[serde(default)]
     pub registration: bool,
-    #[serde(default)]
     pub deregistration: bool,
-    #[serde(default)]
     pub priority_cell: bool,
-    #[serde(default)]
     pub no_minimum_mode: bool,
-    #[serde(default)]
     pub migration: bool,
-    #[serde(default)]
     pub system_wide_services: bool,
-    #[serde(default)]
     pub voice_service: bool,
-    #[serde(default)]
     pub circuit_mode_data_service: bool,
-    #[serde(default)]
     pub sndcp_service: bool,
-    #[serde(default)]
     pub aie_service: bool,
-    #[serde(default)]
     pub advanced_link: bool,
 
     // From SYNC
-    #[serde(default)]
     pub system_code: u8,
-    #[serde(default)]
     pub colour_code: u8,
-    #[serde(default)]
     pub sharing_mode: u8,
-    #[serde(default)]
     pub ts_reserved_frames: u8,
-    #[serde(default)]
     pub u_plane_dtx: bool,
-    #[serde(default)]
     pub frame_18_ext: bool,
+
+    pub local_ssi_ranges: SortedDisjointSsiRanges,
 }
 
 impl Default for CfgCellInfo {
@@ -172,6 +147,8 @@ impl Default for CfgCellInfo {
             ts_reserved_frames: 0,
             u_plane_dtx: false,
             frame_18_ext: false,
+
+            local_ssi_ranges: SortedDisjointSsiRanges::from_vec_ssirange(vec![]),
         }
     }
 }
@@ -186,28 +163,20 @@ fn default_main_carrier() -> u16 {
     1521
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StackConfig {
-    #[serde(default = "default_stack_mode")]
     pub stack_mode: StackMode,
-    #[serde(default)]
     pub debug_log: Option<String>,
 
-    #[serde(default)]
     pub phy_io: CfgPhyIo,
 
     /// Network info is REQUIRED - no default provided
     pub net: CfgNetInfo,
 
-    #[serde(default)]
     pub cell: CfgCellInfo,
 
     /// Brew protocol (TetraPack/BrandMeister) configuration
     pub brew: Option<CfgBrew>,
-}
-
-fn default_stack_mode() -> StackMode {
-    StackMode::Bs
 }
 
 impl StackConfig {

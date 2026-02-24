@@ -2,13 +2,11 @@ use clap::Parser;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use tetra_config::{PhyBackend, SharedConfig, StackMode, toml_config};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::brew::entity::BrewEntity;
-use tetra_entities::brew::worker::BrewConfig;
 use tetra_entities::{
     cmce::cmce_bs::CmceBs,
     llc::llc_bs_ms::Llc,
@@ -64,19 +62,8 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> MessageRouter {
     router.register_entity(Box::new(cmce));
 
     // Register Brew entity if enabled
-    if let Some(brew_cfg) = cfg.config().brew.clone() {
-        let brew_config = BrewConfig {
-            host: brew_cfg.host,
-            port: brew_cfg.port,
-            tls: brew_cfg.tls,
-            username: brew_cfg.username,
-            password: brew_cfg.password,
-            issi: brew_cfg.issi,
-            groups: brew_cfg.groups,
-            reconnect_delay: Duration::from_secs(brew_cfg.reconnect_delay_secs),
-            jitter_initial_latency_frames: brew_cfg.jitter_initial_latency_frames,
-        };
-        let brew_entity = BrewEntity::new(cfg.clone(), brew_config);
+    if cfg.config().brew.is_some() {
+        let brew_entity = BrewEntity::new(cfg.clone());
         router.register_entity(Box::new(brew_entity));
         eprintln!(" -> Brew/TetraPack integration enabled");
     }
