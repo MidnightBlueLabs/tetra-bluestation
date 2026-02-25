@@ -461,7 +461,7 @@ impl Mle {
                 req_handle: 0, // TODO FIXME; should we pass the same handle here?
                 graceful_degradation: None,
                 chan_alloc: None,
-                // redundant_transmission: 1,
+                tx_reporter: prim.tx_reporter.take(),
             }),
         };
         queue.push_back(sapmsg);
@@ -525,7 +525,7 @@ impl Mle {
                 req_handle: 0, // TODO FIXME
                 graceful_degradation: None,
                 chan_alloc,
-                // redundant_transmission: prim.redundant_transmission
+                tx_reporter: prim.tx_reporter.take(),
             }),
         };
         queue.push_back(sapmsg);

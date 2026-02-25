@@ -1,7 +1,7 @@
 use crate::{MessageQueue, TetraEntityTrait, brew};
 use tetra_config::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxReceipt, assert_warn, unimplemented_log};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
@@ -25,6 +25,7 @@ use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
 pub struct MmBs {
     config: SharedConfig,
     pub client_mgr: MmClientMgr,
+    test_receipt: Option<TxReceipt>,
 }
 
 impl MmBs {
@@ -32,6 +33,7 @@ impl MmBs {
         Self {
             config,
             client_mgr: MmClientMgr::new(),
+            test_receipt: None,
         }
     }
 
@@ -220,6 +222,7 @@ impl MmBs {
         tracing::debug!("-> {} sdu {}", pdu_response, sdu.dump_bin());
 
         // Build and submit response prim
+        let (tx_receipt, tx_reporter) = TxReceipt::new(true);
         let addr = TetraAddress {
             encrypted: false,
             ssi_type: SsiType::Ssi,
@@ -239,8 +242,10 @@ impl MmBs {
                 stealing_repeats_flag: false,
                 encryption_flag: false,
                 is_null_pdu: false,
+                tx_reporter: Some(tx_reporter),
             }),
         };
+        self.test_receipt = Some(tx_receipt);
         queue.push_back(msg);
     }
 
@@ -383,6 +388,7 @@ impl MmBs {
                 stealing_repeats_flag: false,
                 encryption_flag: false,
                 is_null_pdu: false,
+                tx_reporter: None,
             }),
         };
         queue.push_back(msg);
@@ -603,5 +609,18 @@ impl TetraEntityTrait for MmBs {
                 panic!();
             }
         }
+    }
+
+    fn tick_end(&mut self, _queue: &mut MessageQueue, _dltime: TdmaTime) -> bool {
+        // No periodic tasks needed for MM in current implementation
+        if let Some(receipt) = self.test_receipt.take() {
+            if receipt.is_transmitted() {
+                tracing::error!("Test TxReceipt confirmed!");
+            } else {
+                tracing::error!("Test TxReceipt not yet confirmed");
+                self.test_receipt = Some(receipt);
+            }
+        }
+        false
     }
 }

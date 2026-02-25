@@ -1,6 +1,6 @@
 use std::cmp::min;
 
-use tetra_core::BitBuffer;
+use tetra_core::{BitBuffer, TxReporter};
 
 use tetra_pdus::umac::pdus::{mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource};
 
@@ -10,8 +10,9 @@ use crate::umac::subcomp::fillbits;
 pub struct BsFragger {
     resource: MacResource,
     mac_hdr_is_written: bool,
-    done: bool,
+    is_fully_transmitted: bool,
     sdu: BitBuffer,
+    tx_reporter: Option<TxReporter>,
 }
 
 /// We won't start fragmentation if less than MIN_SLOT_CAP_FOR_FRAG_START bits are free in the slot
@@ -21,15 +22,16 @@ const MIN_SLOT_CAP_FOR_RES_FRAG_START: usize = 32;
 const MIN_SLOT_CAP_FOR_FRAG: usize = 16;
 
 impl BsFragger {
-    pub fn new(resource: MacResource, sdu: BitBuffer) -> Self {
+    pub fn new(resource: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) -> Self {
         assert!(sdu.get_pos() == 0, "SDU must be at the start of the buffer");
         // We set the length field now. If we do fragmentation, we'll set it to -1 later.
         // resource.update_len_and_fill_ind(sdu.get_len());
         BsFragger {
             resource,
             mac_hdr_is_written: false,
-            done: false,
+            is_fully_transmitted: false,
             sdu,
+            tx_reporter,
         }
     }
 
@@ -202,15 +204,15 @@ impl BsFragger {
     /// Writes the next chunk to the bitbuffer, if there is space.
     /// First chunk is the provided resource, possibly changed to indicate fragmentation.
     /// Subsequent chunks are MAC-FRAG or MAC-END.
-    /// Returns (bool is_done, usize bits_written)
+    /// Returns bool is_fully_transmitted
     pub fn get_next_chunk(&mut self, mac_block: &mut BitBuffer) -> bool {
-        assert!(!self.done, "all fragments have already been produced");
+        assert!(!self.is_fully_transmitted, "all fragments have already been produced");
         assert!(
             mac_block.get_len_written() % 8 == 0 || mac_block.get_len_remaining() == 0,
             "mac_block must be full or byte aligned before writing"
         );
 
-        self.done = if !self.mac_hdr_is_written {
+        self.is_fully_transmitted = if !self.mac_hdr_is_written {
             // First chunk, write MAC-RESOURCE
             self.get_resource_chunk(mac_block)
         } else {
@@ -218,13 +220,21 @@ impl BsFragger {
             self.get_frag_or_end_chunk(mac_block)
         };
 
-        self.done
+        // If we're done now, we'll report the PDUs full transmission.
+        if self.is_fully_transmitted
+            && let Some(tx_reporter) = &self.tx_reporter
+        {
+            tx_reporter.mark_transmitted();
+        }
+
+        self.is_fully_transmitted
     }
 }
 
 #[cfg(test)]
 mod tests {
     use tetra_core::{
+        TxReceipt,
         address::{SsiType, TetraAddress},
         debug,
     };
@@ -259,7 +269,7 @@ mod tests {
         let sdu = BitBuffer::from_bitstr("111000111");
         let mut mac_block = BitBuffer::new(SCH_F_CAP);
 
-        let mut fragger = BsFragger::new(pdu, sdu);
+        let mut fragger = BsFragger::new(pdu, sdu, None);
         let done = fragger.get_next_chunk(&mut mac_block);
         mac_block.seek(0);
 
@@ -274,7 +284,7 @@ mod tests {
         let mut reconstructed = String::new();
         let pdu = get_default_resource();
         let sdu = BitBuffer::from_bitstr(vec);
-        let mut fragger = BsFragger::new(pdu, sdu);
+        let mut fragger = BsFragger::new(pdu, sdu, None);
 
         let mut mac_block = BitBuffer::new(SCH_HD_CAP);
         let done = fragger.get_next_chunk(&mut mac_block);
@@ -325,6 +335,68 @@ mod tests {
     }
 
     #[test]
+    fn test_four_chunks_with_tx_reporter() {
+        debug::setup_logging_verbose();
+        let vec = "01010110010011000010101010010010110101010110010011001011111110101011001010010110111001011111111111100010011000000011010011001110010111110010100100010111010110000010010001101000011000000111101011010001001111001110110100000101010111110100010000100101001100011110010111001010101001110110111010001001101101111100111001000001111100101010000010111";
+        let mut reconstructed = String::new();
+        let pdu = get_default_resource();
+        let sdu = BitBuffer::from_bitstr(vec);
+        let (receipt, reporter) = TxReceipt::new(false);
+        let mut fragger = BsFragger::new(pdu, sdu, Some(reporter));
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+        let pdu = MacResource::from_bitbuf(&mut mac_block).unwrap();
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        tracing::info!("[1]: {}: {}", pdu, mac_block.dump_bin());
+        reconstructed += &mac_block.to_bitstr();
+        // tracing::info!("[1] reconstructed so far: {}", reconstructed);
+        assert!(!done, "Should take four blocks");
+        assert!(!receipt.is_in_final_state() && !receipt.is_transmitted());
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+        let pdu = MacFragDl::from_bitbuf(&mut mac_block).unwrap();
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        tracing::info!("[2]: {}: {}", pdu, mac_block.dump_bin());
+        reconstructed += &mac_block.to_bitstr();
+        // tracing::info!("[1] reconstructed so far: {}", reconstructed);
+        assert!(!done, "Should take four blocks");
+        assert!(!receipt.is_in_final_state() && !receipt.is_transmitted());
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+        let pdu = MacFragDl::from_bitbuf(&mut mac_block).unwrap();
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        tracing::info!("[3]: {}: {}", pdu, mac_block.dump_bin());
+        reconstructed += &mac_block.to_bitstr();
+        // tracing::info!("[1] reconstructed so far: {}", reconstructed);
+        assert!(!done, "Should take four blocks");
+        assert!(!receipt.is_in_final_state() && !receipt.is_transmitted());
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+        let pdu = MacEndDl::from_bitbuf(&mut mac_block).unwrap();
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        tracing::info!("[4]: {}: {}", pdu, mac_block.dump_bin());
+        reconstructed += &mac_block.to_bitstr();
+        tracing::info!("     Reconstructed: {}", reconstructed);
+        assert!(done, "Should take four blocks");
+        assert!(receipt.is_in_final_state() && receipt.is_transmitted());
+
+        // Test that the original vec is contained in the reconstructed string
+        // We'll just assume the fill bits check out..
+        assert!(
+            reconstructed.starts_with(vec),
+            "Original vec should be contained in reconstructed string"
+        );
+    }
+
+    #[test]
     fn test_low_cap_start_and_no_room_for_fill_bits() {
         // TODO FIXME: after further reading of the spec, while the searched behavior is not incorrect,
         // this test is suboptimal. The SDU entirely fits into the second mac_block, but fill bits would
@@ -336,7 +408,7 @@ mod tests {
         let vec = "010101100100110000";
         let pdu = get_default_resource();
         let sdu = BitBuffer::from_bitstr(vec);
-        let mut fragger = BsFragger::new(pdu, sdu);
+        let mut fragger = BsFragger::new(pdu, sdu, None);
 
         let mut mac_block = BitBuffer::new(30); // Too small for proper message
         let done = fragger.get_next_chunk(&mut mac_block);

@@ -53,7 +53,7 @@ pub struct TxReceipt {
 }
 
 impl TxReceipt {
-    /// Creates a linked `(TxReceipt, TxSignal)` pair.
+    /// Creates a linked `(TxReceipt, TxReporter)` pair.
     /// The receipt stays with the originator; the signal travels down the stack.
     pub fn new(expects_ack: bool) -> (Self, TxReporter) {
         let state = Arc::new(AtomicU8::new(TxState::Pending as u8));
@@ -127,6 +127,7 @@ impl TxReporter {
 
     /// Pending → Transmitted: MAC layer has sent the PDU over the air.
     pub fn mark_transmitted(&self) {
+        tracing::info!("TxReporter: marking as transmitted");
         self.mark(TxState::Pending, TxState::Transmitted);
     }
 

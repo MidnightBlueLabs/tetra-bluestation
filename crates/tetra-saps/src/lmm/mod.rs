@@ -1,6 +1,6 @@
 // Clause 17.3.2 Service primitives for the LMM-SAP
 #![allow(unused)]
-use tetra_core::{BitBuffer, MleHandle, TetraAddress, Todo};
+use tetra_core::{BitBuffer, MleHandle, TetraAddress, Todo, TxReporter};
 
 /// This shall be used as a request to initiate the selection of a cell for communications. The
 /// request shall always be made after power on and may be made at any time thereafter.
@@ -143,6 +143,7 @@ pub struct LmmMleUnitdataReq {
     pub stealing_repeats_flag: bool,
     pub encryption_flag: bool,
     pub is_null_pdu: bool, // Prio should be lowest and may not steal
+    pub tx_reporter: Option<TxReporter>,
 }
 
 #[derive(Debug)]

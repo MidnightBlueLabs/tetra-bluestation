@@ -1,4 +1,4 @@
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, unimplemented_log};
+use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
 use tetra_saps::{
     control::call_control::Circuit,
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
@@ -93,9 +93,7 @@ pub enum DlSchedElem {
     Grant(TetraAddress, BasicSlotgrant),
 
     /// A MAC-RESOURCE PDU. May be split into fragments upon processing, in which case a FragBuf will be inserted after processing the resource.
-    /// The u8 is the remaining repeat count: 0 = send once, N = send once then re-enqueue with N-1 for the next frame.
-    /// Used for D-SETUP group call signalling which must be sent on consecutive MCCH frames (TS 100 392-2, 23.5.2).
-    Resource(MacResource, BitBuffer, u8),
+    Resource(MacResource, BitBuffer, Option<TxReporter>),
 
     /// A FragBuf containing remaining non-transmitted information after a MAC-RESOURCE start has been transmitted
     FragBuf(BsFragger),
@@ -103,7 +101,7 @@ pub enum DlSchedElem {
     /// Pre-built STCH block for FACCH/stealing a half-slot from traffic channel.
     /// Contains MAC-U-SIGNAL (3 bits) + TM-SDU = 124 type1 bits.
     /// Delivers time-critical signaling (D-TX CEASED, D-TX GRANTED) per EN 300 392-2, clause 23.5.
-    Stealing(BitBuffer),
+    Stealing(BitBuffer, Option<TxReporter>),
 }
 
 const EMPTY_SCHED_ELEM: TimeslotSchedule = TimeslotSchedule {
@@ -146,7 +144,7 @@ impl BsChannelScheduler {
         // in signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED
         // that still need FACCH delivery.
         if !active {
-            self.dltx_queues[idx].retain(|e| matches!(e, DlSchedElem::Stealing(_)));
+            self.dltx_queues[idx].retain(|e| matches!(e, DlSchedElem::Stealing(..)));
         }
 
         tracing::info!(
@@ -174,7 +172,7 @@ impl BsChannelScheduler {
         let slot = ts as usize - 1;
         self.dltx_queues
             .get(slot)
-            .map(|q| q.iter().any(|e| matches!(e, DlSchedElem::Stealing(_))))
+            .map(|q| q.iter().any(|e| matches!(e, DlSchedElem::Stealing(..))))
             .unwrap_or(false)
     }
 
@@ -418,23 +416,17 @@ impl BsChannelScheduler {
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
-    pub fn dl_enqueue_tma(&mut self, ts: u8, pdu: MacResource, sdu: BitBuffer, repeat_count: u8) {
-        tracing::debug!(
-            "dl_enqueue_tma: ts {} enqueueing PDU {:?} SDU {} repeat={}",
-            ts,
-            pdu,
-            sdu.dump_bin(),
-            repeat_count
-        );
-        let elem = DlSchedElem::Resource(pdu, sdu, repeat_count);
+    pub fn dl_enqueue_tma(&mut self, ts: u8, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
+        tracing::debug!("dl_enqueue_tma: ts {} enqueueing PDU {:?} SDU {}", ts, pdu, sdu.dump_bin(),);
+        let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
     /// Enqueue a pre-built STCH block for FACCH/stealing on a traffic timeslot.
     /// The block must be 124 type1 bits containing MAC-U-SIGNAL header + TM-SDU.
-    pub fn dl_enqueue_stealing(&mut self, ts: u8, block: BitBuffer) {
+    pub fn dl_enqueue_stealing(&mut self, ts: u8, block: BitBuffer, tx_reporter: Option<TxReporter>) {
         tracing::info!("dl_enqueue_stealing: ts {} enqueueing STCH block ({} bits)", ts, block.get_len());
-        self.dltx_queues[ts as usize - 1].push(DlSchedElem::Stealing(block));
+        self.dltx_queues[ts as usize - 1].push(DlSchedElem::Stealing(block, tx_reporter));
     }
 
     fn dl_enqueue_tma_frag_next_frame(&mut self, fragger: BsFragger) {
@@ -629,8 +621,8 @@ impl BsChannelScheduler {
                         _ => panic!(),
                     };
 
-                    // Push new resource into the queue
-                    let dlsched_res = DlSchedElem::Resource(pdu, BitBuffer::new(0), 0);
+                    // Push new resource into the queue. These do not need a tx_reporter
+                    let dlsched_res = DlSchedElem::Resource(pdu, BitBuffer::new(0), None);
                     self.dltx_queues[ts.t as usize - 1].push(dlsched_res);
                 }
                 _ => panic!(),
@@ -651,23 +643,23 @@ impl BsChannelScheduler {
                             unimplemented_log!("finalize_ts_for_tick: Broadcast scheduling not implemented");
                         }
 
-                        DlSchedElem::Resource(pdu, sdu, repeat) => {
+                        DlSchedElem::Resource(pdu, sdu, tx_reporter) => {
                             // Repeat on subsequent frames if needed (e.g. D-SETUP, TS 100 392-2 clause 23.5.2).
-                            if repeat > 0 {
-                                let pdu_clone = pdu.clone();
-                                let sdu_clone = BitBuffer::from_bitbuffer(&sdu);
-                                tracing::debug!(
-                                    "dl_build_block_from_signalling_schedule: repeating resource for next frame (remaining={})",
-                                    repeat - 1
-                                );
-                                self.dltx_next_slot_queue
-                                    .push(DlSchedElem::Resource(pdu_clone, sdu_clone, repeat - 1));
-                            }
+                            // if repeat_count > 0 {
+                            //     let pdu_clone = pdu.clone();
+                            //     let sdu_clone = BitBuffer::from_bitbuffer(&sdu);
+                            //     tracing::debug!(
+                            //         "dl_build_block_from_signalling_schedule: repeating resource for next frame (remaining={})",
+                            //         repeat_count - 1
+                            //     );
+                            //     self.dltx_next_slot_queue
+                            //         .push(DlSchedElem::Resource(pdu_clone, sdu_clone, repeat_count - 1));
+                            // }
 
                             // Allocate bitbuf if not already done
                             let mut buf = buf_opt.unwrap_or_else(|| BitBuffer::new(SCH_F_CAP));
                             // Create fragger, either to send the whole PDU or to start fragmentation
-                            let mut fragger = BsFragger::new(pdu, sdu);
+                            let mut fragger = BsFragger::new(pdu, sdu, tx_reporter);
                             if !fragger.get_next_chunk(&mut buf) {
                                 // Fragmentation was started and we have more chunks to send
                                 // Enqueue fragger with remaining data for retrieval next frame
@@ -687,7 +679,7 @@ impl BsChannelScheduler {
                             buf_opt = Some(buf);
                         }
 
-                        DlSchedElem::Stealing(_) => {
+                        DlSchedElem::Stealing(..) => {
                             // Stealing items should only appear on traffic timeslots; skip if found here
                             tracing::warn!(
                                 "dl_build_block_from_signalling_schedule: Stealing item found on non-traffic ts {}, skipping",
@@ -719,6 +711,7 @@ impl BsChannelScheduler {
     /// Build traffic block for active circuit. Returns (tch_block, optional_stch_block):
     /// - tch_block: speech/silence (274 bits)
     /// - stch_block: STCH signaling (124 bits) for FACCH stealing (EN 300 392-2, clause 23.5)
+    /// Also reports transmission, if a TxReporter was attached to the DlSchedElem::Stealing element
     fn dl_build_traffic_block(&mut self, ts: TdmaTime) -> (BitBuffer, Option<BitBuffer>) {
         // Get speech data or silence
         let tch_buf = if let Some(block) = self.circuits.take_block(ts.t) {
@@ -734,21 +727,26 @@ impl BsChannelScheduler {
         };
 
         // Check for FACCH/stealing: take a queued Stealing item (highest priority signaling)
-        let stch_opt = {
+        let (stch_opt, tx_reporter_opt) = {
             let q = &mut self.dltx_queues[ts.t as usize - 1];
-            if let Some(i) = q.iter().position(|e| matches!(e, DlSchedElem::Stealing(_))) {
+            if let Some(i) = q.iter().position(|e| matches!(e, DlSchedElem::Stealing(..))) {
                 match q.remove(i) {
-                    DlSchedElem::Stealing(buf) => Some(buf),
+                    DlSchedElem::Stealing(buf, tx_reporter) => (Some(buf), tx_reporter),
                     _ => unreachable!(),
                 }
             } else {
-                None
+                (None, None)
             }
         };
 
         // Warn about other queued signaling that can't be sent via stealing yet
         if stch_opt.is_none() && !self.dltx_queues[ts.t as usize - 1].is_empty() {
             tracing::warn!("dl_build_traffic_block: queued signaling on ts {} but no stealing item", ts.t);
+        }
+
+        // If desired, report transmission
+        if let Some(tx_reporter) = tx_reporter_opt {
+            tx_reporter.mark_transmitted();
         }
 
         (tch_buf, stch_opt)
@@ -1246,9 +1244,7 @@ mod tests {
     use super::*;
 
     pub fn get_testing_slotter() -> BsChannelScheduler {
-        let _ = setup_logging_default(None);
-
-        // TODO FIXME make all parameters configurable
+        let _guard = setup_logging_default(None);
         let ext_services = SysinfoExtendedServices {
             auth_required: false,
             class1_supported: true,
@@ -1460,7 +1456,7 @@ mod tests {
         };
         let pdu = BsChannelScheduler::dl_make_minimal_resource(&addr, None, false);
         let sdu = BitBuffer::new(0);
-        sched.dl_enqueue_tma(ts.t, pdu, sdu, 0);
+        sched.dl_enqueue_tma(ts.t, pdu, sdu, None);
 
         let grant = BasicSlotgrant {
             capacity_allocation: BasicSlotgrantCapAlloc::FirstSubslotGranted,
@@ -1483,21 +1479,4 @@ mod tests {
 
         assert!(sched.dltx_queues[ts.t as usize - 1].len() == 1);
     }
-
-    // #[test]
-    // fn test_downlink_fragmentation() {
-    //     unimplemented!("write tests for downlink fragmentation")
-    // }
-
-    // #[test]
-    // fn test_downlink_fragmentation_multiple_ssis() {
-    //     unimplemented!("write tests for downlink fragmentation")
-    // }
-
-    // #[test]
-    // fn test_downlink_fragmentation_multiple_msgs_for_same_ssi() {
-    //     // This test should assert that when multiple messages are in the queue for the same MS, the fragments are sent in-order. E.g.,
-    //     // we dont start fragmenting a second resource before the first one is full sent (and maybe acknowledged?).
-    //     unimplemented!("write tests for downlink fragmentation")
-    // }
 }

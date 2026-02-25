@@ -182,6 +182,7 @@ impl Llc {
                     stealing_repeats_flag: prim.stealing_repeats_flag,
                     data_category: prim.data_class_info,
                     chan_alloc: prim.chan_alloc,
+                    tx_reporter: prim.tx_reporter.take(),
                 }),
             };
             queue.push_back(sapmsg);
@@ -241,7 +242,6 @@ impl Llc {
                 req_handle: prim.req_handle,
                 pdu: pdu_buf,
                 main_address: prim.main_address,
-                // scrambling_code: prim.scrambling_code,
                 endpoint_id: prim.endpoint_id,
                 stealing_permission: prim.stealing_permission,
                 subscriber_class: prim.subscriber_class,
@@ -249,7 +249,7 @@ impl Llc {
                 stealing_repeats_flag: prim.stealing_repeats_flag,
                 data_category: prim.data_class_info,
                 chan_alloc: prim.chan_alloc,
-                // redundant_transmission: prim.redundant_transmission,
+                tx_reporter: prim.tx_reporter.take(),
             }),
         };
         queue.push_back(sapmsg);
@@ -519,7 +519,6 @@ impl TetraEntityTrait for Llc {
             // Send BL-ACK via FACCH (stealing) on the traffic timeslot if the original
             // message arrived on a traffic channel (TS2-4), otherwise via MCCH (TS1).
             let steal = matches!(ack.ts, 2..=4);
-
             let mut pdu_buf = BitBuffer::new_autoexpand(5);
             let pdu = BlAck { has_fcs: false, nr: ack.n };
             pdu.to_bitbuf(&mut pdu_buf);
@@ -530,7 +529,20 @@ impl TetraEntityTrait for Llc {
             // Since DL is two slots ahead of UL, we will correct that. We now have the dltime for reception
             // of the original message.
             let dltime = self.dltime.add_timeslots(-2);
-
+            let chan_alloc = match steal {
+                true => {
+                    let mut timeslots = [false; 4];
+                    timeslots[(ack.ts - 1) as usize] = true;
+                    Some(CmceChanAllocReq {
+                        usage: None,
+                        timeslots,
+                        alloc_type: ChanAllocType::Replace,
+                        ul_dl_assigned: UlDlAssignment::Both,
+                        carrier: None,
+                    })
+                }
+                false => None,
+            };
             let sapmsg = SapMsg {
                 sap: Sap::TmaSap,
                 src: TetraEntity::Llc,
@@ -547,19 +559,8 @@ impl TetraEntityTrait for Llc {
                     air_interface_encryption: None, // TODO FIXME
                     stealing_repeats_flag: None,    // TODO FIXME
                     data_category: None,            // TODO FIXME
-                    chan_alloc: if steal {
-                        let mut timeslots = [false; 4];
-                        timeslots[(ack.ts - 1) as usize] = true;
-                        Some(CmceChanAllocReq {
-                            usage: None,
-                            timeslots,
-                            alloc_type: ChanAllocType::Replace,
-                            ul_dl_assigned: UlDlAssignment::Both,
-                            carrier: None,
-                        })
-                    } else {
-                        None
-                    },
+                    chan_alloc,
+                    tx_reporter: None, // By definition, no higher layer entity is interested
                 }),
             };
             queue.push_back(sapmsg);

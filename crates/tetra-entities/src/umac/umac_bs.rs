@@ -1100,7 +1100,6 @@ impl UmacBs {
         // ── FACCH/Stealing path ──────────────────────────────────────────
         // stealing_permission → STCH on traffic channel for time-critical signaling
         // (D-TX CEASED, D-TX GRANTED) per EN 300 392-2, clause 23.5.
-        // CRITICAL: DL STCH uses MAC-RESOURCE (124-bit half-slot), NOT MAC-U-SIGNAL (UL-only).
         if prim.stealing_permission {
             // Determine the target traffic timeslot for FACCH stealing.
             // If chan_alloc specifies a timeslot, use it; otherwise fall back to first active DL circuit.
@@ -1148,7 +1147,7 @@ impl UmacBs {
                     stch_block.get_len()
                 );
 
-                self.channel_scheduler.dl_enqueue_stealing(ts, stch_block);
+                self.channel_scheduler.dl_enqueue_stealing(ts, stch_block, prim.tx_reporter);
                 Self::send_tma_report_ind(queue, message.dltime, prim.req_handle, TmaReport::SuccessDownlinked);
                 return;
             } else {
@@ -1197,9 +1196,7 @@ impl UmacBs {
             message.dltime.t
         };
 
-        // TODO: repeat_count for group call D-SETUP needs to be determined from ETSI spec
-        let repeat_count: u8 = 0;
-        self.channel_scheduler.dl_enqueue_tma(enqueue_ts, pdu, sdu, repeat_count);
+        self.channel_scheduler.dl_enqueue_tma(enqueue_ts, pdu, sdu, prim.tx_reporter);
 
         // TODO FIXME I'm not so sure whether we should send this now, or send it once the message is on its way
         Self::send_tma_report_ind(queue, message.dltime, prim.req_handle, TmaReport::SuccessDownlinked);

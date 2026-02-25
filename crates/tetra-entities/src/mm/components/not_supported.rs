@@ -43,6 +43,7 @@ pub fn make_ul_mm_pdu_function_not_supported(
             stealing_repeats_flag: false,
             encryption_flag: false,
             is_null_pdu: false,
+            tx_reporter: None,
         }),
     };
     (msg, debug_str)
