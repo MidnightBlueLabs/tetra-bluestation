@@ -639,6 +639,15 @@ impl BsChannelScheduler {
     fn dl_build_block_from_signalling_schedule(&mut self, ts: TdmaTime) -> Option<BitBuffer> {
         let mut buf_opt = None;
 
+        // Frame 18 cannot carry user signaling; defer everything to next frame.
+        if ts.f == 18 {
+            let q = &mut self.dltx_queues[ts.t as usize - 1];
+            if !q.is_empty() {
+                self.dltx_next_slot_queue.append(q);
+            }
+            return None;
+        }
+
         while !self.dltx_queues[ts.t as usize - 1].is_empty() {
             let opt = self.dl_take_prioritized_sched_item(ts);
 
@@ -707,7 +716,10 @@ impl BsChannelScheduler {
         if !self.dltx_next_slot_queue.is_empty() {
             let a = &mut self.dltx_queues[ts.t as usize - 1];
             let b = &mut self.dltx_next_slot_queue;
-            assert!(a.is_empty(), "queue should be empty");
+            if !a.is_empty() {
+                // If anything remains unsent this frame, defer it along with other next-frame items.
+                b.append(a);
+            }
             std::mem::swap(a, b);
         }
 
