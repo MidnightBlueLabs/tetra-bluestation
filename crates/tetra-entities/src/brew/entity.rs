@@ -252,6 +252,10 @@ pub struct BrewEntity {
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
 
+    /// Reference count of local radios affiliated to each GSSI.
+    /// Only groups with refcount > 0 are affiliated on the Brew side (under the Brew ISSI).
+    group_refcount: HashMap<u32, usize>,
+
     /// Whether the worker is connected
     connected: bool,
 
@@ -292,6 +296,7 @@ impl BrewEntity {
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
+            group_refcount: HashMap::new(),
             connected: false,
             worker_handle: Some(handle),
         }
@@ -342,78 +347,111 @@ impl BrewEntity {
     fn handle_subscriber_update(&mut self, update: MmSubscriberUpdate) {
         let issi = update.issi;
         let groups = update.groups;
+        let brew_issi = self.brew_config.issi;
 
         match update.action {
             BrewSubscriberAction::Register => {
+                // Track per-radio state; the Brew ISSI is already registered by the worker on connect.
                 let known = self.subscriber_groups.contains_key(&issi);
                 self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                tracing::info!("BrewEntity: subscriber register issi={} known={}", issi, known);
-                let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+                tracing::info!(
+                    "BrewEntity: subscriber register issi={} known={} (no Brew REGISTER, Brew ISSI already registered)",
+                    issi,
+                    known
+                );
             }
             BrewSubscriberAction::Deregister => {
-                let mut removed_groups = Vec::new();
+                // Remove per-radio state and decrement refcounts.
+                let mut dropped_groups = Vec::new();
                 if let Some(existing) = self.subscriber_groups.remove(&issi) {
                     for gssi in existing {
-                        removed_groups.push(gssi);
+                        if let Some(rc) = self.group_refcount.get_mut(&gssi) {
+                            *rc = rc.saturating_sub(1);
+                            if *rc == 0 {
+                                self.group_refcount.remove(&gssi);
+                                dropped_groups.push(gssi);
+                            }
+                        }
                     }
                 }
-                if !removed_groups.is_empty() {
+                if !dropped_groups.is_empty() {
                     tracing::info!(
-                        "BrewEntity: subscriber deaffiliate on deregister issi={} groups={:?}",
+                        "BrewEntity: deregister issi={} → DEAFFILIATE brew={} groups={:?} (refcount dropped to 0)",
                         issi,
-                        removed_groups
+                        brew_issi,
+                        dropped_groups
                     );
                     let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
-                        issi,
-                        groups: removed_groups,
+                        issi: brew_issi,
+                        groups: dropped_groups,
                     });
                 }
-                tracing::info!("BrewEntity: subscriber deregister issi={}", issi);
-                let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
+                tracing::info!(
+                    "BrewEntity: subscriber deregister issi={} (no Brew DEREGISTER, Brew ISSI stays registered)",
+                    issi
+                );
             }
             BrewSubscriberAction::Affiliate => {
-                let is_new = !self.subscriber_groups.contains_key(&issi);
-                let mut new_groups = Vec::new();
+                // Track per-radio groups and increment refcounts.
+                let mut first_affiliate = Vec::new();
                 {
                     let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
                     for gssi in groups {
                         if entry.insert(gssi) {
-                            new_groups.push(gssi);
+                            let rc = self.group_refcount.entry(gssi).or_insert(0);
+                            *rc += 1;
+                            if *rc == 1 {
+                                // First radio to join this group — affiliate on Brew side
+                                first_affiliate.push(gssi);
+                            }
                         }
                     }
                 }
 
-                if is_new {
-                    tracing::info!("BrewEntity: affiliate from unknown issi={}, sending register", issi);
-                    let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
-                }
-
-                if new_groups.is_empty() {
-                    tracing::debug!("BrewEntity: affiliate ignored (no new groups) issi={}", issi);
+                if first_affiliate.is_empty() {
+                    tracing::debug!("BrewEntity: affiliate issi={} (no new Brew affiliations needed)", issi);
                 } else {
-                    tracing::info!("BrewEntity: subscriber affiliate issi={} groups={:?}", issi, new_groups);
-                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: new_groups });
+                    tracing::info!(
+                        "BrewEntity: affiliate issi={} → AFFILIATE brew={} groups={:?}",
+                        issi,
+                        brew_issi,
+                        first_affiliate
+                    );
+                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
+                        issi: brew_issi,
+                        groups: first_affiliate,
+                    });
                 }
             }
             BrewSubscriberAction::Deaffiliate => {
-                let mut removed_groups = Vec::new();
+                // Update per-radio groups and decrement refcounts.
+                let mut dropped_groups = Vec::new();
                 if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
                     for gssi in groups {
                         if entry.remove(&gssi) {
-                            removed_groups.push(gssi);
+                            if let Some(rc) = self.group_refcount.get_mut(&gssi) {
+                                *rc = rc.saturating_sub(1);
+                                if *rc == 0 {
+                                    self.group_refcount.remove(&gssi);
+                                    dropped_groups.push(gssi);
+                                }
+                            }
                         }
                     }
-                } else {
-                    removed_groups = groups;
                 }
 
-                if removed_groups.is_empty() {
-                    tracing::debug!("BrewEntity: deaffiliate ignored (no matching groups) issi={}", issi);
+                if dropped_groups.is_empty() {
+                    tracing::debug!("BrewEntity: deaffiliate issi={} (no Brew deaffiliations needed)", issi);
                 } else {
-                    tracing::info!("BrewEntity: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
-                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
+                    tracing::info!(
+                        "BrewEntity: deaffiliate issi={} → DEAFFILIATE brew={} groups={:?}",
                         issi,
-                        groups: removed_groups,
+                        brew_issi,
+                        dropped_groups
+                    );
+                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
+                        issi: brew_issi,
+                        groups: dropped_groups,
                     });
                 }
             }
@@ -421,23 +459,31 @@ impl BrewEntity {
     }
 
     fn resync_subscribers(&self) {
-        if self.subscriber_groups.is_empty() {
-            tracing::debug!("BrewEntity: no subscribers to resync");
+        let brew_issi = self.brew_config.issi;
+
+        // Compute the union of all groups across all radios
+        let all_groups: HashSet<u32> = self.subscriber_groups.values().flat_map(|groups| groups.iter().copied()).collect();
+
+        // Always register the Brew ISSI (the worker does this on connect too,
+        // but resync covers reconnect scenarios where state may have been lost).
+        let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: brew_issi });
+
+        if all_groups.is_empty() {
+            tracing::info!("BrewEntity: resync brew={} — registered, no group affiliations", brew_issi);
             return;
         }
 
-        tracing::info!("BrewEntity: resyncing {} subscribers to TetraPack", self.subscriber_groups.len());
-
-        for (issi, groups) in &self.subscriber_groups {
-            let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
-            if !groups.is_empty() {
-                let gssi_list: Vec<u32> = groups.iter().copied().collect();
-                let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
-                    issi: *issi,
-                    groups: gssi_list,
-                });
-            }
-        }
+        let gssi_list: Vec<u32> = all_groups.into_iter().collect();
+        tracing::info!(
+            "BrewEntity: resync brew={} — registered, affiliating {} groups: {:?}",
+            brew_issi,
+            gssi_list.len(),
+            gssi_list
+        );
+        let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
+            issi: brew_issi,
+            groups: gssi_list,
+        });
     }
 
     fn set_network_connected(&mut self, connected: bool) {

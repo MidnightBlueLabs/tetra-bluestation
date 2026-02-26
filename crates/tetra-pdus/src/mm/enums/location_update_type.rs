@@ -5,7 +5,7 @@
 #[repr(u8)]
 pub enum LocationUpdateType {
     RoamingLocationUpdating = 0,
-    TemporaryRegistration = 1,
+    MigratingLocationUpdating = 1,
     PeriodicLocationUpdating = 2,
     ItsiAttach = 3,
     ServiceRestorationRoamingLocationUpdating = 4,
@@ -19,7 +19,7 @@ impl std::convert::TryFrom<u64> for LocationUpdateType {
     fn try_from(x: u64) -> Result<Self, Self::Error> {
         match x {
             0 => Ok(LocationUpdateType::RoamingLocationUpdating),
-            1 => Ok(LocationUpdateType::TemporaryRegistration),
+            1 => Ok(LocationUpdateType::MigratingLocationUpdating),
             2 => Ok(LocationUpdateType::PeriodicLocationUpdating),
             3 => Ok(LocationUpdateType::ItsiAttach),
             4 => Ok(LocationUpdateType::ServiceRestorationRoamingLocationUpdating),
@@ -36,7 +36,7 @@ impl LocationUpdateType {
     pub fn into_raw(self) -> u64 {
         match self {
             LocationUpdateType::RoamingLocationUpdating => 0,
-            LocationUpdateType::TemporaryRegistration => 1,
+            LocationUpdateType::MigratingLocationUpdating => 1,
             LocationUpdateType::PeriodicLocationUpdating => 2,
             LocationUpdateType::ItsiAttach => 3,
             LocationUpdateType::ServiceRestorationRoamingLocationUpdating => 4,
@@ -57,7 +57,7 @@ impl core::fmt::Display for LocationUpdateType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LocationUpdateType::RoamingLocationUpdating => write!(f, "RoamingLocationUpdating"),
-            LocationUpdateType::TemporaryRegistration => write!(f, "TemporaryRegistration"),
+            LocationUpdateType::MigratingLocationUpdating => write!(f, "MigratingLocationUpdating"),
             LocationUpdateType::PeriodicLocationUpdating => write!(f, "PeriodicLocationUpdating"),
             LocationUpdateType::ItsiAttach => write!(f, "ItsiAttach"),
             LocationUpdateType::ServiceRestorationRoamingLocationUpdating => write!(f, "ServiceRestorationRoamingLocationUpdating"),

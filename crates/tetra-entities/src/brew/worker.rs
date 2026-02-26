@@ -468,14 +468,14 @@ impl BrewWorker {
         self.message_loop(&mut ws)
     }
 
-    /// Send initial registration and group affiliation
+    /// Send initial registration using the Brew ISSI (routable identity)
     fn send_registration(&mut self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
-        // Register ISSI
-        let reg_msg = build_subscriber_register(self.brew_config.issi, &[]);
+        let brew_issi = self.brew_config.issi;
+        let reg_msg = build_subscriber_register(brew_issi, &[]);
         ws.send(Message::Binary(reg_msg.into()))
             .map_err(|e| format!("failed to send registration: {}", e))?;
-        tracing::info!("BrewWorker: registered ISSI {}", self.brew_config.issi);
-        self.subscriber_groups.entry(self.brew_config.issi).or_insert_with(HashSet::new);
+        tracing::info!("BrewWorker: registered Brew ISSI {}", brew_issi);
+        self.subscriber_groups.entry(brew_issi).or_insert_with(HashSet::new);
 
         Ok(())
     }
