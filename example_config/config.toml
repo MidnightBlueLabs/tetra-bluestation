@@ -171,11 +171,8 @@ voice_service = true
 
 # HTTP Digest auth credentials, as registered in BrandMeister
 # Username should be your RadioID / DMR ID. Password is your BrandMeister hotspot password.
-# username = 012345 
+# username = 012345
 # password = "012345"
-
-# ISSI to register with server. Usually, your DMR ID. 
-# issi = 012345
 
 # Reconnection delay (seconds)
 # reconnect_delay_secs = 15

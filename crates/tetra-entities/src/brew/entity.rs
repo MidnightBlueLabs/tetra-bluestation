@@ -342,57 +342,54 @@ impl BrewEntity {
     fn handle_subscriber_update(&mut self, update: MmSubscriberUpdate) {
         let issi = update.issi;
         let groups = update.groups;
+        let routable = super::is_brew_issi_routable(&self.config, issi);
 
         match update.action {
             BrewSubscriberAction::Register => {
-                let known = self.subscriber_groups.contains_key(&issi);
                 self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                tracing::info!("BrewEntity: subscriber register issi={} known={}", issi, known);
-                let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+                if routable {
+                    tracing::info!("BrewEntity: subscriber register issi={} → REGISTER", issi);
+                    let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
+                } else {
+                    tracing::debug!("BrewEntity: subscriber register issi={} (filtered, not sent to Brew)", issi);
+                }
             }
             BrewSubscriberAction::Deregister => {
-                let mut removed_groups = Vec::new();
-                if let Some(existing) = self.subscriber_groups.remove(&issi) {
-                    for gssi in existing {
-                        removed_groups.push(gssi);
+                let existing_groups: Vec<u32> = self
+                    .subscriber_groups
+                    .remove(&issi)
+                    .map(|g| g.into_iter().collect())
+                    .unwrap_or_default();
+                if routable {
+                    tracing::info!("BrewEntity: subscriber deregister issi={} → DEAFFILIATE + DEREGISTER", issi);
+                    if !existing_groups.is_empty() {
+                        let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
+                            issi,
+                            groups: existing_groups,
+                        });
                     }
+                    let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
+                } else {
+                    tracing::debug!("BrewEntity: subscriber deregister issi={} (filtered, not sent to Brew)", issi);
                 }
-                if !removed_groups.is_empty() {
-                    tracing::info!(
-                        "BrewEntity: subscriber deaffiliate on deregister issi={} groups={:?}",
-                        issi,
-                        removed_groups
-                    );
-                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
-                        issi,
-                        groups: removed_groups,
-                    });
-                }
-                tracing::info!("BrewEntity: subscriber deregister issi={}", issi);
-                let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
             }
             BrewSubscriberAction::Affiliate => {
-                let is_new = !self.subscriber_groups.contains_key(&issi);
+                let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
                 let mut new_groups = Vec::new();
-                {
-                    let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                    for gssi in groups {
-                        if entry.insert(gssi) {
-                            new_groups.push(gssi);
-                        }
+                for gssi in groups {
+                    if entry.insert(gssi) {
+                        new_groups.push(gssi);
                     }
                 }
-
-                if is_new {
-                    tracing::info!("BrewEntity: affiliate from unknown issi={}, sending register", issi);
-                    let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
-                }
-
-                if new_groups.is_empty() {
-                    tracing::debug!("BrewEntity: affiliate ignored (no new groups) issi={}", issi);
-                } else {
-                    tracing::info!("BrewEntity: subscriber affiliate issi={} groups={:?}", issi, new_groups);
+                if !new_groups.is_empty() && routable {
+                    tracing::info!("BrewEntity: affiliate issi={} → AFFILIATE groups={:?}", issi, new_groups);
                     let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: new_groups });
+                } else if !routable {
+                    tracing::debug!(
+                        "BrewEntity: affiliate issi={} groups={:?} (filtered, not sent to Brew)",
+                        issi,
+                        new_groups
+                    );
                 }
             }
             BrewSubscriberAction::Deaffiliate => {
@@ -403,35 +400,41 @@ impl BrewEntity {
                             removed_groups.push(gssi);
                         }
                     }
-                } else {
-                    removed_groups = groups;
                 }
-
-                if removed_groups.is_empty() {
-                    tracing::debug!("BrewEntity: deaffiliate ignored (no matching groups) issi={}", issi);
-                } else {
-                    tracing::info!("BrewEntity: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
+                if !removed_groups.is_empty() && routable {
+                    tracing::info!("BrewEntity: deaffiliate issi={} → DEAFFILIATE groups={:?}", issi, removed_groups);
                     let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
                         issi,
                         groups: removed_groups,
                     });
+                } else if !routable {
+                    tracing::debug!(
+                        "BrewEntity: deaffiliate issi={} groups={:?} (filtered, not sent to Brew)",
+                        issi,
+                        removed_groups
+                    );
                 }
             }
         }
     }
 
     fn resync_subscribers(&self) {
-        if self.subscriber_groups.is_empty() {
-            tracing::debug!("BrewEntity: no subscribers to resync");
-            return;
-        }
-
-        tracing::info!("BrewEntity: resyncing {} subscribers to TetraPack", self.subscriber_groups.len());
-
         for (issi, groups) in &self.subscriber_groups {
+            if !super::is_brew_issi_routable(&self.config, *issi) {
+                tracing::debug!("BrewEntity: resync skipping issi={} (filtered)", issi);
+                continue;
+            }
             let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
-            if !groups.is_empty() {
+            if groups.is_empty() {
+                tracing::info!("BrewEntity: resync issi={} — registered, no group affiliations", issi);
+            } else {
                 let gssi_list: Vec<u32> = groups.iter().copied().collect();
+                tracing::info!(
+                    "BrewEntity: resync issi={} — registered, affiliating {} groups: {:?}",
+                    issi,
+                    gssi_list.len(),
+                    gssi_list
+                );
                 let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
                     issi: *issi,
                     groups: gssi_list,
@@ -848,6 +851,13 @@ impl BrewEntity {
     fn handle_local_call_start(&mut self, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
         if !self.connected {
             tracing::trace!("BrewEntity: not connected, ignoring local call start");
+            return;
+        }
+        if !super::is_brew_issi_routable(&self.config, source_issi) {
+            tracing::debug!(
+                "BrewEntity: suppressing GROUP_TX for source_issi={} (filtered, not sent to Brew)",
+                source_issi
+            );
             return;
         }
         // TODO: Check if local

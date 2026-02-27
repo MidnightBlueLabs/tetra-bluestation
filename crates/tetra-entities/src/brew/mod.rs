@@ -7,4 +7,5 @@ pub mod worker;
 
 /// Convenience re-export of commonly externally used functions
 pub use components::brew_routable::is_active;
-pub use components::brew_routable::is_brew_routable;
+pub use components::brew_routable::is_brew_gssi_routable;
+pub use components::brew_routable::is_brew_issi_routable;

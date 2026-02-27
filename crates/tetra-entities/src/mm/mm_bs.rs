@@ -17,6 +17,7 @@ use tetra_pdus::mm::fields::group_identity_location_accept::GroupIdentityLocatio
 use tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttachDetachGroupIdentityAcknowledgement;
 use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
+use tetra_pdus::mm::pdus::d_location_update_command::DLocationUpdateCommand;
 use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
@@ -47,7 +48,7 @@ impl MmBs {
         if brew::is_active(&self.config) {
             let brew_groups = groups
                 .iter()
-                .filter(|gssi| brew::is_brew_routable(&self.config, **gssi))
+                .filter(|gssi| brew::is_brew_gssi_routable(&self.config, **gssi))
                 .copied()
                 .collect::<Vec<u32>>();
             if !brew_groups.is_empty() {
@@ -158,6 +159,7 @@ impl MmBs {
 
         // Try to register the client
         let issi = prim.received_address.ssi;
+        let handle = prim.handle;
         let is_new = !self.client_mgr.client_is_known(issi);
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
@@ -243,6 +245,13 @@ impl MmBs {
             }),
         };
         queue.push_back(msg);
+
+        // If this is an unknown returning radio (not ITSI attach), force it to
+        // re-register with full group report via D-LOCATION UPDATE COMMAND
+        if is_new && pdu.location_update_type != LocationUpdateType::ItsiAttach {
+            tracing::info!("Sending D-LOCATION UPDATE COMMAND to returning MS {} to request group report", issi);
+            Self::send_d_location_update_command(queue, message.dltime, issi, handle);
+        }
     }
 
     fn rx_u_mm_status(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -309,6 +318,7 @@ impl MmBs {
         };
 
         let issi = prim.received_address.ssi;
+
         let pdu = match UAttachDetachGroupIdentity::from_bitbuf(&mut prim.sdu) {
             Ok(pdu) => {
                 tracing::debug!("<- {:?}", pdu);
@@ -328,20 +338,35 @@ impl MmBs {
 
         // If group_identity_attach_detach_mode == 1, we first detach all groups
         if pdu.group_identity_attach_detach_mode == true {
-            let prior_groups: Vec<u32> = self
-                .client_mgr
-                .get_client_by_issi(issi)
-                .map(|client| client.groups.iter().copied().collect())
-                .unwrap_or_default();
-            match self.client_mgr.client_detach_all_groups(issi) {
-                Ok(_) => {
-                    if !prior_groups.is_empty() {
-                        self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+            if !self.client_mgr.client_is_known(issi) {
+                // Client unknown (e.g. never registered via location update).
+                // Re-register so group attachment can proceed.
+                match self.client_mgr.try_register_client(issi, true) {
+                    Ok(_) => {
+                        self.emit_subscriber_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed re-registering MS {} on group attach: {:?}", issi, e);
+                        return;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
-                    return;
+            } else {
+                // Client is known — detach all existing groups first
+                let prior_groups: Vec<u32> = self
+                    .client_mgr
+                    .get_client_by_issi(issi)
+                    .map(|client| client.groups.iter().copied().collect())
+                    .unwrap_or_default();
+                match self.client_mgr.client_detach_all_groups(issi) {
+                    Ok(_) => {
+                        if !prior_groups.is_empty() {
+                            self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
+                        return;
+                    }
                 }
             }
         }
@@ -470,7 +495,7 @@ impl MmBs {
                         // We have added the client to this group. Add an entry to the downlink response
                         let gid = GroupIdentityDownlink {
                             group_identity_attachment: Some(GroupIdentityAttachment {
-                                group_identity_attachment_lifetime: 3, // re-attach after location update
+                                group_identity_attachment_lifetime: 1, // re-attach after ITSI attach (ETSI default per clause 16.4.2)
                                 class_of_usage: giu.class_of_usage.unwrap_or(0),
                             }),
                             group_identity_detachment_uplink: None,
@@ -497,6 +522,48 @@ impl MmBs {
         accepted_groups
     }
 
+    /// Sends a D-LOCATION UPDATE COMMAND to force the radio to re-register
+    /// with full group identity report
+    fn send_d_location_update_command(queue: &mut MessageQueue, dltime: TdmaTime, issi: u32, handle: u32) {
+        let pdu = DLocationUpdateCommand {
+            group_identity_report: true,
+            cipher_control: false,
+            ciphering_parameters: None,
+            address_extension: None,
+            cell_type_control: None,
+            proprietary: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(16);
+        pdu.to_bitbuf(&mut sdu).unwrap();
+        sdu.seek(0);
+        tracing::debug!("-> DLocationUpdateCommand sdu {}", sdu.dump_bin());
+
+        let addr = TetraAddress {
+            encrypted: false,
+            ssi_type: SsiType::Ssi,
+            ssi: issi,
+        };
+        let msg = SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            dltime,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle,
+                address: addr,
+                layer2service: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(msg);
+    }
+
     fn feature_check_u_itsi_detach(pdu: &UItsiDetach) -> bool {
         let supported = true;
         if pdu.address_extension.is_some() {
@@ -510,8 +577,8 @@ impl MmBs {
 
     fn feature_check_u_location_update_demand(pdu: &ULocationUpdateDemand) -> bool {
         let mut supported = true;
-        if pdu.location_update_type != LocationUpdateType::RoamingLocationUpdating
-            && pdu.location_update_type != LocationUpdateType::ItsiAttach
+        if pdu.location_update_type == LocationUpdateType::MigratingLocationUpdating
+            || pdu.location_update_type == LocationUpdateType::DisabledMsUpdating
         {
             unimplemented_log!("Unsupported {}", pdu.location_update_type);
             supported = false;

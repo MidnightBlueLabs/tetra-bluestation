@@ -461,23 +461,8 @@ impl BrewWorker {
             _ => {}
         }
 
-        // Step 3: Register subscriber
-        self.send_registration(&mut ws)?;
-
-        // Step 4: Main message loop
+        // Step 3: Main message loop
         self.message_loop(&mut ws)
-    }
-
-    /// Send initial registration and group affiliation
-    fn send_registration(&mut self, ws: &mut WebSocket<MaybeTlsStream<TcpStream>>) -> Result<(), String> {
-        // Register ISSI
-        let reg_msg = build_subscriber_register(self.brew_config.issi, &[]);
-        ws.send(Message::Binary(reg_msg.into()))
-            .map_err(|e| format!("failed to send registration: {}", e))?;
-        tracing::info!("BrewWorker: registered ISSI {}", self.brew_config.issi);
-        self.subscriber_groups.entry(self.brew_config.issi).or_insert_with(HashSet::new);
-
-        Ok(())
     }
 
     /// Graceful teardown: DEAFFILIATE → DEREGISTER → WS close
@@ -716,7 +701,7 @@ impl BrewWorker {
                         gt.priority,
                         gt.service
                     );
-                    if !brew::is_brew_routable(&self.config, gt.destination) {
+                    if !brew::is_brew_gssi_routable(&self.config, gt.destination) {
                         tracing::warn!("BrewWorker: dropping GROUP_TX to non-routable GSSI {}", gt.destination);
                         return;
                     };

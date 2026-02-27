@@ -16,8 +16,6 @@ pub struct CfgBrew {
     pub username: Option<String>,
     /// Optional password for HTTP Digest auth
     pub password: Option<String>,
-    /// ISSI to register with the TetraPack server
-    pub issi: u32,
     /// Reconnection delay
     pub reconnect_delay: Duration,
     /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
@@ -39,8 +37,6 @@ pub struct CfgBrewDto {
     pub username: u32,
     /// Optional password for HTTP Digest auth
     pub password: String,
-    /// ISSI to register with the TetraPack server
-    pub issi: u32,
     /// Reconnection delay in seconds
     #[serde(default = "default_brew_reconnect_delay")]
     pub reconnect_delay_secs: u64,
@@ -70,7 +66,6 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         tls: src.tls,
         username: Some(src.username.to_string()),
         password: Some(src.password),
-        issi: src.issi,
         reconnect_delay: Duration::from_secs(src.reconnect_delay_secs),
         jitter_initial_latency_frames: src.jitter_initial_latency_frames,
         whitelisted_ssis: src.whitelisted_ssis,

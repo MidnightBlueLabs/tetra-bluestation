@@ -233,7 +233,7 @@ impl CcBsSubentity {
         for (call_id, origin) in to_drop {
             tracing::info!("CMCE: dropping call_id={} gssi={} (no listeners)", call_id, gssi);
             if let CallOrigin::Network { brew_uuid } = origin {
-                if brew::is_brew_routable(&self.config, gssi) {
+                if brew::is_brew_gssi_routable(&self.config, gssi) {
                     queue.push_back(SapMsg {
                         sap: Sap::Control,
                         src: TetraEntity::Cmce,
@@ -586,7 +586,7 @@ impl CcBsSubentity {
 
         // Notify Brew entity about this local call if Brew is loaded and the SSI is cleared for Brew
         // It can then forward to TetraPack if the group is subscribed
-        if brew::is_brew_routable(&self.config, dest_gssi) {
+        if brew::is_brew_gssi_routable(&self.config, dest_gssi) {
             let msg = SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -783,7 +783,7 @@ impl CcBsSubentity {
             self.release_timeslot(ts);
 
             // Notify Brew only for local calls on SSIs that are cleared for Brew
-            if brew::is_brew_routable(&self.config, dest_ssi) {
+            if brew::is_brew_gssi_routable(&self.config, dest_ssi) {
                 if is_local {
                     let notify = SapMsg {
                         sap: Sap::Control,
@@ -923,7 +923,7 @@ impl CcBsSubentity {
         });
 
         // Notify Brew to stop forwarding audio, if this SSI is cleared for Br
-        if brew::is_brew_routable(&self.config, dest_ssi) {
+        if brew::is_brew_gssi_routable(&self.config, dest_ssi) {
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -1023,7 +1023,7 @@ impl CcBsSubentity {
         });
 
         // Notify Brew of speaker change (local MS taking floor)
-        if brew::is_brew_routable(&self.config, dest_addr.ssi) {
+        if brew::is_brew_gssi_routable(&self.config, dest_addr.ssi) {
             let Some(call) = self.active_calls.get(&call_id) else {
                 return;
             };
@@ -1175,7 +1175,7 @@ impl CcBsSubentity {
 
     /// Handle network-initiated group call start
     fn rx_network_call_start(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, source_issi: u32, dest_gssi: u32, _priority: u8) {
-        assert!(brew::is_brew_routable(&self.config, dest_gssi));
+        assert!(brew::is_brew_gssi_routable(&self.config, dest_gssi));
 
         if !self.has_listener(dest_gssi) {
             tracing::info!(

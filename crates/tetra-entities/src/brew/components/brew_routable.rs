@@ -6,14 +6,22 @@ pub fn is_active(config: &SharedConfig) -> bool {
     config.config().brew.is_some()
 }
 
-/// Determine if a given SSI should be routed over brew, or is restricted to local handling
-pub fn is_brew_routable(config: &SharedConfig, ssi: u32) -> bool {
+/// Returns true if the configured Brew server is TetraPack (core.tetrapack.online)
+fn is_tetrapack(config: &SharedConfig) -> bool {
+    let Some(brew_config) = &config.config().brew else {
+        return false;
+    };
+    brew_config.host == "core.tetrapack.online"
+}
+
+/// Determine if a given GSSI should be routed over Brew, or is restricted to local handling
+pub fn is_brew_gssi_routable(config: &SharedConfig, ssi: u32) -> bool {
     let Some(brew_config) = &config.config().brew else {
         // Brew not configured, so no routing to Brew
         return false;
     };
-    if ssi <= 90 {
-        // Brew doesn't route 0..=90
+    if is_tetrapack(config) && ssi <= 90 {
+        // TetraPack doesn't route 0..=90
         return false;
     }
     if config.config().cell.local_ssi_ranges.contains(ssi) {
@@ -34,4 +42,17 @@ pub fn is_brew_routable(config: &SharedConfig, ssi: u32) -> bool {
 
     // No whitelist present, default to allow
     true
+}
+
+/// Determine if a given ISSI should be sent to the Brew server.
+/// On TetraPack, ISSIs must be exactly 7 digits (1_000_000..=9_999_999). Other servers allow all ISSIs.
+pub fn is_brew_issi_routable(config: &SharedConfig, issi: u32) -> bool {
+    if config.config().brew.is_none() {
+        return false;
+    }
+    if is_tetrapack(config) {
+        issi >= 1_000_000 && issi <= 9_999_999
+    } else {
+        true
+    }
 }
