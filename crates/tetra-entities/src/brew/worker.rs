@@ -45,6 +45,20 @@ pub enum BrewEvent {
     /// Voice frame received (ACELP traffic)
     VoiceFrame { uuid: Uuid, length_bits: u16, data: Vec<u8> },
 
+    /// SDS context (metadata) received. This precedes or follows an SDS_TRANSFER frame.
+    ShortTransfer {
+        uuid: Uuid,
+        source_issi: u32,
+        destination: u32,
+        number: String,
+    },
+
+    /// SDS Type-4 transfer frame
+    SdsTransfer { uuid: Uuid, length_bits: u16, data: Vec<u8> },
+
+    /// SDS report frame (implementation-defined status byte; 0=ok, 1=fail)
+    SdsReport { uuid: Uuid, status: u8 },
+
     /// Subscriber event received
     SubscriberEvent { msg_type: u8, issi: u32, groups: Vec<u32> },
 
@@ -81,6 +95,20 @@ pub enum BrewCommand {
 
     /// Send GROUP_IDLE to TetraPack (transmission ended)
     SendGroupIdle { uuid: Uuid, cause: u8 },
+
+    /// Send SHORT_TRANSFER to TetraPack (SDS metadata/context)
+    SendShortTransfer {
+        uuid: Uuid,
+        source_issi: u32,
+        destination: u32,
+        number: String,
+    },
+
+    /// Send SDS_TRANSFER frame to TetraPack (Type-4 payload)
+    SendSdsTransfer { uuid: Uuid, length_bits: u16, data: Vec<u8> },
+
+    /// Send SDS_REPORT frame to TetraPack (0=ok,1=fail)
+    SendSdsReport { uuid: Uuid, status: u8 },
 
     /// Disconnect gracefully
     Disconnect,
@@ -646,6 +674,24 @@ impl BrewWorker {
                             tracing::debug!("BrewWorker: sent GROUP_IDLE uuid={} cause={}", uuid, cause);
                         }
                     }
+                    BrewCommand::SendShortTransfer { uuid, source_issi, destination, number } => {
+                        let msg = build_short_transfer(&uuid, source_issi, destination, &number);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send SHORT_TRANSFER: {}", e);
+                        }
+                    }
+                    BrewCommand::SendSdsTransfer { uuid, length_bits, data } => {
+                        let msg = build_sds_transfer_frame(&uuid, length_bits, &data);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send SDS_TRANSFER: {}", e);
+                        }
+                    }
+                    BrewCommand::SendSdsReport { uuid, status } => {
+                        let msg = build_sds_report_frame(&uuid, status);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send SDS_REPORT: {}", e);
+                        }
+                    }
                     BrewCommand::Disconnect => {
                         self.graceful_teardown(ws);
                         return Ok(());
@@ -714,6 +760,26 @@ impl BrewWorker {
                     });
                 }
             }
+            CALL_STATE_SHORT_TRANSFER => {
+                if let BrewCallPayload::ShortTransfer(st) = cc.payload {
+                    let number = st.number_string();
+                    tracing::info!(
+                        "BrewWorker: SHORT_TRANSFER uuid={} src={} dst={} number=\"{}\"",
+                        cc.identifier,
+                        st.source,
+                        st.destination,
+                        number
+                    );
+                    let _ = self.event_sender.send(BrewEvent::ShortTransfer {
+                        uuid: cc.identifier,
+                        source_issi: st.source,
+                        destination: st.destination,
+                        number,
+                    });
+                } else {
+                    tracing::warn!("BrewWorker: SHORT_TRANSFER uuid={} had unexpected payload", cc.identifier);
+                }
+            }
             CALL_STATE_GROUP_IDLE => {
                 let cause = if let BrewCallPayload::Cause(c) = cc.payload { c } else { 0 };
                 tracing::info!("BrewWorker: GROUP_IDLE uuid={} cause={}", cc.identifier, cause);
@@ -751,16 +817,18 @@ impl BrewWorker {
                 });
             }
             FRAME_TYPE_SDS_TRANSFER => {
-                // TODO FIXME we could check whether this call is indeed a brew ssi here
-                tracing::debug!(
-                    "BrewWorker: SDS transfer uuid={} {} bytes (not yet handled)",
-                    frame.identifier,
-                    frame.data.len()
-                );
+                let _ = self.event_sender.send(BrewEvent::SdsTransfer {
+                    uuid: frame.identifier,
+                    length_bits: frame.length_bits,
+                    data: frame.data,
+                });
             }
             FRAME_TYPE_SDS_REPORT => {
-                // TODO FIXME we could check whether this call is indeed a brew ssi here
-                tracing::debug!("BrewWorker: SDS report uuid={}", frame.identifier);
+                let status = frame.data.get(0).copied().unwrap_or(1);
+                let _ = self.event_sender.send(BrewEvent::SdsReport {
+                    uuid: frame.identifier,
+                    status,
+                });
             }
             ft => {
                 tracing::debug!("BrewWorker: unhandled frame type {} uuid={}", ft, frame.identifier);

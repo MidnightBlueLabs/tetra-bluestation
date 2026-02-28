@@ -27,6 +27,8 @@ pub enum SdsProtocolId {
     MessageWithUserDataHeader = 138,
     ConcatenatedSdsMessageSdsTl = 140,
     AgnssServiceSdsTl = 141,
+    /// TCCA Callout Service (commonly carried in SDS Type-4)
+    Callout = 195,
 }
 
 impl std::convert::TryFrom<u64> for SdsProtocolId {
@@ -57,6 +59,7 @@ impl std::convert::TryFrom<u64> for SdsProtocolId {
             138 => Ok(SdsProtocolId::MessageWithUserDataHeader),
             140 => Ok(SdsProtocolId::ConcatenatedSdsMessageSdsTl),
             141 => Ok(SdsProtocolId::AgnssServiceSdsTl),
+            195 => Ok(SdsProtocolId::Callout),
             _ => Err(()),
         }
     }
@@ -90,6 +93,7 @@ impl SdsProtocolId {
             SdsProtocolId::MessageWithUserDataHeader => 138,
             SdsProtocolId::ConcatenatedSdsMessageSdsTl => 140,
             SdsProtocolId::AgnssServiceSdsTl => 141,
+            SdsProtocolId::Callout => 195,
         }
     }
 }
@@ -127,6 +131,7 @@ impl core::fmt::Display for SdsProtocolId {
             SdsProtocolId::MessageWithUserDataHeader => write!(f, "MessageWithUserDataHeader"),
             SdsProtocolId::ConcatenatedSdsMessageSdsTl => write!(f, "ConcatenatedSdsMessageSdsTl"),
             SdsProtocolId::AgnssServiceSdsTl => write!(f, "AgnssServiceSdsTl"),
+            SdsProtocolId::Callout => write!(f, "Callout"),
         }
     }
 }

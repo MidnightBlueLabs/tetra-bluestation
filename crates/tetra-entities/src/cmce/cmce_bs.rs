@@ -58,8 +58,7 @@ impl CmceBs {
                 self.cc.route_xx_deliver(_queue, message);
             }
             CmcePduTypeUl::USdsData => {
-                unimplemented_log!("{:?}", pdu_type);
-                // self.sds.route_xx_deliver(_queue, message);
+                self.sds.route_xx_deliver(_queue, message);
             }
             CmcePduTypeUl::UFacility => {
                 unimplemented_log!("{:?}", pdu_type);

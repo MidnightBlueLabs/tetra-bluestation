@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};
-use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
+use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity, BitBuffer, TetraAddress, address::SsiType};
+use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
 
@@ -31,6 +32,9 @@ const BREW_EXPECTED_FRAME_INTERVAL_US: f64 = 56_667.0;
 const BREW_JITTER_WARN_TARGET_FRAMES: usize = 8;
 /// Rate-limit warning logs per call.
 const BREW_JITTER_WARN_INTERVAL: Duration = Duration::from_secs(5);
+
+// SDS staging timeouts (Brew SHORT_TRANSFER + SDS_TRANSFER may arrive out-of-order)
+const SDS_SESSION_TIMEOUT: Duration = Duration::from_secs(2);
 
 // ─── Active call tracking ─────────────────────────────────────────
 
@@ -87,6 +91,190 @@ struct UlForwardedCall {
     dest_gssi: u32,
     /// Number of voice frames forwarded
     frame_count: u64,
+}
+
+#[derive(Debug, Clone)]
+struct SdsSessionCtx {
+    uuid: Uuid,
+    source_issi: u32,
+    destination: u32,
+    number: String,
+    since: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct PendingSdsPayload {
+    uuid: Uuid,
+    length_bits: u16,
+    data: Vec<u8>,
+    since: Instant,
+}
+
+// ─── SDS PID=0x04 (observed) delivery report routing ─────────────
+
+#[derive(Debug, Clone)]
+struct PendingSdsPid04Report {
+    origin_ssi: u32,
+    dest_ssi: u32,
+    mr: u8,
+    since: Instant,
+}
+
+fn sds_pid04_key(dest_ssi: u32, mr: u8) -> u64 {
+    ((dest_ssi as u64) << 8) | (mr as u64)
+}
+
+fn is_sds_pid04(payload: &[u8]) -> bool {
+    payload.first().copied() == Some(0x04)
+}
+
+// Heuristic: in observed MS, ctrl byte 0x08 indicates Delivery Report Request (DRR=1).
+fn pid04_drr_requested(payload: &[u8]) -> bool {
+    payload.len() >= 2 && (payload[1] & 0x08) != 0
+}
+
+fn pid04_msg_type(payload: &[u8]) -> Option<u8> {
+    payload.get(1).map(|b| (b & 0xF0) >> 4)
+}
+
+fn is_pid04_status_pdu(payload: &[u8]) -> bool {
+    payload.len() >= 4
+        && payload.first().copied() == Some(0x04)
+        && matches!(pid04_msg_type(payload), Some(1) | Some(2))
+}
+
+fn parse_pid04_status(payload: &[u8]) -> Option<(u8, u8, u8)> {
+    // Returns (msg_type, status, mr)
+    if payload.len() < 4 || payload[0] != 0x04 {
+        return None;
+    }
+    let mt = pid04_msg_type(payload)?;
+    if mt != 1 && mt != 2 {
+        return None;
+    }
+    Some((mt, payload[2], payload[3]))
+}
+
+// Data observed: 04 <ctrl> <mr> ...
+fn parse_pid04_mr_from_data(payload: &[u8]) -> Option<u8> {
+    if payload.len() >= 3 && payload[0] == 0x04 {
+        if is_pid04_status_pdu(payload) {
+            return None;
+        }
+        return Some(payload[2]);
+    }
+    None
+}
+
+fn build_pid04_report(mr: u8, status: u8) -> [u8; 4] {
+    [0x04, 0x10, status, mr]
+}
+
+fn build_pid04_ack(mr: u8, status: u8) -> [u8; 4] {
+    [0x04, 0x20, status, mr]
+}
+
+fn fmt_hex4(payload: &[u8]) -> String {
+    let mut out = String::new();
+    for (i, b) in payload.iter().take(4).enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(&format!("{:02X}", b));
+    }
+    out
+}
+
+fn pid04_msg_type_name(mt: u8) -> &'static str {
+    match mt {
+        1 => "REPORT",
+        2 => "ACK",
+        _ => "UNKNOWN",
+    }
+}
+
+fn pid04_delivery_status_name(status: u8) -> &'static str {
+    match status {
+        0x00 => "Receipt acknowledged by destination",
+        0x01 => "Receipt report acknowledgement",
+        0x02 => "Consumed by destination",
+        0x03 => "Consumed report acknowledgement",
+        0x04 => "Forwarded to external network",
+        0x05 => "Sent to group, acknowledgements prevented",
+        0x20 => "Congestion, message stored by SwMI",
+        0x21 => "Message stored by SwMI",
+        0x22 => "Destination not reachable, message stored by SwMI",
+        0x40 => "Network overload",
+        0x41 => "Service permanently not available on BS",
+        0x42 => "Service temporarily not available on BS",
+        0x43 => "Source not authorized for SDS",
+        0x44 => "Destination not authorized for SDS",
+        0x45 => "Unknown destination/gateway/service centre",
+        0x46 => "Unknown forward address",
+        0x47 => "Group address with individual service",
+        0x48 => "Validity period expired (not received)",
+        0x49 => "Validity period expired (not consumed)",
+        0x4A => "Delivery failed",
+        0x4B => "Destination not registered on system",
+        0x4C => "Destination queue full",
+        0x4D => "Message too long for destination/gateway",
+        0x4E => "Destination does not support SDS-TL",
+        0x4F => "Destination host not connected",
+        0x50 => "Protocol not supported",
+        0x51 => "Data coding scheme not supported",
+        0x52 => "Destination memory full, message discarded",
+        0x53 => "Destination not accepting SDS messages",
+        0x56 => "Destination address administratively prohibited",
+        0x57 => "Cannot route to external network",
+        0x58 => "Unknown external subscriber number",
+        0x59 => "Negative report acknowledgement",
+        0x5A => "Destination not reachable, delivery failed",
+        0x60 => "Destination memory full",
+        0x61 => "Destination memory available",
+        0x62 => "Start pending messages",
+        0x63 => "No pending messages",
+        0x80 => "Stop sending",
+        0x81 => "Start sending",
+        _ => {
+            if status < 0x20 {
+                "SDS transfer success (reserved/unknown)"
+            } else if status < 0x40 {
+                "Temporary error (reserved/unknown)"
+            } else if status < 0x60 {
+                "Transfer failed (reserved/unknown)"
+            } else if status < 0x80 {
+                "Flow control (reserved/unknown)"
+            } else {
+                "End-to-end control / reserved"
+            }
+        }
+    }
+}
+
+// ─── Minimal SDS‑TL (ETSI/TCCA practical) helpers ─────────────────
+
+fn sds_tl_msg_type(payload: &[u8]) -> Option<u8> {
+    payload.get(1).map(|b| (b & 0xF0) >> 4)
+}
+
+fn is_sds_tl_status_pdu(payload: &[u8]) -> bool {
+    matches!(sds_tl_msg_type(payload), Some(1) | Some(2)) && payload.len() >= 4
+}
+
+fn parse_sds_tl_transfer_pid_mr(payload: &[u8]) -> Option<(u8, u8)> {
+    if payload.len() < 3 {
+        return None;
+    }
+    if sds_tl_msg_type(payload) != Some(0) {
+        return None;
+    }
+    let pid = payload[0];
+    let mr = payload[2];
+    Some((pid, mr))
+}
+
+fn build_sds_tl_ack(pid: u8, status: u8, mr: u8) -> [u8; 4] {
+    [pid, 0x20, status, mr]
 }
 
 #[derive(Debug)]
@@ -252,6 +440,14 @@ pub struct BrewEntity {
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
 
+    // SDS SHORT_TRANSFER context staging
+    sds_sessions: HashMap<Uuid, SdsSessionCtx>,
+    sds_pending: HashMap<Uuid, Vec<PendingSdsPayload>>,
+    next_sds_dl_ts1: Option<TdmaTime>,
+
+    // Pending PID=0x04 report routing: key(dest_ssi,mr)->origin
+    pending_sds_pid04_reports: HashMap<u64, PendingSdsPid04Report>,
+
     /// Whether the worker is connected
     connected: bool,
 
@@ -292,6 +488,10 @@ impl BrewEntity {
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
+            sds_sessions: HashMap::new(),
+            sds_pending: HashMap::new(),
+            next_sds_dl_ts1: None,
+            pending_sds_pid04_reports: HashMap::new(),
             connected: false,
             worker_handle: Some(handle),
         }
@@ -334,6 +534,20 @@ impl BrewEntity {
                 }
                 BrewEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
+                }
+                BrewEvent::ShortTransfer {
+                    uuid,
+                    source_issi,
+                    destination,
+                    number,
+                } => {
+                    self.handle_short_transfer(queue, uuid, source_issi, destination, number);
+                }
+                BrewEvent::SdsTransfer { uuid, length_bits, data } => {
+                    self.handle_sds_transfer(queue, uuid, length_bits, data);
+                }
+                BrewEvent::SdsReport { uuid, status } => {
+                    tracing::debug!("BrewEntity: SDS_REPORT uuid={} status={}", uuid, status);
                 }
             }
         }
@@ -450,6 +664,436 @@ impl BrewEntity {
             state.network_connected = connected;
             tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
         }
+    }
+
+    fn reserve_sds_dl_ts1(&mut self) -> TdmaTime {
+        let candidate = self.dltime.forward_to_timeslot(1);
+        let next = match self.next_sds_dl_ts1 {
+            None => candidate,
+            Some(cur) => {
+                if cur.to_int() < candidate.to_int() {
+                    candidate
+                } else {
+                    cur
+                }
+            }
+        };
+        self.next_sds_dl_ts1 = Some(next.add_timeslots(4));
+        next
+    }
+
+    fn expire_sds_staging(&mut self) {
+        let now = Instant::now();
+
+        // Expire contexts that never received an SDS_TRANSFER.
+        let mut expired_ctx = Vec::new();
+        for (uuid, ctx) in self.sds_sessions.iter() {
+            if now.duration_since(ctx.since) > SDS_SESSION_TIMEOUT {
+                expired_ctx.push(*uuid);
+            }
+        }
+        for uuid in expired_ctx {
+            let _ = self.sds_sessions.remove(&uuid);
+            tracing::warn!("BrewEntity: SHORT_TRANSFER timed out waiting for SDS_TRANSFER uuid={}", uuid);
+            let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 1 });
+        }
+
+        // Expire payloads that never received a SHORT_TRANSFER.
+        let mut expired_payload = Vec::new();
+        for (uuid, list) in self.sds_pending.iter() {
+            let expired = list
+                .first()
+                .map(|p| now.duration_since(p.since) > SDS_SESSION_TIMEOUT)
+                .unwrap_or(false);
+            if expired {
+                expired_payload.push(*uuid);
+            }
+        }
+        for uuid in expired_payload {
+            let _ = self.sds_pending.remove(&uuid);
+            tracing::warn!("BrewEntity: SDS_TRANSFER timed out waiting for SHORT_TRANSFER uuid={}", uuid);
+            let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 1 });
+        }
+
+        // Expire pending PID=0x04 delivery report routes (dest,mr)->origin.
+        const PID04_REPORT_TIMEOUT: Duration = Duration::from_secs(8);
+        let mut expired_keys = Vec::new();
+        for (k, v) in self.pending_sds_pid04_reports.iter() {
+            if now.duration_since(v.since) > PID04_REPORT_TIMEOUT {
+                expired_keys.push(*k);
+            }
+        }
+        for k in expired_keys {
+            let _ = self.pending_sds_pid04_reports.remove(&k);
+        }
+    }
+
+    fn infer_sds_destination_type(&self, ssi: u32) -> SsiType {
+        // Heuristic: if any known subscriber is affiliated to this SSI, treat it as GSSI.
+        if self.subscriber_groups.values().any(|set| set.contains(&ssi)) {
+            SsiType::Gssi
+        } else {
+            SsiType::Ssi
+        }
+    }
+
+    fn parse_sds_dst_hint(&self, number: &str) -> Option<SsiType> {
+        let n = number.to_ascii_lowercase();
+        if n.contains("dst=gssi") || n.contains("dst:gssi") {
+            Some(SsiType::Gssi)
+        } else if n.contains("dst=issi") || n.contains("dst:issi") {
+            Some(SsiType::Ssi)
+        } else {
+            None
+        }
+    }
+
+    fn push_cmce_unitdata_req(&mut self, queue: &mut MessageQueue, address: TetraAddress, mut sdu: BitBuffer, force_mcch: bool, repeats: bool) {
+        sdu.seek(0);
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            dltime: if force_mcch { self.reserve_sds_dl_ts1() } else { self.dltime },
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: 0,
+                endpoint_id: 0,
+                link_id: 3,
+                layer2service: 0,
+                pdu_prio: 2,
+                layer2_qos: 0,
+                // For MCCH/TS1 (SDS/signalling), stealing must remain disabled.
+                stealing_permission: !force_mcch,
+                stealing_repeats_flag: repeats,
+                main_address: address,
+                chan_alloc: None,
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    fn send_pid04_status_to_origin(
+        &mut self,
+        queue: &mut MessageQueue,
+        origin_ssi: u32,
+        report_sender_ssi: u32,
+        mt: u8,
+        mr: u8,
+        status: u8,
+        repeat: bool,
+    ) {
+        use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+
+        let payload: [u8; 4] = match mt {
+            2 => build_pid04_ack(mr, status),
+            _ => build_pid04_report(mr, status),
+        };
+
+        let addr = TetraAddress::new(origin_ssi, SsiType::Ssi);
+        let pdu = DSdsData {
+            calling_party_type_identifier: 1,
+            calling_party_address_ssi: Some(report_sender_ssi as u64),
+            calling_party_extension: None,
+            short_data_type_identifier: 3,
+            user_defined_data_1: None,
+            user_defined_data_2: None,
+            user_defined_data_3: None,
+            length_indicator: Some(32),
+            user_defined_data_4: Some(payload.to_vec()),
+            external_subscriber_number: None,
+            dm_ms_address: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(96);
+        if pdu.to_bitbuf(&mut sdu).is_err() {
+            return;
+        }
+
+        // Use MCCH/TS1 pacing. Optionally request one scheduler-level repeat for reliability.
+        self.push_cmce_unitdata_req(queue, addr, sdu, true, repeat);
+    }
+
+    fn send_sds_tl_ack_to_origin(
+        &mut self,
+        queue: &mut MessageQueue,
+        origin_ssi: u32,
+        report_sender_ssi: u32,
+        pid: u8,
+        mr: u8,
+        repeat: bool,
+    ) {
+        use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+
+        let payload = build_sds_tl_ack(pid, 0x00, mr);
+        let addr = TetraAddress::new(origin_ssi, SsiType::Ssi);
+
+        let pdu = DSdsData {
+            calling_party_type_identifier: 1,
+            calling_party_address_ssi: Some(report_sender_ssi as u64),
+            calling_party_extension: None,
+            short_data_type_identifier: 3,
+            user_defined_data_1: None,
+            user_defined_data_2: None,
+            user_defined_data_3: None,
+            length_indicator: Some(32),
+            user_defined_data_4: Some(payload.to_vec()),
+            external_subscriber_number: None,
+            dm_ms_address: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(96);
+        if pdu.to_bitbuf(&mut sdu).is_err() {
+            return;
+        }
+
+        self.push_cmce_unitdata_req(queue, addr, sdu, true, repeat);
+    }
+
+    fn handle_short_transfer(&mut self, queue: &mut MessageQueue, uuid: Uuid, source_issi: u32, destination: u32, number: String) {
+        let ctx = SdsSessionCtx {
+            uuid,
+            source_issi,
+            destination,
+            number,
+            since: Instant::now(),
+        };
+
+        // Brew SHORT_TRANSFER and SDS_TRANSFER frames may arrive out-of-order.
+        if let Some(pendings) = self.sds_pending.remove(&uuid) {
+            for p in pendings {
+                self.inject_sds_with_ctx(queue, uuid, ctx.clone(), p.length_bits, p.data);
+            }
+        } else {
+            self.sds_sessions.insert(uuid, ctx);
+        }
+    }
+
+    fn inject_sds_with_ctx(&mut self, queue: &mut MessageQueue, uuid: Uuid, ctx: SdsSessionCtx, length_bits: u16, data: Vec<u8>) {
+        use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+
+        let dst_type = self
+            .parse_sds_dst_hint(&ctx.number)
+            .unwrap_or_else(|| self.infer_sds_destination_type(ctx.destination));
+        let addr = TetraAddress::new(ctx.destination, dst_type);
+
+        tracing::info!(
+            "BrewEntity: SDS DL uuid={} src={} dst={} bits={} number='{}'",
+            uuid,
+            ctx.source_issi,
+            addr,
+            length_bits,
+            ctx.number
+        );
+
+        let pdu = DSdsData {
+            calling_party_type_identifier: 1,
+            calling_party_address_ssi: Some(ctx.source_issi as u64),
+            calling_party_extension: None,
+            short_data_type_identifier: 3,
+            user_defined_data_1: None,
+            user_defined_data_2: None,
+            user_defined_data_3: None,
+            length_indicator: Some(length_bits),
+            user_defined_data_4: Some(data.clone()),
+            external_subscriber_number: None,
+            dm_ms_address: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(64 + (length_bits as usize));
+        if let Err(e) = pdu.to_bitbuf(&mut sdu) {
+            tracing::error!("BrewEntity: DSdsData encode failed: {:?}", e);
+            let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 1 });
+            return;
+        }
+
+        let repeat = is_sds_pid04(&data) && pid04_drr_requested(&data);
+        self.push_cmce_unitdata_req(queue, addr, sdu, true, repeat);
+        let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 0 });
+    }
+
+    fn handle_sds_transfer(&mut self, queue: &mut MessageQueue, uuid: Uuid, length_bits: u16, data: Vec<u8>) {
+        if let Some(ctx) = self.sds_sessions.remove(&uuid) {
+            self.inject_sds_with_ctx(queue, uuid, ctx, length_bits, data);
+            return;
+        }
+
+        tracing::warn!("BrewEntity: SDS_TRANSFER without prior SHORT_TRANSFER uuid={} (buffering)", uuid);
+        self.sds_pending
+            .entry(uuid)
+            .or_insert_with(Vec::new)
+            .push(PendingSdsPayload {
+                uuid,
+                length_bits,
+                data,
+                since: Instant::now(),
+            });
+    }
+
+    fn handle_uplink_sds(&mut self, queue: &mut MessageQueue, ind: tetra_saps::control::sds::BrewSdsRxInd) {
+        // PID=0x04 status (REPORT/ACK) must be routed back to origin.
+        if let Some((mt, status, mr)) = parse_pid04_status(&ind.payload) {
+            let key = sds_pid04_key(ind.source.ssi, mr);
+            if let Some(pend) = self.pending_sds_pid04_reports.remove(&key) {
+                tracing::info!(
+                    "BrewEntity: PID04 {} raw4={} mr=0x{:02x} status=0x{:02x} ({}) from={} -> origin={} (dst was {})",
+                    pid04_msg_type_name(mt),
+                    fmt_hex4(&ind.payload),
+                    mr,
+                    status,
+                    pid04_delivery_status_name(status),
+                    ind.source.ssi,
+                    pend.origin_ssi,
+                    pend.dest_ssi
+                );
+                self.send_pid04_status_to_origin(queue, pend.origin_ssi, ind.source.ssi, mt, mr, status, true);
+            } else {
+                tracing::debug!(
+                    "BrewEntity: dropping PID04 {} raw4={} with no pending mapping from={} mr=0x{:02x} status=0x{:02x}",
+                    pid04_msg_type_name(mt),
+                    fmt_hex4(&ind.payload),
+                    ind.source.ssi,
+                    mr,
+                    status
+                );
+            }
+            return;
+        }
+
+        // SDS‑TL status PDUs (ACK/REPORT) are not user messages. Relay over-air for local MS↔MS.
+        if is_sds_tl_status_pdu(&ind.payload) {
+            let dst_type = match ind.destination.ssi_type {
+                SsiType::Gssi => SsiType::Gssi,
+                SsiType::Ssi => SsiType::Ssi,
+                _ => self.infer_sds_destination_type(ind.destination.ssi),
+            };
+
+            let do_local_relay = dst_type == SsiType::Ssi && ind.destination.ssi != ind.source.ssi;
+            if do_local_relay {
+                use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+                let addr = TetraAddress::new(ind.destination.ssi, SsiType::Ssi);
+                let pdu = DSdsData {
+                    calling_party_type_identifier: 1,
+                    calling_party_address_ssi: Some(ind.source.ssi as u64),
+                    calling_party_extension: None,
+                    short_data_type_identifier: 3,
+                    user_defined_data_1: None,
+                    user_defined_data_2: None,
+                    user_defined_data_3: None,
+                    length_indicator: Some(ind.bit_length),
+                    user_defined_data_4: Some(ind.payload.clone()),
+                    external_subscriber_number: None,
+                    dm_ms_address: None,
+                };
+
+                let mut sdu = BitBuffer::new_autoexpand(64 + (ind.bit_length as usize));
+                if let Err(e) = pdu.to_bitbuf(&mut sdu) {
+                    tracing::warn!("BrewEntity: SDS‑TL status relay encode failed: {:?}", e);
+                } else {
+                    tracing::info!(
+                        "BrewEntity: local SDS‑TL status relay src={} dst={} bits={} head4={}",
+                        ind.source.ssi,
+                        ind.destination.ssi,
+                        ind.bit_length,
+                        fmt_hex4(&ind.payload)
+                    );
+                    self.push_cmce_unitdata_req(queue, addr, sdu, true, true);
+                }
+            }
+            return;
+        }
+
+        // Forward uplink SDS to core via Brew SHORT_TRANSFER + SDS_TRANSFER.
+        let uuid = Uuid::new_v4();
+        let dst_type = match ind.destination.ssi_type {
+            SsiType::Gssi => SsiType::Gssi,
+            SsiType::Ssi => SsiType::Ssi,
+            _ => self.infer_sds_destination_type(ind.destination.ssi),
+        };
+
+        let mut number = match dst_type {
+            SsiType::Gssi => "dst=gssi".to_string(),
+            _ => "dst=issi".to_string(),
+        };
+
+        let do_local_relay = dst_type == SsiType::Ssi
+            && ind.destination.ssi != ind.source.ssi
+            && self.subscriber_groups.contains_key(&ind.destination.ssi);
+
+        if do_local_relay && is_sds_pid04(&ind.payload) {
+            if let Some(mr) = parse_pid04_mr_from_data(&ind.payload) {
+                let key = sds_pid04_key(ind.destination.ssi, mr);
+                self.pending_sds_pid04_reports.insert(
+                    key,
+                    PendingSdsPid04Report {
+                        origin_ssi: ind.source.ssi,
+                        dest_ssi: ind.destination.ssi,
+                        mr,
+                        since: Instant::now(),
+                    },
+                );
+            }
+        }
+
+        if do_local_relay {
+            use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
+            let addr = TetraAddress::new(ind.destination.ssi, SsiType::Ssi);
+            let pdu = DSdsData {
+                calling_party_type_identifier: 1,
+                calling_party_address_ssi: Some(ind.source.ssi as u64),
+                calling_party_extension: None,
+                short_data_type_identifier: 3,
+                user_defined_data_1: None,
+                user_defined_data_2: None,
+                user_defined_data_3: None,
+                length_indicator: Some(ind.bit_length),
+                user_defined_data_4: Some(ind.payload.clone()),
+                external_subscriber_number: None,
+                dm_ms_address: None,
+            };
+
+            let mut sdu = BitBuffer::new_autoexpand(64 + (ind.bit_length as usize));
+            if let Err(e) = pdu.to_bitbuf(&mut sdu) {
+                tracing::warn!("BrewEntity: local SDS relay encode failed: {:?}", e);
+            } else {
+                tracing::info!(
+                    "BrewEntity: local SDS relay src={} dst={} bits={}",
+                    ind.source.ssi,
+                    ind.destination.ssi,
+                    ind.bit_length
+                );
+
+                // Many terminals require an SDS‑ACK to clear the sender UI.
+                if let Some((pid, mr)) = parse_sds_tl_transfer_pid_mr(&ind.payload) {
+                    self.send_sds_tl_ack_to_origin(queue, ind.source.ssi, ind.destination.ssi, pid, mr, true);
+                }
+
+                self.push_cmce_unitdata_req(queue, addr, sdu, true, false);
+                number.push_str(";local=1");
+            }
+        }
+
+        if !self.connected {
+            tracing::debug!("BrewEntity: dropping uplink SDS (backhaul disconnected) src={} dst={}", ind.source, ind.destination);
+            return;
+        }
+
+        if !super::is_brew_issi_routable(&self.config, ind.source.ssi) {
+            tracing::debug!("BrewEntity: uplink SDS src={} filtered; not forwarded to Brew", ind.source);
+            return;
+        }
+
+        let _ = self.command_sender.send(BrewCommand::SendShortTransfer {
+            uuid,
+            source_issi: ind.source.ssi,
+            destination: ind.destination.ssi,
+            number,
+        });
+        let _ = self.command_sender.send(BrewCommand::SendSdsTransfer {
+            uuid,
+            length_bits: ind.bit_length,
+            data: ind.payload,
+        });
     }
 
     /// Handle new group call from Brew, reusing hanging call circuits if available.
@@ -795,13 +1439,14 @@ impl TetraEntityTrait for BrewEntity {
         self.dltime = ts;
         // Process all pending events from the worker thread
         self.process_events(queue);
+        self.expire_sds_staging();
         // Feed one buffered frame at each traffic playout opportunity.
         self.drain_jitter_playout(queue);
         // Expire hanging calls that have exceeded hangtime
         self.expire_hanging_calls(queue);
     }
 
-    fn rx_prim(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
+    fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         match message.msg {
             // UL voice from UMAC — forward to TetraPack if this timeslot is being forwarded
             SapMsgInner::TmdCircuitDataInd(prim) => {
@@ -835,6 +1480,9 @@ impl TetraEntityTrait for BrewEntity {
             }
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
+            }
+            SapMsgInner::BrewSdsRxInd(ind) => {
+                self.handle_uplink_sds(queue, ind);
             }
             _ => {
                 tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
