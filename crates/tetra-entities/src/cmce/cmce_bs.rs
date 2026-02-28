@@ -22,7 +22,7 @@ impl CmceBs {
     pub fn new(config: SharedConfig) -> Self {
         Self {
             config: config.clone(),
-            sds: SdsBsSubentity::new(),
+            sds: SdsBsSubentity::new(config.clone()),
             cc: CcBsSubentity::new(config.clone()),
             ss: SsBsSubentity::new(),
         }
@@ -58,8 +58,7 @@ impl CmceBs {
                 self.cc.route_xx_deliver(_queue, message);
             }
             CmcePduTypeUl::USdsData => {
-                unimplemented_log!("{:?}", pdu_type);
-                // self.sds.route_xx_deliver(_queue, message);
+                self.sds.route_xx_deliver(_queue, message);
             }
             CmcePduTypeUl::UFacility => {
                 unimplemented_log!("{:?}", pdu_type);
@@ -78,7 +77,8 @@ impl TetraEntityTrait for CmceBs {
     }
 
     fn set_config(&mut self, config: SharedConfig) {
-        self.config = config;
+        self.config = config.clone();
+        self.sds.set_config(config);
     }
 
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
