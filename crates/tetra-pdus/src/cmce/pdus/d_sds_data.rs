@@ -1,3 +1,27 @@
+
+
+fn read_bits_to_padded_bytes(buffer: &mut BitBuffer, num_bits: usize) -> Result<Vec<u8>, PduParseErr> {
+    let num_bytes = (num_bits + 7) / 8;
+    let mut out = BitBuffer::new(num_bytes * 8);
+    let mut remaining = num_bits;
+    while remaining > 0 {
+        let chunk = usize::min(remaining, 64);
+        let v = buffer.read_field(chunk, "type4_payload")?;
+        out.write_bits(v, chunk);
+        remaining -= chunk;
+    }
+    Ok(out.into_bytes())
+}
+
+fn write_padded_bytes_bits(buffer: &mut BitBuffer, data: &[u8], num_bits: usize) -> Result<(), PduParseErr> {
+    let mut src = BitBuffer::from_bytes(data);
+    src.seek(0);
+    if src.get_len() < num_bits {
+        return Err(PduParseErr::BufferEnded { field: Some("type4_payload") });
+    }
+    buffer.copy_bits(&mut src, num_bits);
+    Ok(())
+}
 use core::fmt;
 
 use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
@@ -28,9 +52,9 @@ pub struct DSdsData {
     /// Conditional 64 bits, See note 2, condition: short_data_type_identifier == 2
     pub user_defined_data_3: Option<u64>,
     /// Conditional 11 bits, See note 2, condition: short_data_type_identifier == 3
-    pub length_indicator: Option<u64>,
+    pub length_indicator: Option<u16>,
     /// Conditional See note 2, condition: short_data_type_identifier == 3
-    pub user_defined_data_4: Option<u64>,
+    pub user_defined_data_4: Option<Vec<u8>>,
     /// Type3, External subscriber number
     pub external_subscriber_number: Option<Type3FieldGeneric>,
     /// Type3, DM-MS address
@@ -80,14 +104,14 @@ impl DSdsData {
         };
         // Conditional
         let length_indicator = if short_data_type_identifier == 3 {
-            Some(buffer.read_field(11, "length_indicator")?)
+            Some(buffer.read_field(11, "length_indicator")? as u16)
         } else {
             None
         };
         // Conditional
         let user_defined_data_4 = if short_data_type_identifier == 3 {
-            unimplemented!();
-            Some(buffer.read_field(999, "user_defined_data_4")?)
+            let li = length_indicator.unwrap_or(0) as usize;
+            Some(read_bits_to_padded_bytes(buffer, li)?)
         } else {
             None
         };
@@ -151,13 +175,14 @@ impl DSdsData {
             buffer.write_bits(*value, 64);
         }
         // Conditional
-        if let Some(ref value) = self.length_indicator {
-            buffer.write_bits(*value, 11);
+        if let Some(value) = self.length_indicator {
+            buffer.write_bits(value as u64, 11);
         }
         // Conditional
-        if let Some(ref _value) = self.user_defined_data_4 {
-            unimplemented!();
-            buffer.write_bits(*_value, 999);
+        // `&self.user_defined_data_4` is a reference; matching implicitly borrows.
+        // Do not use an explicit `ref` binding modifier.
+        if let (Some(bit_len), Some(bytes)) = (self.length_indicator, &self.user_defined_data_4) {
+            write_padded_bytes_bits(buffer, bytes, bit_len as usize)?;
         }
 
         // Check if any optional field present and place o-bit
