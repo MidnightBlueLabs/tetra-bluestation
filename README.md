@@ -1,4 +1,4 @@
-```
+```txt
 ░▀█▀░█▀▀░▀█▀░█▀▄░█▀█░░░░░█▀▄░█░░░█░█░█▀▀░█▀▀░▀█▀░█▀█░▀█▀░▀█▀░█▀█░█▀█
 ░░█░░█▀▀░░█░░█▀▄░█▀█░▄▄▄░█▀▄░█░░░█░█░█▀▀░▀▀█░░█░░█▀█░░█░░░█░░█░█░█░█
 ░░▀░░▀▀▀░░▀░░▀░▀░▀░▀░░░░░▀▀░░▀▀▀░▀▀▀░▀▀▀░▀▀▀░░▀░░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀
@@ -12,11 +12,12 @@ Project documentation for tetra-bluestation is maintained in a separate reposito
 
 https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki
 
-The documentation repository contains:
-- Hardware and SDR considerations 
-- Configuration file reference and examples  
-- Build and runtime instructions   
-- Practical notes 
+The documentation repository contains :
+
+- Hardware and SDR considerations
+- Configuration file reference and examples
+- Build and runtime instructions
+- Practical notes
 
 Contributions to the documentation follow the same pull-request-based workflow as the main codebase, see the appropriate "Contributions" chapter.
 
@@ -25,4 +26,4 @@ Contributions to the documentation follow the same pull-request-based workflow a
 - Thanks to Harald Welte and the osmocom crew for their amazing initial work on osmocom-tetra, without which this project would not have existed. 
 - Many thanks to Tatu Peltola, who graciously augmented rust-soapysdr with the required timestamping functionality to facilitate robust rx/tx, and also provided a rust-native Viterbi encoder/decoder class used in the LMAC.
 - Many thanks to the awesome contributers helping to make BlueStation as stable, fancy and feature-rich as can be. 
-- Thanks to Stichting NLnet, who agreed on allocating a part of the [RETETRA3 project](https://nlnet.nl/project/RETETRA3/) grant to the implementation of FOSS software for TETRA. 
+- Thanks to Stichting NLnet, who agreed on allocating a part of the [RETETRA3 project](https://nlnet.nl/project/RETETRA3/) grant to the implementation of FOSS software for TETRA.
