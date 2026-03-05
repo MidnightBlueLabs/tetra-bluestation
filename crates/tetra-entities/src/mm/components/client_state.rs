@@ -1,3 +1,6 @@
+use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
+use tetra_pdus::mm::fields::class_of_ms::ClassOfMs;
+
 #[derive(Debug)]
 pub enum ClientMgrErr {
     ClientNotFound { issi: u32 },
@@ -17,6 +20,8 @@ pub struct MmClientProperties {
     pub ssi: u32,
     pub state: MmClientState,
     pub groups: std::collections::HashSet<u32>,
+    pub energy_saving_mode: EnergySavingMode,
+    pub class_of_ms: Option<ClassOfMs>,
     // pub last_seen: TdmaTime,
 }
 
@@ -26,6 +31,8 @@ impl MmClientProperties {
             ssi,
             state: MmClientState::Unknown,
             groups: std::collections::HashSet::new(),
+            energy_saving_mode: EnergySavingMode::StayAlive,
+            class_of_ms: None,
             // last_seen: TdmaTime::default(),
         }
     }
@@ -70,6 +77,24 @@ impl MmClientMgr {
     pub fn set_client_state(&mut self, issi: u32, state: MmClientState) -> Result<(), ClientMgrErr> {
         if let Some(client) = self.clients.get_mut(&issi) {
             client.state = state;
+            Ok(())
+        } else {
+            Err(ClientMgrErr::ClientNotFound { issi })
+        }
+    }
+
+    pub fn set_client_energy_saving_mode(&mut self, issi: u32, mode: EnergySavingMode) -> Result<(), ClientMgrErr> {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.energy_saving_mode = mode;
+            Ok(())
+        } else {
+            Err(ClientMgrErr::ClientNotFound { issi })
+        }
+    }
+
+    pub fn set_client_class_of_ms(&mut self, issi: u32, class: Option<ClassOfMs>) -> Result<(), ClientMgrErr> {
+        if let Some(client) = self.clients.get_mut(&issi) {
+            client.class_of_ms = class;
             Ok(())
         } else {
             Err(ClientMgrErr::ClientNotFound { issi })
