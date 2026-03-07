@@ -69,8 +69,8 @@ impl SdrSettings {
     pub fn defaults_sxceiver() -> Self {
         SdrSettings {
             name: "SXceiver".to_string(),
-            fs_bs: 500e3,
-            fs_monitor: 500e3, // monitoring is not really possible with SXceiver
+            fs_bs: 600e3,
+            fs_monitor: 600e3, // monitoring is not really possible with SXceiver
             rx_ant: Some("RX".to_string()),
             tx_ant: Some("TX".to_string()),
             rx_gain: vec![("LNA".to_string(), 42.0), ("PGA".to_string(), 16.0)],
