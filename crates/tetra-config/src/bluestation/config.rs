@@ -42,13 +42,14 @@ impl StackConfig {
                     soapy_cfg.io_cfg.iocfg_usrpb2xx.is_some(),
                     soapy_cfg.io_cfg.iocfg_limesdr.is_some(),
                     soapy_cfg.io_cfg.iocfg_sxceiver.is_some(),
+                    soapy_cfg.io_cfg.iocfg_plutosdr.is_some(),
                 ]
                 .iter()
                 .filter(|&&x| x)
                 .count();
                 if config_count != 1 {
                     return Err(
-                        "soapysdr backend requires exactly one hardware configuration (iocfg_usrpb2xx, iocfg_limesdr, or iocfg_sxceiver)",
+                        "soapysdr backend requires exactly one hardware configuration (iocfg_usrpb2xx, iocfg_limesdr, iocfg_sxceiver, or iocfg_plutosdr)",
                     );
                 }
             }

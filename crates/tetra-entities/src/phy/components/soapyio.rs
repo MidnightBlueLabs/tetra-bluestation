@@ -92,7 +92,23 @@ impl SoapyIo {
             .as_ref()
             .expect("SoapySdr config must be set for SoapySdr PhyIo");
         let driver = soapy_cfg.io_cfg.get_soapy_driver_name();
-        let dev_args_str = &[("driver", driver)];
+
+        // Build device args; PlutoSDR may need URI and timestamp_every
+        let mut dev_args_vec: Vec<(String, String)> = vec![("driver".to_string(), driver.to_string())];
+        if let Some(ref pluto_cfg) = soapy_cfg.io_cfg.iocfg_plutosdr {
+            if let Some(ref uri) = pluto_cfg.uri {
+                dev_args_vec.push(("uri".to_string(), uri.clone()));
+            }
+            if let Some(ts_every) = pluto_cfg.timestamp_every {
+                dev_args_vec.push(("timestamp_every".to_string(), ts_every.to_string()));
+            }
+            if pluto_cfg.usb_direct.unwrap_or(false) {
+                dev_args_vec.push(("usb_direct".to_string(), "1".to_string()));
+            }
+            if pluto_cfg.loopback.unwrap_or(false) {
+                dev_args_vec.push(("loopback".to_string(), "1".to_string()));
+            }
+        }
 
         // Get PPM corrected freqs
         let (dl_corrected, _) = soapy_cfg.dl_freq_corrected();
@@ -113,15 +129,14 @@ impl SoapyIo {
         };
 
         let mut dev_args = soapysdr::Args::new();
-        for (key, value) in dev_args_str {
-            dev_args.set(*key, *value);
+        for (key, value) in &dev_args_vec {
+            dev_args.set(key.as_str(), value.as_str());
 
             // get_hardware_time tends to be unacceptably slow
             // over SoapyRemote, so do not use it.
-            // Maybe this is not a reliably way to detect use of SoapyRemote
-            // in case SoapySDR selects it by default, but I do not know
-            // a better way to detect it.
-            if *key == "driver" && *value == "remote" {
+            // pgreenland's PlutoSDR throws exceptions on getHardwareTime,
+            // so also disable it for plutosdr driver.
+            if key == "driver" && (value == "remote" || value == "plutosdr") {
                 use_get_hardware_time = false;
             }
         }
@@ -204,6 +219,24 @@ impl SoapyIo {
                     sdr_settings.tx_gain = tx_gains;
                 }
             }
+            "plutosdr" => {
+                if let Some(cfg) = &soapy_cfg.io_cfg.iocfg_plutosdr {
+                    if let Some(ref ant) = cfg.rx_ant {
+                        sdr_settings.rx_ant = Some(ant.clone());
+                    }
+                    if let Some(ref ant) = cfg.tx_ant {
+                        sdr_settings.tx_ant = Some(ant.clone());
+                    }
+
+                    let mut rx_gains = Vec::new();
+                    rx_gains.push(Self::get_gain_or_default("PGA", cfg.rx_gain_pga, &sdr_settings));
+                    sdr_settings.rx_gain = rx_gains;
+
+                    let mut tx_gains = Vec::new();
+                    tx_gains.push(Self::get_gain_or_default("PGA", cfg.tx_gain_pga, &sdr_settings));
+                    sdr_settings.tx_gain = tx_gains;
+                }
+            }
             _ => {
                 tracing::warn!("Unknown SoapySDR driver '{}', using default settings", driver);
             }
@@ -277,7 +310,16 @@ impl SoapyIo {
         // be set for minimum latency for TMO BS
         // but for maximum throughput for TMO monitor.
         let mut rx_args = soapysdr::Args::new();
-        let tx_args = soapysdr::Args::new();
+        let mut tx_args = soapysdr::Args::new();
+
+        // Pass timestamp_every to PlutoSDR stream args
+        if let Some(ref pluto_cfg) = soapy_cfg.io_cfg.iocfg_plutosdr {
+            if let Some(ts_every) = pluto_cfg.timestamp_every {
+                let ts_str = ts_every.to_string();
+                rx_args.set("timestamp_every", ts_str.clone());
+                tx_args.set("timestamp_every", ts_str);
+            }
+        }
         // hack to test the idea above, TODO properly
         match mode {
             Mode::Bs | Mode::Ms => {
@@ -329,11 +371,16 @@ impl SoapyIo {
                     let time = rx.time_ns();
                     if self.initial_time.is_none() {
                         self.initial_time = Some(time - ticks_to_time_ns(self.rx_next_count, self.rx_fs));
-                        tracing::trace!("Set initial_time to {} ns", self.initial_time.unwrap());
+                        tracing::info!("Set initial_time to {} ns (time_ns={}, rx_next_count={}, rx_fs={})",
+                            self.initial_time.unwrap(), time, self.rx_next_count, self.rx_fs);
                     };
 
                     // Re-compute total count from timestamp (gracefully handles lost samples).
                     let mut count = time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs);
+                    if (count - self.rx_next_count).abs() > 10 {
+                        tracing::debug!("RX timestamp delta: time_ns={}, count={}, expected={}, delta={}",
+                            time, count, self.rx_next_count, count - self.rx_next_count);
+                    }
 
                     // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic
                     // This is known to happen for LimeSDR Mini v2 after some time
@@ -369,13 +416,25 @@ impl SoapyIo {
     pub fn transmit(&mut self, buffer: &[StreamType], count: Option<SampleCount>) -> Result<(), RxTxDevError> {
         if let Some(tx) = &mut self.tx {
             if let Some(initial_time) = self.initial_time {
-                tx.write_all(
-                    &[buffer],
-                    count.map(|count| initial_time + ticks_to_time_ns(count, self.tx_fs)),
-                    false,
-                    1000000,
-                )
-                .map_err(|_| RxTxDevError::RxReadError)
+                // Use write() in a loop instead of write_all() because write_all()
+                // only sends the timestamp on the first partial write. PlutoSDR's
+                // SoapySDR driver requires a timestamp on every write call when
+                // timestamping is enabled.
+                let mut remaining = buffer;
+                let mut sample_offset: SampleCount = 0;
+                while !remaining.is_empty() {
+                    let at_ns = count.map(|c| initial_time + ticks_to_time_ns(c + sample_offset, self.tx_fs));
+                    let written = tx.write(
+                        &[remaining],
+                        at_ns,
+                        false,
+                        1000000,
+                    )
+                    .map_err(|_| RxTxDevError::RxReadError)?;
+                    remaining = &remaining[written..];
+                    sample_offset += written as SampleCount;
+                }
+                Ok(())
             } else {
                 // initial_time is not available, so TX is not possible yet
                 Err(RxTxDevError::RxReadError)

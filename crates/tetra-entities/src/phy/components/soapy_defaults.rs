@@ -26,6 +26,7 @@ impl SdrSettings {
             (_, "LimeSDR-Mini_v2") => Self::defaults_limesdr_mini_v2(),
             ("sx", _) => Self::defaults_sxceiver(),
             ("uhd", _) | ("b200", _) => Self::defaults_usrp_b2x0(),
+            ("PlutoSDR", _) | ("plutosdr", _) => Self::defaults_plutosdr(),
             _ => Self::unknown(),
         }
     }
@@ -87,6 +88,18 @@ impl SdrSettings {
             tx_ant: Some("TX/RX".to_string()),
             rx_gain: vec![("PGA".to_string(), 50.0)],
             tx_gain: vec![("PGA".to_string(), 35.0)],
+        }
+    }
+
+    pub fn defaults_plutosdr() -> Self {
+        SdrSettings {
+            name: "ADALM-Pluto (PlutoSDR)".to_string(),
+            fs_bs: 1e6,
+            fs_monitor: 1e6,
+            rx_ant: Some("A_BALANCED".to_string()),
+            tx_ant: Some("A".to_string()),
+            rx_gain: vec![("PGA".to_string(), 50.0)],
+            tx_gain: vec![("PGA".to_string(), 50.0)],
         }
     }
 }
