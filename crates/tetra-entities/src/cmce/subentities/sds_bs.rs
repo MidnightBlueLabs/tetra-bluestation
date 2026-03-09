@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, TdmaTime, TetraAddress, address::SsiType, unimplemented_log};
+use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_pdus::cmce::{enums::cmce_pdu_type_ul::CmcePduTypeUl, pdus::d_sds_data::DSdsData, pdus::u_sds_data::USdsData};
+use tetra_saps::control::sds::BrewSdsRxInd;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
@@ -97,6 +99,7 @@ struct PendingSdsPid04Route {
 pub struct SdsBsSubentity {
     config: SharedConfig,
     pending_pid04_reports: HashMap<u64, PendingSdsPid04Route>,
+    local_subscribers: HashSet<u32>,
     next_sds_dl_ts1: Option<TdmaTime>,
 }
 
@@ -105,6 +108,7 @@ impl SdsBsSubentity {
         Self {
             config,
             pending_pid04_reports: HashMap::new(),
+            local_subscribers: HashSet::new(),
             next_sds_dl_ts1: None,
         }
     }
@@ -113,12 +117,39 @@ impl SdsBsSubentity {
         self.config = config;
     }
 
-
-
-    fn should_handle_locally(&self, _dst_ssi: u32) -> bool {
-        true
+    pub fn handle_subscriber_update(&mut self, update: &MmSubscriberUpdate) {
+        match update.action {
+            BrewSubscriberAction::Register | BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => {
+                self.local_subscribers.insert(update.issi);
+            }
+            BrewSubscriberAction::Deregister => {
+                self.local_subscribers.remove(&update.issi);
+            }
+        }
     }
 
+    fn backhaul_connected(&self) -> bool {
+        self.config.config().brew.is_some() && self.config.state_read().network_connected
+    }
+
+    fn should_handle_locally(&self, dst_ssi: u32) -> bool {
+        let cfg = self.config.config();
+
+        // 1) No Brew configured => always local.
+        if cfg.brew.is_none() {
+            return true;
+        }
+
+        // 2) Brew configured but disconnected => LST-like local operation.
+        // Handle SDS for explicitly local ranges, plus currently registered local subscribers.
+        // This preserves private SDS in fallback mode without opening delivery to arbitrary non-local SSIs.
+        if !self.config.state_read().network_connected {
+            return cfg.cell.local_ssi_ranges.contains(dst_ssi) || self.local_subscribers.contains(&dst_ssi);
+        }
+
+        // 3) Brew connected, but destination range is configured as local.
+        cfg.cell.local_ssi_ranges.contains(dst_ssi)
+    }
 
     fn reserve_sds_dl_ts1(&mut self, base: TdmaTime) -> TdmaTime {
         let candidate = base.forward_to_timeslot(1);
@@ -345,6 +376,35 @@ impl SdsBsSubentity {
             return;
         }
 
+        // Network mode: forward to Brew entity via Control SAP (if present).
+        if self.backhaul_connected() {
+            let ind = BrewSdsRxInd {
+                source: src_addr,
+                destination: dst_addr,
+                payload,
+                bit_length: bit_len,
+            };
+
+            tracing::info!(
+                "SDS RX (to Brew): from={} dst={} bits={} bytes={}",
+                ind.source,
+                ind.destination,
+                ind.bit_length,
+                ind.payload.len()
+            );
+
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: message.dltime,
+                msg: SapMsgInner::BrewSdsRxInd(ind),
+            });
+        } else {
+            // No backhaul, but destination is not considered local (e.g. short-number addressing).
+            // We intentionally do nothing here to avoid spurious paging.
+            tracing::debug!("SDS RX: backhaul down and dst not local; dropping src={} dst={}", src_addr, dst_addr);
+        }
     }
 
     #[allow(dead_code)]
