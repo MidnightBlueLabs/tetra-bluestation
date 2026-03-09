@@ -78,6 +78,23 @@ pub struct BrewGroupTransmission {
     pub service: u16, // Speech service
 }
 
+/// Short data context, part of CALL_STATE_SHORT_TRANSFER
+#[derive(Debug, Clone)]
+pub struct BrewShortTransfer {
+    pub source: u32,      // ISSI of sender
+    pub destination: u32, // ISSI or GSSI
+    /// Fixed 32-byte external number (ASCII), NULL-padded
+    pub number: [u8; 32],
+}
+
+impl BrewShortTransfer {
+    pub fn number_string(&self) -> String {
+        let end = self.number.iter().position(|&b| b == 0).unwrap_or(self.number.len());
+        String::from_utf8_lossy(&self.number[..end]).to_string()
+    }
+}
+
+
 /// Call control (0xf1)
 #[derive(Debug, Clone)]
 pub struct BrewCallControlMessage {
@@ -91,6 +108,8 @@ pub struct BrewCallControlMessage {
 pub enum BrewCallPayload {
     /// CALL_STATE_GROUP_TX
     GroupTransmission(BrewGroupTransmission),
+    /// CALL_STATE_SHORT_TRANSFER
+    ShortTransfer(BrewShortTransfer),
     /// CALL_STATE_GROUP_IDLE, CALL_STATE_SETUP_REJECT, CALL_STATE_CALL_RELEASE
     Cause(u8),
     /// CALL_STATE_SETUP_ACCEPT, CALL_STATE_CALL_ALERT — no extra payload
@@ -239,7 +258,6 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
     let identifier = Uuid::from_bytes(uuid_bytes);
 
     let payload_data = &data[18..];
-
     let payload = match call_state {
         CALL_STATE_GROUP_TX => {
             // BrewGroupTransmission: source(4) + destination(4) + priority(1) + access(1) + service(2) = 12 bytes
@@ -252,6 +270,20 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
                 priority: payload_data[8],
                 access: payload_data[9],
                 service: read_u16_le(payload_data, 10),
+            })
+        }
+
+        CALL_STATE_SHORT_TRANSFER => {
+            // BrewShortTransfer: source(4) + destination(4) + number(32) = 40 bytes
+            if payload_data.len() < 40 {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            let mut num = [0u8; 32];
+            num.copy_from_slice(&payload_data[8..40]);
+            BrewCallPayload::ShortTransfer(BrewShortTransfer {
+                source: read_u32_le(payload_data, 0),
+                destination: read_u32_le(payload_data, 4),
+                number: num,
             })
         }
 
@@ -416,6 +448,46 @@ pub fn build_voice_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> 
     buf.extend_from_slice(session_uuid.as_bytes());
     write_u16_le(&mut buf, length_bits);
     buf.extend_from_slice(data);
+    buf
+}
+
+
+/// Build SHORT_TRANSFER call control message
+pub fn build_short_transfer(session_uuid: &Uuid, source: u32, destination: u32, number: &str) -> Vec<u8> {
+    // kind(1) + type(1) + uuid(16) + source(4) + destination(4) + number(32) = 58
+    let mut buf = Vec::with_capacity(58);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SHORT_TRANSFER);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u32_le(&mut buf, source);
+    write_u32_le(&mut buf, destination);
+    let mut nbytes = [0u8; 32];
+    let src = number.as_bytes();
+    let copy_len = core::cmp::min(src.len(), 32);
+    nbytes[..copy_len].copy_from_slice(&src[..copy_len]);
+    buf.extend_from_slice(&nbytes);
+    buf
+}
+
+/// Build SDS_TRANSFER frame (Type 4 payload bytes).
+pub fn build_sds_transfer_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(20 + data.len());
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_SDS_TRANSFER);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, length_bits);
+    buf.extend_from_slice(data);
+    buf
+}
+
+/// Build SDS_REPORT frame
+pub fn build_sds_report_frame(session_uuid: &Uuid, status: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(21);
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_SDS_REPORT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, 8);
+    buf.push(status);
     buf
 }
 
