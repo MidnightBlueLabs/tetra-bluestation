@@ -1,0 +1,107 @@
+# TETRA BlueStation - ADALM-Pluto Konfiguration
+# pgreenland Custom-Firmware mit FPGA-Timestamping
+#
+# Kopiere diese Datei als 'config.toml' in das tetra-bluestation Verzeichnis
+# und passe die Werte an deine Lizenz und dein Setup an.
+
+config_version = "0.5"
+
+# Stack-Betriebsmodus: "Bs" (Base Station)
+stack_mode = "Bs"
+
+###############################################################################
+# PHY Layer I/O Konfiguration
+
+[phy_io]
+backend = "SoapySdr"
+
+[phy_io.soapysdr]
+# Frequenzen anpassen! (in Hz)
+# TX (DL) = BTS sendet, RX (UL) = BTS empfaengt
+tx_freq = 438325000       # 438.325 MHz (DL)
+rx_freq = 430725000       # 430.725 MHz (UL)
+ppm_err = 0.0             # PPM-Korrektur (mit tools/ messen und anpassen)
+
+# ADALM-Pluto mit pgreenland Timestamp-Firmware
+[phy_io.soapysdr.iocfg_plutosdr]
+rx_ant = "A_BALANCED"
+tx_ant = "A"
+rx_gain_pga = 50.0        # RX Gain (0-73 dB)
+tx_gain_pga = 89.0        # TX Gain (0-89 dB, 89 = max. Leistung)
+uri = "ip:192.168.2.1"    # IIO Control-Verbindung
+timestamp_every = 1920    # FPGA Timestamp-Intervall (Samples)
+usb_direct = true         # USB Gadget fuer Low-Latency Streaming
+
+###############################################################################
+# Netzwerk-Information
+
+[net_info]
+mcc = 901                 # Mobile Country Code (901 = Test)
+mnc = 9999                # Mobile Network Code
+
+# Zell-Information
+[cell_info]
+freq_band = 4             # 400 MHz Band
+main_carrier = 1533       # Carrier-Nummer → 438.325 MHz
+duplex_spacing = 1        # Duplex-Spacing Tabellen-Index
+custom_duplex_spacing = 7600000  # Custom Spacing: 7.6 MHz
+freq_offset = 0
+reverse_operation = false
+location_area = 2
+colour_code = 1
+
+###############################################################################
+# Dienste
+system_wide_services = true
+voice_service = true
+
+###############################################################################
+# Brew-Server (TetraPack/BrandMeister) - Optional
+# Fuer Vernetzung mit anderen Bluestations
+
+#[brew]
+#host = "core.tetrapack.online"
+#port = 3003
+#tls = true
+#username = 0000000       # Deine Brew-ID
+#password = "changeme"
+
+###############################################################################
+# MS Authentication - Optional
+# TETRA-Authentifizierung (TA11/TA12) mit K-Werten pro Subscriber
+
+#[ms_auth]
+#enabled = true
+#tea_kmf_enable = false
+#log_plain_k = false
+#challenge_ttl_slots = 4320    # ~60 Sekunden
+
+# SCK-Material fuer TEA1 Luftschnittstellen-Verschluesselung
+#[[ms_auth.sck_material]]
+#sck_n = 0
+#sck_vn = 1
+#sck = "1F6D6B3BC2DB94A5C757"
+
+# Subscriber K-Werte (128-Bit Hex, einer pro MS)
+#[[ms_auth.subscribers]]
+#issi = 1001001
+#k = "00112233445566778899AABBCCDDEEFF"
+
+###############################################################################
+# SIP PBX Interconnect - Optional
+# Ermoeglicht Voice-Call-Bridging zu einer SIP-Telefonanlage
+
+#[sip]
+#gateway_issi = 16777184
+#bind_addr = "0.0.0.0:25060"
+#server_addr = "192.168.1.10:5060"
+#domain = "pbx.local"
+#local_user = "bluestation"
+#username = "bluestation"
+#password = "secret"
+#reconnect_delay_secs = 5
+#rtp_bind_addr = "0.0.0.0"
+#rtp_advertise_ip = "192.168.1.50"
+#rtp_port_start = 32000
+#acelp_payload_type = 96
+#rtp_timestamp_step = 240

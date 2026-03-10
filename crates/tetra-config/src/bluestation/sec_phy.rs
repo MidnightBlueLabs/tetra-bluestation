@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgLimeSdr, CfgSoapySdr, CfgSxCeiver, CfgUsrpB2xx, SoapySdrDto, SoapySdrIoCfg};
+use crate::bluestation::{CfgLimeSdr, CfgPlutoSdr, CfgSoapySdr, CfgSxCeiver, CfgUsrpB2xx, PlutoSdrDto, SoapySdrDto, SoapySdrIoCfg};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -46,10 +46,14 @@ pub struct PhyIoDto {
 
 pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
     let soapysdr = src.soapysdr.map(|soapy_dto| {
+        let ppm_err = soapy_dto.ppm_err.unwrap_or(0.0);
         let mut soapy_cfg = CfgSoapySdr {
             ul_freq: soapy_dto.rx_freq,
             dl_freq: soapy_dto.tx_freq,
-            ppm_err: soapy_dto.ppm_err.unwrap_or(0.0),
+            ppm_err,
+            ppm_err_tx: soapy_dto.ppm_err_tx,
+            ppm_err_rx: soapy_dto.ppm_err_rx,
+            tx_freq_offset: soapy_dto.tx_freq_offset.unwrap_or(0.0),
             io_cfg: SoapySdrIoCfg::default(),
         };
 
@@ -80,6 +84,17 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
                 rx_gain_pga: sx_dto.rx_gain_pga,
                 tx_gain_dac: sx_dto.tx_gain_dac,
                 tx_gain_mixer: sx_dto.tx_gain_mixer,
+            });
+        }
+        if let Some(pluto_dto) = soapy_dto.iocfg_plutosdr {
+            soapy_cfg.io_cfg.iocfg_plutosdr = Some(CfgPlutoSdr {
+                rx_ant: pluto_dto.rx_ant,
+                tx_ant: pluto_dto.tx_ant,
+                rx_gain_pga: pluto_dto.rx_gain_pga,
+                tx_gain_pga: pluto_dto.tx_gain_pga,
+                timestamp_every: pluto_dto.timestamp_every,
+                usb_direct: pluto_dto.usb_direct,
+                loopback: pluto_dto.loopback,
             });
         }
 

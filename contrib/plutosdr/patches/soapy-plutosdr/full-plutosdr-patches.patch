@@ -1,0 +1,551 @@
+diff --git a/PlutoSDR_RXStreamerIPGadget.cpp b/PlutoSDR_RXStreamerIPGadget.cpp
+index 2cb5227..bed074c 100644
+--- a/PlutoSDR_RXStreamerIPGadget.cpp
++++ b/PlutoSDR_RXStreamerIPGadget.cpp
+@@ -19,7 +19,7 @@
+ #include "sdr_ip_gadget_types.h"
+ 
+ rx_streamer_ip_gadget::rx_streamer_ip_gadget(const iio_device *_dev, int _sock_control, int _sock_data, size_t _udp_packet_size, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every):
+-	dev(_dev), sock_control(_sock_control), sock_data(_sock_data), udp_packet_size(_udp_packet_size), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, true)
++	dev(_dev), sock_control(_sock_control), sock_data(_sock_data), udp_packet_size(_udp_packet_size), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, true), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ 
+ {
+ 	//default to channel 0, if none were specified
+@@ -131,6 +131,16 @@ size_t rx_streamer_ip_gadget::recv(void * const *buffs,
+ 
+ 		// Grab timestamp or sequence number
+ 		curr_buffer_timestamp = curr_buffer->seqno;
++
++		// Subtract tick base to prevent overflow in ticksToTimeNs
++		if (timestamp_every > 0 && shared_tick_base && shared_tick_base_set) {
++			if (!*shared_tick_base_set) {
++				*shared_tick_base = curr_buffer_timestamp;
++				*shared_tick_base_set = true;
++				SoapySDR_logf(SOAPY_SDR_INFO, "Tick base set to %llu", (unsigned long long)*shared_tick_base);
++			}
++			curr_buffer_timestamp -= *shared_tick_base;
++		}
+ 	}
+ 
+ 	// Work out how many items to copy
+diff --git a/PlutoSDR_RXStreamerIPGadget.hpp b/PlutoSDR_RXStreamerIPGadget.hpp
+index ad466dd..3c60ec0 100644
+--- a/PlutoSDR_RXStreamerIPGadget.hpp
++++ b/PlutoSDR_RXStreamerIPGadget.hpp
+@@ -42,6 +42,11 @@ class rx_streamer_ip_gadget : public rx_streamer {
+ 
+ 		size_t get_mtu_size();
+ 
++		void set_tick_base_ptrs(uint64_t *base, bool *base_set) {
++			shared_tick_base = base;
++			shared_tick_base_set = base_set;
++		}
++
+ 	private:
+ 		// IIO device
+ 		const iio_device *dev;
+@@ -96,6 +101,10 @@ class rx_streamer_ip_gadget : public rx_streamer {
+ 		size_t curr_buffer_offset;
+ 		uint64_t curr_buffer_timestamp;
+ 
++		// Shared tick base for overflow prevention (owned by SoapyPlutoSDR)
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
++
+ 		// Update buffer size, restarting stream if required
+ 		void set_buffer_size(const size_t _buffer_size);
+ 
+diff --git a/PlutoSDR_RXStreamerUSBGadget.cpp b/PlutoSDR_RXStreamerUSBGadget.cpp
+index 9d05d92..6ac9c12 100644
+--- a/PlutoSDR_RXStreamerUSBGadget.cpp
++++ b/PlutoSDR_RXStreamerUSBGadget.cpp
+@@ -16,7 +16,7 @@
+ #include "sdr_usb_gadget_types.h"
+ 
+ rx_streamer_usb_gadget::rx_streamer_usb_gadget(const iio_device *_dev, libusb_device_handle* _usb_dev, uint8_t _intfc_num, uint8_t _ep_num, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every):
+-	dev(_dev), usb_dev(_usb_dev), intfc_num(_intfc_num), ep_num(_ep_num), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, true)
++	dev(_dev), usb_dev(_usb_dev), intfc_num(_intfc_num), ep_num(_ep_num), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, true), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ 
+ {
+ 	//default to channel 0, if none were specified
+@@ -141,6 +141,16 @@ size_t rx_streamer_usb_gadget::recv(void * const *buffs,
+ 			// Extract timestamp from start of buffer
+ 			curr_buffer_timestamp = *((uint64_t*)curr_buffer->data());
+ 
++			// Apply tick base offset to prevent ticksToTimeNs overflow
++			if (shared_tick_base && shared_tick_base_set) {
++				if (!*shared_tick_base_set) {
++					*shared_tick_base = curr_buffer_timestamp;
++					*shared_tick_base_set = true;
++					SoapySDR_logf(SOAPY_SDR_INFO, "Tick base set to %llu", (unsigned long long)*shared_tick_base);
++				}
++				curr_buffer_timestamp -= *shared_tick_base;
++			}
++
+ 			// Decrement samples and advance offset
+ 			curr_buffer_samples_remaining -= timestamp_size_samples;
+ 			curr_buffer_offset += sizeof(uint64_t);
+diff --git a/PlutoSDR_RXStreamerUSBGadget.hpp b/PlutoSDR_RXStreamerUSBGadget.hpp
+index 5b28d34..2a9495e 100644
+--- a/PlutoSDR_RXStreamerUSBGadget.hpp
++++ b/PlutoSDR_RXStreamerUSBGadget.hpp
+@@ -40,6 +40,11 @@ class rx_streamer_usb_gadget : public rx_streamer {
+ 
+ 		size_t get_mtu_size();
+ 
++		void set_tick_base_ptrs(uint64_t *base, bool *base_set) {
++			shared_tick_base = base;
++			shared_tick_base_set = base_set;
++		}
++
+ 	private:
+ 		// IIO device
+ 		const iio_device *dev;
+@@ -99,6 +104,10 @@ class rx_streamer_usb_gadget : public rx_streamer {
+ 		// Read thread - fetches data from USB device and places into fifo
+ 		void thread_func(uint32_t curr_enabled_channels, uint32_t curr_buffer_size_samples);
+ 
++		// Shared tick base for overflow prevention
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
++
+ 		// Private start / stop functions
+ 		void _start(void);
+ 		void _stop(void);
+diff --git a/PlutoSDR_Settings.cpp b/PlutoSDR_Settings.cpp
+index 8a2dfaa..158fbec 100644
+--- a/PlutoSDR_Settings.cpp
++++ b/PlutoSDR_Settings.cpp
+@@ -80,6 +80,10 @@ SoapyPlutoSDR::SoapyPlutoSDR( const SoapySDR::Kwargs &args ):
+ 	timestamp_every_tx = 0;
+ 	timestamp_every_rx = 0;
+ 
++	// Initialize tick base for overflow prevention
++	shared_tick_base = 0;
++	shared_tick_base_set = false;
++
+ 	// Handle any arguments provided during device creation
+ 	handle_direct_args(args);
+ 	handle_loopback_args(args);
+@@ -817,9 +821,10 @@ void SoapyPlutoSDR::handle_direct_args(const SoapySDR::Kwargs & args)
+ 	if (args.count("direct") != 0) direct_val = args.at("direct");
+ 
+ 	if (direct_val == "1") {
+-		if (0 == strcmp(iio_context_get_name(ctx), "usb")) {
+-			// Connected via usb, check if usb support is available to support direct mode
+ #ifdef HAS_LIBUSB1
++		// Try USB gadget mode regardless of IIO context type
++		// (libusb opens the device independently from libiio)
++		if (!this->usb_sdr_dev) {
+ 			// Init libusb
+ 			if (usb_ctx == nullptr) {
+ 				int rc = libusb_init(&usb_ctx);
+@@ -829,32 +834,45 @@ void SoapyPlutoSDR::handle_direct_args(const SoapySDR::Kwargs & args)
+ 				}
+ 			}
+ 
+-			if (!this->usb_sdr_dev) {
++			try {
+ 				// Open usb device
+ 				this->open_sdr_usb_gadget();
+ 
+ 				// Notify usb direct mode in use
+ 				SoapySDR_logf(SOAPY_SDR_INFO, "USB direct mode enabled!");
++			} catch (const std::exception &e) {
++				SoapySDR_logf(SOAPY_SDR_WARNING, "USB direct mode failed (%s), falling back to IP gadget", e.what());
++				this->usb_sdr_dev = nullptr;
++
++				// Fallback: try IP gadget if connected via network
++				if (0 == strcmp(iio_context_get_name(ctx), "network")) {
++					if ((-1 == this->ip_sdr_dev_control) || (-1 == this->ip_sdr_dev_data)) {
++						this->open_sdr_ip_gadget();
++						SoapySDR_logf(SOAPY_SDR_INFO, "IP direct mode enabled!");
++					}
++
++					int udp_packet_size = 1472;
++					if (args.count("udp_packet_size") != 0) {
++						try {
++							udp_packet_size = std::stoi(args.at("udp_packet_size"));
++						} catch (...) {
++							SoapySDR_logf(SOAPY_SDR_ERROR, "invalid value for udp_packet_size, expected number");
++							throw std::runtime_error("invalid value for udp_packet_size, expected number");
++						}
++					}
++					this->udp_packet_size = udp_packet_size;
++				}
+ 			}
+-#else
+-			SoapySDR_logf(SOAPY_SDR_ERROR, "usb direct mode is only available when built with LIBUSB");
+-			throw std::runtime_error("usb direct mode is only available when built with LIBUSB");
+-#endif
+ 		}
+-		else if (0 == strcmp(iio_context_get_name(ctx), "network")) {
+-			// Connected via network (hopefully physical ethernet)
++#else
++		if (0 == strcmp(iio_context_get_name(ctx), "network")) {
+ 			if ((-1 == this->ip_sdr_dev_control) || (-1 == this->ip_sdr_dev_data)) {
+-				// Open ip device
+ 				this->open_sdr_ip_gadget();
+-
+-				// Notify ip direct mode in use
+ 				SoapySDR_logf(SOAPY_SDR_INFO, "IP direct mode enabled!");
+ 			}
+ 
+-			// Grab UDP packet sizes to use if available
+ 			int udp_packet_size = 1472;
+ 			if (args.count("udp_packet_size") != 0) {
+-				// Retrieve size
+ 				try {
+ 					udp_packet_size = std::stoi(args.at("udp_packet_size"));
+ 				} catch (...) {
+@@ -863,7 +881,11 @@ void SoapyPlutoSDR::handle_direct_args(const SoapySDR::Kwargs & args)
+ 				}
+ 			}
+ 			this->udp_packet_size = udp_packet_size;
++		} else {
++			SoapySDR_logf(SOAPY_SDR_ERROR, "usb direct mode is only available when built with LIBUSB");
++			throw std::runtime_error("usb direct mode is only available when built with LIBUSB");
+ 		}
++#endif
+ 	}
+ 	else if (direct_val == "0") {
+ 		// default value
+@@ -942,16 +964,12 @@ void SoapyPlutoSDR::open_sdr_usb_gadget(void)
+ {
+ 	// Retrieve url and separate bus / device
+ 	const char *uri = iio_context_get_attr_value(ctx, "uri");
+-	if (!uri) {
+-		SoapySDR_logf(SOAPY_SDR_ERROR, "failed to retrieve uri from iio");
+-		throw std::runtime_error("failed to retrieve uri from iio");
+-	}
+ 
+-	// Retrieve bus and device number from uri
+-	unsigned short int bus_num, dev_addr;
+-	if (2 != std::sscanf(uri, "usb:%hu.%hu", &bus_num, &dev_addr)) {
+-		SoapySDR_logf(SOAPY_SDR_ERROR, "failed to extract usb bus and device address from uri");
+-		throw std::runtime_error("failed to extract usb bus and device address from uri");
++	// Try to extract USB bus/device from URI
++	unsigned short int bus_num = 0, dev_addr = 0;
++	bool have_usb_addr = false;
++	if (uri) {
++		have_usb_addr = (2 == std::sscanf(uri, "usb:%hu.%hu", &bus_num, &dev_addr));
+ 	}
+ 
+ 	// Retrieve device list
+@@ -966,10 +984,20 @@ void SoapyPlutoSDR::open_sdr_usb_gadget(void)
+ 	for (int i = 0; i < dev_count; i++) {
+ 		struct libusb_device *dev = devs[i];
+ 
+-		// Check device bus and address
+-		if (	(libusb_get_bus_number(dev) == bus_num)
+-			 && (libusb_get_device_address(dev) == dev_addr)
+-		   ) {
++		bool match = false;
++		if (have_usb_addr) {
++			// Match by bus and address from URI
++			match = (libusb_get_bus_number(dev) == bus_num)
++				 && (libusb_get_device_address(dev) == dev_addr);
++		} else {
++			// Match by vendor/product ID (Analog Devices PlutoSDR: 0456:b673)
++			struct libusb_device_descriptor desc;
++			if (0 == libusb_get_device_descriptor(dev, &desc)) {
++				match = (desc.idVendor == 0x0456) && (desc.idProduct == 0xb673);
++			}
++		}
++
++		if (match) {
+ 				// Found device, open it
+ 				int rc = libusb_open(dev, &this->usb_sdr_dev);
+ 				if (rc < 0) {
+diff --git a/PlutoSDR_Streaming.cpp b/PlutoSDR_Streaming.cpp
+index 82dfbba..5786339 100644
+--- a/PlutoSDR_Streaming.cpp
++++ b/PlutoSDR_Streaming.cpp
+@@ -121,24 +121,31 @@ SoapySDR::Stream *SoapyPlutoSDR::setupStream(
+ 		if (-1 != ip_sdr_dev_control)
+ 		{
+ 			// Use ip streaming gadget
+-			this->rx_stream = std::unique_ptr<rx_streamer>(new rx_streamer_ip_gadget (rx_dev,
+-																					  ip_sdr_dev_control, ip_sdr_dev_data, udp_packet_size,
+-																					  streamFormat, channels, args, timestamp_every_rx));
++			auto *rx = new rx_streamer_ip_gadget (rx_dev,
++				ip_sdr_dev_control, ip_sdr_dev_data, udp_packet_size,
++				streamFormat, channels, args, timestamp_every_rx);
++			rx->set_tick_base_ptrs(&shared_tick_base, &shared_tick_base_set);
++			this->rx_stream = std::unique_ptr<rx_streamer>(rx);
+ 
+ 		}
+ 		#ifdef HAS_LIBUSB1
+ 		else if (usb_sdr_dev)
+ 		{
+ 			// Use usb streaming gadget
+-			this->rx_stream = std::unique_ptr<rx_streamer>(new rx_streamer_usb_gadget (rx_dev,
+-																					   usb_sdr_dev, usb_sdr_intfc_num, usb_sdr_ep_in,
+-																					   streamFormat, channels, args, timestamp_every_rx));
++			auto *rx = new rx_streamer_usb_gadget (rx_dev,
++				usb_sdr_dev, usb_sdr_intfc_num, usb_sdr_ep_in,
++				streamFormat, channels, args, timestamp_every_rx);
++			rx->set_tick_base_ptrs(&shared_tick_base, &shared_tick_base_set);
++			this->rx_stream = std::unique_ptr<rx_streamer>(rx);
+ 		}
+ 		else
+ 		#endif
+ 		{
+ 			// Use IIO
+-			this->rx_stream = std::unique_ptr<rx_streamer>(new rx_streamer_iio (rx_dev, streamFormat, channels, args, timestamp_every_rx));
++			auto *rx = new rx_streamer_iio (rx_dev, streamFormat, channels, args, timestamp_every_rx);
++			rx->shared_tick_base = &shared_tick_base;
++			rx->shared_tick_base_set = &shared_tick_base_set;
++			this->rx_stream = std::unique_ptr<rx_streamer>(rx);
+ 		}
+ 
+         return reinterpret_cast<SoapySDR::Stream*>(this->rx_stream.get());
+@@ -154,24 +161,31 @@ SoapySDR::Stream *SoapyPlutoSDR::setupStream(
+ 		if (-1 != ip_sdr_dev_control)
+ 		{
+ 			// Use ip streaming gadget
+-			this->tx_stream = std::unique_ptr<tx_streamer>(new tx_streamer_ip_gadget (tx_dev,
+-																					  ip_sdr_dev_control, ip_sdr_dev_data, udp_packet_size,
+-																					  streamFormat, channels, args, timestamp_every_tx));
++			auto *tx = new tx_streamer_ip_gadget (tx_dev,
++				ip_sdr_dev_control, ip_sdr_dev_data, udp_packet_size,
++				streamFormat, channels, args, timestamp_every_tx);
++			tx->set_tick_base_ptrs(&shared_tick_base, &shared_tick_base_set);
++			this->tx_stream = std::unique_ptr<tx_streamer>(tx);
+ 
+ 		}
+ 		#ifdef HAS_LIBUSB1
+ 		else if (usb_sdr_dev)
+ 		{
+ 			// Use usb streaming gadget
+-			this->tx_stream = std::unique_ptr<tx_streamer>(new tx_streamer_usb_gadget (tx_dev,
+-																					   usb_sdr_dev, usb_sdr_intfc_num, usb_sdr_ep_out,
+-																					   streamFormat, channels, args, timestamp_every_tx));
++			auto *tx = new tx_streamer_usb_gadget (tx_dev,
++				usb_sdr_dev, usb_sdr_intfc_num, usb_sdr_ep_out,
++				streamFormat, channels, args, timestamp_every_tx);
++			tx->set_tick_base_ptrs(&shared_tick_base, &shared_tick_base_set);
++			this->tx_stream = std::unique_ptr<tx_streamer>(tx);
+ 		}
+ 		else
+ 		#endif
+ 		{
+ 			// Use IIO
+-			this->tx_stream = std::unique_ptr<tx_streamer>(new tx_streamer_iio (tx_dev, streamFormat, channels, args, timestamp_every_tx));
++			auto *tx = new tx_streamer_iio (tx_dev, streamFormat, channels, args, timestamp_every_tx);
++			tx->shared_tick_base = &shared_tick_base;
++			tx->shared_tick_base_set = &shared_tick_base_set;
++			this->tx_stream = std::unique_ptr<tx_streamer>(tx);
+ 		}
+ 
+         return reinterpret_cast<SoapySDR::Stream*>(this->tx_stream.get());
+@@ -342,7 +356,7 @@ void rx_streamer_iio::set_buffer_size_by_samplerate(const size_t samplerate) {
+ }
+ 
+ rx_streamer_iio::rx_streamer_iio(const iio_device *_dev, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every):
+-	dev(_dev), buf(nullptr), format(_format), timestamp_every(_timestamp_every)
++	dev(_dev), buf(nullptr), format(_format), timestamp_every(_timestamp_every), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ 
+ {
+ 	if (dev == nullptr) {
+@@ -466,6 +480,16 @@ size_t rx_streamer_iio::recv(void * const *buffs,
+ 			// Extract timestamp from start of buffer
+ 			curr_buffer_timestamp = *((uint64_t*)iio_buffer_start(buf));
+ 
++			// Subtract tick base to prevent overflow in ticksToTimeNs
++			if (shared_tick_base && shared_tick_base_set) {
++				if (!*shared_tick_base_set) {
++					*shared_tick_base = curr_buffer_timestamp;
++					*shared_tick_base_set = true;
++					SoapySDR_logf(SOAPY_SDR_INFO, "Tick base set to %llu", (unsigned long long)*shared_tick_base);
++				}
++				curr_buffer_timestamp -= *shared_tick_base;
++			}
++
+ 			// Decrement samples and advance offset
+ 			items_in_buffer -= timestamp_size_samples;
+ 			byte_offset += sizeof(uint64_t);
+@@ -576,6 +600,10 @@ size_t rx_streamer_iio::recv(void * const *buffs,
+ 		// Timestamp present
+ 		flags |= SOAPY_SDR_HAS_TIME;
+ 		timeNs = SoapySDR::ticksToTimeNs(curr_buffer_timestamp, sample_rate);
++		if (curr_buffer_timestamp < 100000) {
++			SoapySDR_logf(SOAPY_SDR_INFO, "RX IIO: ticks=%llu rate=%lld timeNs=%lld items=%lu",
++				(unsigned long long)curr_buffer_timestamp, sample_rate, timeNs, (unsigned long)items);
++		}
+ 
+ 		// Increment timestamp ticks
+ 		curr_buffer_timestamp += items;
+@@ -682,7 +710,7 @@ bool rx_streamer_iio::has_direct_copy()
+ 
+ 
+ tx_streamer_iio::tx_streamer_iio(const iio_device *_dev, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every) :
+-	dev(_dev), format(_format), buf(nullptr), timestamp_every(_timestamp_every)
++	dev(_dev), format(_format), buf(nullptr), timestamp_every(_timestamp_every), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ {
+ 
+ 	if (dev == nullptr) {
+@@ -822,6 +850,10 @@ int tx_streamer_iio::send(	const void * const *buffs,
+ 		if (items_in_buf > 0) {
+ 			// Buffer has data, convert first sample timestamp
+ 			uint64_t temp_timestamp = SoapySDR::timeNsToTicks(timeNs, sample_rate);
++			// Add tick base offset back for FPGA
++			if (shared_tick_base && shared_tick_base_set && *shared_tick_base_set) {
++				temp_timestamp += *shared_tick_base;
++			}
+ 
+ 			// Calculate timestamp difference and sample count difference
+ 			uint64_t timestamp_diff = (temp_timestamp - curr_buffer_timestamp);
+@@ -858,6 +890,10 @@ int tx_streamer_iio::send(	const void * const *buffs,
+ 		if (0 == items_in_buf) {
+ 			// Capture timestamp
+ 			curr_buffer_timestamp = SoapySDR::timeNsToTicks(timeNs, sample_rate);
++			// Add tick base offset back for FPGA
++			if (shared_tick_base && shared_tick_base_set && *shared_tick_base_set) {
++				curr_buffer_timestamp += *shared_tick_base;
++			}
+ 
+ 			// Place timestamp at start of buffer
+ 			*((uint64_t*)iio_buffer_start(buf)) = curr_buffer_timestamp;
+diff --git a/PlutoSDR_TXStreamerIPGadget.cpp b/PlutoSDR_TXStreamerIPGadget.cpp
+index f97f38e..3c32656 100644
+--- a/PlutoSDR_TXStreamerIPGadget.cpp
++++ b/PlutoSDR_TXStreamerIPGadget.cpp
+@@ -18,7 +18,7 @@
+ #include "sdr_ip_gadget_types.h"
+ 
+ tx_streamer_ip_gadget::tx_streamer_ip_gadget(const iio_device *_dev, int _sock_control, int _sock_data, size_t _udp_packet_size, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every):
+-	dev(_dev), sock_control(_sock_control), sock_data(_sock_data), udp_packet_size(_udp_packet_size), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, false), curr_buffer_timestamp(0)
++	dev(_dev), sock_control(_sock_control), sock_data(_sock_data), udp_packet_size(_udp_packet_size), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, false), curr_buffer_timestamp(0), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ 
+ {
+ 	//default to channel 0, if none were specified
+@@ -113,6 +113,10 @@ int tx_streamer_ip_gadget::send(const void * const *buffs,
+ {
+ 	// Convert timestamp, in case we need to use it
+ 	uint64_t temp_timestamp = SoapySDR::timeNsToTicks(timeNs, sample_rate);
++	// Add tick base offset back for FPGA (RX subtracted it to prevent overflow)
++	if (shared_tick_base && shared_tick_base_set && *shared_tick_base_set) {
++		temp_timestamp += *shared_tick_base;
++	}
+ 
+ 	// Check if timestamping enabled
+ 	if (	curr_buffer
+diff --git a/PlutoSDR_TXStreamerIPGadget.hpp b/PlutoSDR_TXStreamerIPGadget.hpp
+index 85186c1..45676c5 100644
+--- a/PlutoSDR_TXStreamerIPGadget.hpp
++++ b/PlutoSDR_TXStreamerIPGadget.hpp
+@@ -44,6 +44,11 @@ class tx_streamer_ip_gadget : public tx_streamer {
+ 
+ 		void set_samplerate(const size_t _samplerate);
+ 
++		void set_tick_base_ptrs(uint64_t *base, bool *base_set) {
++			shared_tick_base = base;
++			shared_tick_base_set = base_set;
++		}
++
+ 	private:
+ 		// IIO device
+ 		const iio_device *dev;
+@@ -97,6 +102,10 @@ class tx_streamer_ip_gadget : public tx_streamer {
+ 		size_t curr_buffer_samples_stored;
+ 		uint64_t curr_buffer_timestamp;
+ 
++		// Shared tick base for overflow prevention
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
++
+ 		// Update buffer size, restarting stream if required
+ 		void set_buffer_size(const size_t _buffer_size);
+ 
+diff --git a/PlutoSDR_TXStreamerUSBGadget.cpp b/PlutoSDR_TXStreamerUSBGadget.cpp
+index 8c779b9..b598430 100644
+--- a/PlutoSDR_TXStreamerUSBGadget.cpp
++++ b/PlutoSDR_TXStreamerUSBGadget.cpp
+@@ -16,7 +16,7 @@
+ #include "sdr_usb_gadget_types.h"
+ 
+ tx_streamer_usb_gadget::tx_streamer_usb_gadget(const iio_device *_dev, libusb_device_handle* _usb_dev, uint8_t _intfc_num, uint8_t _ep_num, const plutosdrStreamFormat _format, const std::vector<size_t> &channels, const SoapySDR::Kwargs &args, uint32_t _timestamp_every):
+-	dev(_dev), usb_dev(_usb_dev), intfc_num(_intfc_num), ep_num(_ep_num), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, false), curr_buffer_timestamp(0)
++	dev(_dev), usb_dev(_usb_dev), intfc_num(_intfc_num), ep_num(_ep_num), format(_format), timestamp_every(_timestamp_every), thread_stop(false), queue(16, false), curr_buffer_timestamp(0), shared_tick_base(nullptr), shared_tick_base_set(nullptr)
+ 
+ {
+ 	//default to channel 0, if none were specified
+@@ -122,6 +122,11 @@ int tx_streamer_usb_gadget::send(const void * const *buffs,
+ 	// Convert timestamp, in case we need to use it
+ 	uint64_t temp_timestamp = SoapySDR::timeNsToTicks(timeNs, sample_rate);
+ 
++	// Add tick base back for FPGA
++	if (shared_tick_base && shared_tick_base_set && *shared_tick_base_set) {
++		temp_timestamp += *shared_tick_base;
++	}
++
+ 	// Check if timestamping enabled
+ 	if (	curr_buffer
+ 		 && (timestamp_every > 0)
+diff --git a/PlutoSDR_TXStreamerUSBGadget.hpp b/PlutoSDR_TXStreamerUSBGadget.hpp
+index d94b965..ceac12b 100644
+--- a/PlutoSDR_TXStreamerUSBGadget.hpp
++++ b/PlutoSDR_TXStreamerUSBGadget.hpp
+@@ -42,6 +42,11 @@ class tx_streamer_usb_gadget : public tx_streamer {
+ 
+ 		void set_samplerate(const size_t _samplerate);
+ 
++		void set_tick_base_ptrs(uint64_t *base, bool *base_set) {
++			shared_tick_base = base;
++			shared_tick_base_set = base_set;
++		}
++
+ 	private:
+ 		// IIO device
+ 		const iio_device *dev;
+@@ -91,6 +96,10 @@ class tx_streamer_usb_gadget : public tx_streamer {
+ 		size_t curr_buffer_samples_stored;
+ 		uint64_t curr_buffer_timestamp;
+ 
++		// Shared tick base for overflow prevention
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
++
+ 		// Update buffer size, restarting stream if required
+ 		void set_buffer_size(const size_t _buffer_size);
+ 
+diff --git a/SoapyPlutoSDR.hpp b/SoapyPlutoSDR.hpp
+index 68507ee..4602f04 100644
+--- a/SoapyPlutoSDR.hpp
++++ b/SoapyPlutoSDR.hpp
+@@ -67,6 +67,11 @@ class rx_streamer_iio : public rx_streamer {
+ 		uint32_t timestamp_size_samples;
+ 		bool fixed_buffer_size;
+ 		uint64_t curr_buffer_timestamp;
++
++	public:
++		// Shared tick base for overflow prevention
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
+ };
+ 
+ class tx_streamer_iio : public tx_streamer {
+@@ -108,6 +113,11 @@ class tx_streamer_iio : public tx_streamer {
+ 		long long sample_rate;
+ 		uint32_t timestamp_size_samples;
+ 		uint64_t curr_buffer_timestamp;
++
++	public:
++		// Shared tick base for overflow prevention
++		uint64_t *shared_tick_base;
++		bool *shared_tick_base_set;
+ };
+ 
+ // A local spin_mutex usable with std::lock_guard
+@@ -360,6 +370,10 @@ class SoapyPlutoSDR : public SoapySDR::Device{
+ 		uint32_t timestamp_every_rx;
+ 		uint32_t timestamp_every_tx;
+ 
++		// Shared tick base for timestamp overflow prevention
++		uint64_t shared_tick_base;
++		bool shared_tick_base_set;
++
+ 		void handle_direct_args(const SoapySDR::Kwargs & args);
+ 		void handle_loopback_args(const SoapySDR::Kwargs & args);
+ 		void handle_timestamp_every_arg(const SoapySDR::Kwargs & args, bool tx);
