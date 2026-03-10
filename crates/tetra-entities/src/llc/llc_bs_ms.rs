@@ -13,6 +13,8 @@ use tetra_saps::tma::TmaUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::llc::components::fcs;
+use tetra_pdus::llc::consts::consts::N252_BL_MAX_TLSDU_RETRANSMITS_ACKED;
+use tetra_pdus::llc::consts::timers::T251_SENDER_RETRY_TIMER;
 use tetra_pdus::llc::enums::llc_pdu_type::LlcPduType;
 use tetra_pdus::llc::pdus::bl_ack::BlAck;
 use tetra_pdus::llc::pdus::bl_adata::BlAdata;
@@ -43,13 +45,6 @@ pub struct ScheduledOutAck {
     /// Timeslot on which the original message was received
     pub ts: u8,
 }
-
-/// ACK timeout in timeslots (ETSI T.251 default = 4 signalling frames = 16 timeslots).
-/// Using 48 timeslots (~680ms) for BS-side tolerance.
-const BL_ACK_TIMEOUT_TIMESLOTS: i32 = 48;
-
-/// Maximum retransmissions (ETSI N.252 range: 1-5). Using 3.
-const BL_MAX_RETRANSMISSIONS: u8 = 3;
 
 pub struct Llc {
     dltime: TdmaTime,
@@ -128,42 +123,50 @@ impl Llc {
     /// Process incoming ACK per ETSI 22.3.2.3(k).
     /// Matches by SSI and N(R) so that retransmitted BL-DATA entries are matched correctly.
     fn process_incoming_ack(&mut self, _tn: u8, addr: TetraAddress, n: u8) {
-        // First pass: look for an exact match (SSI + N(R) = N(S)) — the success path.
         for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].addr.ssi == addr.ssi && self.expected_in_acks[i].n == n {
+            if self.expected_in_acks[i].addr.ssi != addr.ssi {
+                continue;
+            }
+
+            // SSI matches — check N(R)
+            if self.expected_in_acks[i].n == n {
+                // Successful ACK: N(R) matches N(S)
                 let ack = self.expected_in_acks.remove(i);
                 if let Some(tx_reporter) = ack.tx_reporter {
                     tx_reporter.mark_acknowledged();
                 }
                 return;
             }
-        }
 
-        // Second pass: SSI matches but N(R) ≠ N(S) — per ETSI 22.3.2.3(k), not a successful ACK.
-        for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].addr.ssi == addr.ssi {
-                tracing::warn!(
-                    "LLC: BL-ACK N(R) mismatch for SSI {}: got {}, expected {}",
-                    addr.ssi,
-                    n,
-                    self.expected_in_acks[i].n
-                );
+            // N(R) mismatch — per ETSI 22.3.2.3(k), not a successful ACK
+            tracing::warn!(
+                "LLC: received unexpected ACK for SSI {}: N(R)={}, expected N(S)={}",
+                addr.ssi,
+                n,
+                self.expected_in_acks[i].n
+            );
 
-                if self.expected_in_acks[i].retransmission_buf.is_some()
-                    && self.expected_in_acks[i].retransmit_count < BL_MAX_RETRANSMISSIONS
-                {
-                    // Retransmissions remain — leave entry for timer-driven retry
-                    return;
-                }
-
-                // No retransmission possible or exhausted — remove and fail
-                let ack = self.expected_in_acks.remove(i);
-                if let Some(tx_reporter) = ack.tx_reporter {
-                    tx_reporter.mark_lost();
-                }
+            if self.expected_in_acks[i].retransmission_buf.is_some()
+                && u32::from(self.expected_in_acks[i].retransmit_count) < N252_BL_MAX_TLSDU_RETRANSMITS_ACKED
+            {
+                // Retransmissions remain — leave entry for timer-driven retry
                 return;
             }
+
+            // No retransmission possible or exhausted — remove and fail
+            let ack = self.expected_in_acks.remove(i);
+            if let Some(tx_reporter) = ack.tx_reporter {
+                tx_reporter.mark_lost();
+            }
+            return;
         }
+
+        // No expected entry matched this SSI at all
+        tracing::warn!(
+            "LLC: received ACK for SSI {} with N(R)={}, but no outstanding ACK expected",
+            addr.ssi,
+            n
+        );
     }
 
     fn rx_tma_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -586,8 +589,8 @@ impl TetraEntityTrait for Llc {
         let mut i = 0;
         while i < self.expected_in_acks.len() {
             let age = dltime.diff(self.expected_in_acks[i].t_start);
-            if age > BL_ACK_TIMEOUT_TIMESLOTS {
-                if self.expected_in_acks[i].retransmit_count < BL_MAX_RETRANSMISSIONS {
+            if age >= 0 && age as u32 >= T251_SENDER_RETRY_TIMER {
+                if u32::from(self.expected_in_acks[i].retransmit_count) < N252_BL_MAX_TLSDU_RETRANSMITS_ACKED {
                     if let Some(ref buf) = self.expected_in_acks[i].retransmission_buf {
                         let mut pdu_buf = BitBuffer::from_bitbuffer(buf);
                         pdu_buf.seek(0);
