@@ -84,8 +84,6 @@ pub struct CfgPlutoSdr {
     pub tx_ant: Option<String>,
     pub rx_gain_pga: Option<f64>,
     pub tx_gain_pga: Option<f64>,
-    /// URI for the PlutoSDR (e.g. "usb:" or "ip:192.168.2.1")
-    pub uri: Option<String>,
     /// FPGA timestamp insertion interval in samples
     pub timestamp_every: Option<u32>,
     /// Enable USB direct mode (bypasses IIO streaming, uses USB gadget for low-latency timestamped I/O)
@@ -155,7 +153,6 @@ pub struct PlutoSdrDto {
     pub tx_ant: Option<String>,
     pub rx_gain_pga: Option<f64>,
     pub tx_gain_pga: Option<f64>,
-    pub uri: Option<String>,
     pub timestamp_every: Option<u32>,
     pub usb_direct: Option<bool>,
     pub loopback: Option<bool>,

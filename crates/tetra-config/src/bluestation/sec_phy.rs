@@ -92,7 +92,6 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
                 tx_ant: pluto_dto.tx_ant,
                 rx_gain_pga: pluto_dto.rx_gain_pga,
                 tx_gain_pga: pluto_dto.tx_gain_pga,
-                uri: pluto_dto.uri,
                 timestamp_every: pluto_dto.timestamp_every,
                 usb_direct: pluto_dto.usb_direct,
                 loopback: pluto_dto.loopback,

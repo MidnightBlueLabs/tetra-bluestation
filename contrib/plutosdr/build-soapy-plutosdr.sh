@@ -41,4 +41,4 @@ sudo make install
 
 echo ""
 echo "Done. Verify with:"
-echo "  SoapySDRUtil --probe=\"driver=plutosdr,uri=ip:192.168.2.1\""
+echo "  SoapySDRUtil --probe=\"driver=plutosdr\""

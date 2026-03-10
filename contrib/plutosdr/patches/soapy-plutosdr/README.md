@@ -25,16 +25,14 @@ to the FPGA.
 - `PlutoSDR_RXStreamerIPGadget.hpp/cpp` – Same pattern
 - `PlutoSDR_TXStreamerIPGadget.hpp/cpp` – Same pattern
 
-### 2. USB Gadget with Network IIO Context (`02-usb-gadget-network-iio.patch`)
+### 2. USB Gadget Device Discovery (`02-usb-gadget-network-iio.patch`)
 
-**Problem:** `open_sdr_usb_gadget()` only works when the IIO context is USB
-(`usb:X.Y`). When connected via `ip:192.168.2.1` the USB gadget cannot be
-opened.
+**Problem:** `open_sdr_usb_gadget()` fails to find the device when the USB bus
+and device numbers are not known in advance.
 
-**Solution:** Modified `handle_direct_args()` to attempt the USB gadget
-connection regardless of the IIO context type. Modified `open_sdr_usb_gadget()`
-to find the PlutoSDR by USB Vendor/Product ID (0456:b673) when the URI does not
-contain USB bus/device numbers. Falls back to IP gadget on network connections.
+**Solution:** Modified `open_sdr_usb_gadget()` to find the PlutoSDR by USB
+Vendor/Product ID (0456:b673) when the URI does not contain explicit USB
+bus/device numbers.
 
 **Affected files:**
 - `PlutoSDR_Settings.cpp` – `handle_direct_args()` and `open_sdr_usb_gadget()`
@@ -69,7 +67,7 @@ sudo make install
 ## Verifying the Installation
 
 ```bash
-SoapySDRUtil --probe="driver=plutosdr,uri=ip:192.168.2.1"
+SoapySDRUtil --probe="driver=plutosdr"
 ```
 
 The installed library should be at:

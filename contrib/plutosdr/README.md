@@ -102,6 +102,13 @@ UL_freq = DL_freq − Duplex_Spacing
         = 430.725 MHz
 ```
 
+## Connection
+
+Only USB connection is supported. Connect the ADALM-Pluto via USB to the host
+PC. The `usb_direct = true` option in the configuration enables the USB gadget
+streaming path, which provides the low-latency timestamped I/O required for
+TETRA synchronisation.
+
 ## Known Limitations
 
 ### Frequency Accuracy
@@ -128,9 +135,9 @@ The following warnings at startup are normal:
 
 | Problem | Solution |
 |---------|---------|
-| "Bad URI" / "no device context found" | `ping 192.168.2.1`, `iio_info -s` |
+| "no device context found" | Check USB cable, `iio_info -s`, `lsusb \| grep Analog` |
 | "libusb failed to open device (-3)" | Create udev rule (see below) |
-| "USB direct mode failed" | `ssh root@192.168.2.1 "ps \| grep sdr"`, `lsusb \| grep Analog` |
+| "USB direct mode failed" | Replug USB cable, `lsusb \| grep Analog` |
 | Terminal cannot find the BTS | Check TX frequency, increase TX gain, verify duplex spacing |
 | Timestamp overflow / crash | Is the SoapyPlutoSDR patch correctly installed? |
 

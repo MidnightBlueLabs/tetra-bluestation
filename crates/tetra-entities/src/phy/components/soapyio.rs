@@ -96,9 +96,6 @@ impl SoapyIo {
         // Build device args; PlutoSDR may need URI and timestamp_every
         let mut dev_args_vec: Vec<(String, String)> = vec![("driver".to_string(), driver.to_string())];
         if let Some(ref pluto_cfg) = soapy_cfg.io_cfg.iocfg_plutosdr {
-            if let Some(ref uri) = pluto_cfg.uri {
-                dev_args_vec.push(("uri".to_string(), uri.clone()));
-            }
             if let Some(ts_every) = pluto_cfg.timestamp_every {
                 dev_args_vec.push(("timestamp_every".to_string(), ts_every.to_string()));
             }
