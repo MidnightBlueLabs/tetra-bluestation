@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
+use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, party_type_identifier::PartyTypeIdentifier, type3_elem_id::CmceType3ElemId};
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
@@ -15,8 +15,8 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 pub struct UStatus {
     /// Type1, 4 bits, See note 1,
     pub area_selection: u8,
-    /// Type1, 2 bits, Short/SSI/TSI,
-    pub called_party_type_identifier: u8,
+    /// Type1, 2 bits, Called party type identifier
+    pub called_party_type_identifier: PartyTypeIdentifier,
     /// Conditional 8 bits, See note 2, condition: called_party_type_identifier == 0
     pub called_party_short_number_address: Option<u64>,
     /// Conditional 24 bits, See note 2, condition: called_party_type_identifier == 1 || called_party_type_identifier == 2
@@ -41,21 +41,26 @@ impl UStatus {
         // Type1
         let area_selection = buffer.read_field(4, "area_selection")? as u8;
         // Type1
-        let called_party_type_identifier = buffer.read_field(2, "called_party_type_identifier")? as u8;
+        let cpti_raw = buffer.read_field(2, "called_party_type_identifier")?;
+        let called_party_type_identifier = PartyTypeIdentifier::try_from(cpti_raw).map_err(|_| PduParseErr::InvalidValue {
+            field: "called_party_type_identifier",
+            value: cpti_raw,
+        })?;
         // Conditional
-        let called_party_short_number_address = if called_party_type_identifier == 0 {
+        let called_party_short_number_address = if called_party_type_identifier == PartyTypeIdentifier::Sna {
             Some(buffer.read_field(8, "called_party_short_number_address")?)
         } else {
             None
         };
         // Conditional
-        let called_party_ssi = if called_party_type_identifier == 1 || called_party_type_identifier == 2 {
-            Some(buffer.read_field(24, "called_party_ssi")?)
-        } else {
-            None
-        };
+        let called_party_ssi =
+            if called_party_type_identifier == PartyTypeIdentifier::Ssi || called_party_type_identifier == PartyTypeIdentifier::Tsi {
+                Some(buffer.read_field(24, "called_party_ssi")?)
+            } else {
+                None
+            };
         // Conditional
-        let called_party_extension = if called_party_type_identifier == 2 {
+        let called_party_extension = if called_party_type_identifier == PartyTypeIdentifier::Tsi {
             Some(buffer.read_field(24, "called_party_extension")?)
         } else {
             None
@@ -97,7 +102,7 @@ impl UStatus {
         // Type1
         buffer.write_bits(self.area_selection as u64, 4);
         // Type1
-        buffer.write_bits(self.called_party_type_identifier as u64, 2);
+        buffer.write_bits(self.called_party_type_identifier.into_raw(), 2);
         // Conditional
         if let Some(ref value) = self.called_party_short_number_address {
             buffer.write_bits(*value, 8);

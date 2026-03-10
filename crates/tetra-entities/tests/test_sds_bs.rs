@@ -5,6 +5,7 @@ use std::time::Duration;
 use tetra_config::bluestation::{CfgBrew, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::pdus::u_sds_data::USdsData;
 use tetra_pdus::cmce::pdus::u_status::UStatus;
 use tetra_saps::control::sds::CmceSdsData;
@@ -27,7 +28,7 @@ fn affiliate_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
 fn build_u_sds_data_msg(dltime: TdmaTime, source_issi: u32, dest_ssi: u32, payload: u16) -> SapMsg {
     let u_sds = USdsData {
         area_selection: 0,
-        called_party_type_identifier: 1,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
         called_party_short_number_address: None,
         called_party_ssi: Some(dest_ssi as u64),
         called_party_extension: None,
@@ -271,7 +272,7 @@ fn test_u_status_forwarded_as_d_status() {
     // Build a U-STATUS PDU from 1000001 to 2000001 with pre-coded status 0x8210
     let u_status = UStatus {
         area_selection: 0,
-        called_party_type_identifier: 1,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
         called_party_short_number_address: None,
         called_party_ssi: Some(2000001),
         called_party_extension: None,
@@ -334,7 +335,7 @@ fn test_u_status_unregistered_dest_dropped() {
 
     let u_status = UStatus {
         area_selection: 0,
-        called_party_type_identifier: 1,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
         called_party_short_number_address: None,
         called_party_ssi: Some(9999999),
         called_party_extension: None,

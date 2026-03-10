@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, type3_elem_id::CmceType3ElemId};
+use crate::cmce::enums::{cmce_pdu_type_dl::CmcePduTypeDl, party_type_identifier::PartyTypeIdentifier, type3_elem_id::CmceType3ElemId};
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 
@@ -14,7 +14,7 @@ use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
 #[derive(Debug)]
 pub struct DSdsData {
     /// Type1, 2 bits, Calling party type identifier
-    pub calling_party_type_identifier: u8,
+    pub calling_party_type_identifier: PartyTypeIdentifier,
     /// Conditional 24 bits, See note 1, condition: calling_party_type_identifier == 1 || calling_party_type_identifier == 2
     pub calling_party_address_ssi: Option<u64>,
     /// Conditional 24 bits, See note 1, condition: calling_party_type_identifier == 2
@@ -44,15 +44,20 @@ impl DSdsData {
         expect_pdu_type!(pdu_type, CmcePduTypeDl::DSdsData)?;
 
         // Type1
-        let calling_party_type_identifier = buffer.read_field(2, "calling_party_type_identifier")? as u8;
+        let cpti_raw = buffer.read_field(2, "calling_party_type_identifier")?;
+        let calling_party_type_identifier = PartyTypeIdentifier::try_from(cpti_raw).map_err(|_| PduParseErr::InvalidValue {
+            field: "calling_party_type_identifier",
+            value: cpti_raw,
+        })?;
         // Conditional
-        let calling_party_address_ssi = if calling_party_type_identifier == 1 || calling_party_type_identifier == 2 {
-            Some(buffer.read_field(24, "calling_party_address_ssi")?)
-        } else {
-            None
-        };
+        let calling_party_address_ssi =
+            if calling_party_type_identifier == PartyTypeIdentifier::Ssi || calling_party_type_identifier == PartyTypeIdentifier::Tsi {
+                Some(buffer.read_field(24, "calling_party_address_ssi")?)
+            } else {
+                None
+            };
         // Conditional
-        let calling_party_extension = if calling_party_type_identifier == 2 {
+        let calling_party_extension = if calling_party_type_identifier == PartyTypeIdentifier::Tsi {
             Some(buffer.read_field(24, "calling_party_extension")?)
         } else {
             None
@@ -131,7 +136,7 @@ impl DSdsData {
         // PDU Type
         buffer.write_bits(CmcePduTypeDl::DSdsData.into_raw(), 5);
         // Type1
-        buffer.write_bits(self.calling_party_type_identifier as u64, 2);
+        buffer.write_bits(self.calling_party_type_identifier.into_raw(), 2);
         // Conditional
         if let Some(ref value) = self.calling_party_address_ssi {
             buffer.write_bits(*value, 24);
@@ -225,7 +230,7 @@ mod tests {
     #[test]
     fn test_d_sds_data_sdti0_cpti1() {
         let pdu = DSdsData {
-            calling_party_type_identifier: 1,
+            calling_party_type_identifier: PartyTypeIdentifier::Ssi,
             calling_party_address_ssi: Some(1000001),
             calling_party_extension: None,
             short_data_type_identifier: 0,
@@ -238,7 +243,7 @@ mod tests {
             dm_ms_address: None,
         };
         let parsed = round_trip(&pdu);
-        assert_eq!(parsed.calling_party_type_identifier, 1);
+        assert_eq!(parsed.calling_party_type_identifier, PartyTypeIdentifier::Ssi);
         assert_eq!(parsed.calling_party_address_ssi, Some(1000001));
         assert_eq!(parsed.calling_party_extension, None);
         assert_eq!(parsed.short_data_type_identifier, 0);
@@ -249,7 +254,7 @@ mod tests {
     fn test_d_sds_data_sdti3_cpti1() {
         let payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA];
         let pdu = DSdsData {
-            calling_party_type_identifier: 1,
+            calling_party_type_identifier: PartyTypeIdentifier::Ssi,
             calling_party_address_ssi: Some(2000002),
             calling_party_extension: None,
             short_data_type_identifier: 3,
@@ -262,7 +267,7 @@ mod tests {
             dm_ms_address: None,
         };
         let parsed = round_trip(&pdu);
-        assert_eq!(parsed.calling_party_type_identifier, 1);
+        assert_eq!(parsed.calling_party_type_identifier, PartyTypeIdentifier::Ssi);
         assert_eq!(parsed.calling_party_address_ssi, Some(2000002));
         assert_eq!(parsed.short_data_type_identifier, 3);
         assert_eq!(parsed.length_indicator, Some(40));
@@ -272,7 +277,7 @@ mod tests {
     #[test]
     fn test_d_sds_data_cpti2_extension() {
         let pdu = DSdsData {
-            calling_party_type_identifier: 2,
+            calling_party_type_identifier: PartyTypeIdentifier::Tsi,
             calling_party_address_ssi: Some(3000003),
             calling_party_extension: Some(0x123456),
             short_data_type_identifier: 0,
@@ -285,7 +290,7 @@ mod tests {
             dm_ms_address: None,
         };
         let parsed = round_trip(&pdu);
-        assert_eq!(parsed.calling_party_type_identifier, 2);
+        assert_eq!(parsed.calling_party_type_identifier, PartyTypeIdentifier::Tsi);
         assert_eq!(parsed.calling_party_address_ssi, Some(3000003));
         assert_eq!(parsed.calling_party_extension, Some(0x123456));
         assert_eq!(parsed.short_data_type_identifier, 0);
@@ -295,7 +300,7 @@ mod tests {
     #[test]
     fn test_d_sds_data_cpti0() {
         let pdu = DSdsData {
-            calling_party_type_identifier: 0,
+            calling_party_type_identifier: PartyTypeIdentifier::Sna,
             calling_party_address_ssi: None,
             calling_party_extension: None,
             short_data_type_identifier: 1,
@@ -308,7 +313,7 @@ mod tests {
             dm_ms_address: None,
         };
         let parsed = round_trip(&pdu);
-        assert_eq!(parsed.calling_party_type_identifier, 0);
+        assert_eq!(parsed.calling_party_type_identifier, PartyTypeIdentifier::Sna);
         assert_eq!(parsed.calling_party_address_ssi, None);
         assert_eq!(parsed.calling_party_extension, None);
         assert_eq!(parsed.short_data_type_identifier, 1);

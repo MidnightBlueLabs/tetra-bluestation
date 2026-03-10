@@ -4,6 +4,7 @@ use tetra_saps::control::sds::CmceSdsData;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
+use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
 use tetra_pdus::cmce::pdus::d_status::DStatus;
 use tetra_pdus::cmce::pdus::u_sds_data::USdsData;
@@ -250,7 +251,7 @@ impl SdsBsSubentity {
         pre_coded_status: u16,
     ) {
         let pdu = DStatus {
-            calling_party_type_identifier: 1, // SSI
+            calling_party_type_identifier: PartyTypeIdentifier::Ssi,
             calling_party_address_ssi: Some(source_issi as u64),
             calling_party_extension: None,
             pre_coded_status,
@@ -338,7 +339,7 @@ impl SdsBsSubentity {
             };
 
         let pdu = DSdsData {
-            calling_party_type_identifier: 1, // SSI
+            calling_party_type_identifier: PartyTypeIdentifier::Ssi,
             calling_party_address_ssi: Some(source_issi as u64),
             calling_party_extension: None,
             short_data_type_identifier,
