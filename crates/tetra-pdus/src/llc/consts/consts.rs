@@ -5,10 +5,10 @@
 ///  The FCS is optional. If the FCS is not used, the TL-SDU part may be larger by four octets.
 pub const N251_BL_MAX_TLSDU_LEN_BITS: u32 = 2595;
 
-/// MS designer choice from range 3 to 5 if the stealing repeats flag is set;
+/// MS designer choice from range 1 to 5 if the stealing repeats flag is not set.
 pub const N252_BL_MAX_TLSDU_RETRANSMITS_ACKED: u32 = 3;
 
-/// MS designer choice from range 1 to 5 if the stealing repeats flag is not set.
+/// MS designer choice from range 3 to 5 if the stealing repeats flag is set.
 pub const N252_BL_MAX_TLSDU_RETRANSMITS_ACKED_STEALING_REPEATS: u32 = 3;
 
 /// MS designer choice from range 0 to 5.
