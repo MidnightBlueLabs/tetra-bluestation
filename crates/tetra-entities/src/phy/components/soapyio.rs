@@ -371,8 +371,6 @@ impl SoapyIo {
                     let time = rx.time_ns();
                     if self.initial_time.is_none() {
                         self.initial_time = Some(time - ticks_to_time_ns(self.rx_next_count, self.rx_fs));
-                        tracing::info!("Set initial_time to {} ns (time_ns={}, rx_next_count={}, rx_fs={})",
-                            self.initial_time.unwrap(), time, self.rx_next_count, self.rx_fs);
                     };
 
                     // Re-compute total count from timestamp (gracefully handles lost samples).

@@ -105,11 +105,11 @@ pub struct CfgSoapySdr {
     pub dl_freq: f64,
     /// PPM frequency error correction (used for both TX and RX if separate values not set)
     pub ppm_err: f64,
-    /// PPM frequency error correction for TX (DL) only, overrides ppm_err for TX
-    pub ppm_err_tx: f64,
-    /// PPM frequency error correction for RX (UL) only, overrides ppm_err for RX
-    pub ppm_err_rx: f64,
-    /// Additional TX frequency offset in Hz (applied on top of PPM correction)
+    /// PPM frequency error correction for TX (DL) only. Falls back to ppm_err if None.
+    pub ppm_err_tx: Option<f64>,
+    /// PPM frequency error correction for RX (UL) only. Falls back to ppm_err if None.
+    pub ppm_err_rx: Option<f64>,
+    /// Additional TX frequency offset in Hz for fine-tuning TX (applied on top of PPM correction)
     pub tx_freq_offset: f64,
     /// Hardware-specific I/O configuration
     pub io_cfg: SoapySdrIoCfg,
@@ -118,14 +118,14 @@ pub struct CfgSoapySdr {
 impl CfgSoapySdr {
     /// Get corrected UL frequency with PPM error applied
     pub fn ul_freq_corrected(&self) -> (f64, f64) {
-        let ppm = self.ppm_err_rx;
+        let ppm = self.ppm_err_rx.unwrap_or(self.ppm_err);
         let err = (self.ul_freq / 1_000_000.0) * ppm;
         (self.ul_freq + err, err)
     }
 
     /// Get corrected DL frequency with PPM error and TX offset applied
     pub fn dl_freq_corrected(&self) -> (f64, f64) {
-        let ppm = self.ppm_err_tx;
+        let ppm = self.ppm_err_tx.unwrap_or(self.ppm_err);
         let err = (self.dl_freq / 1_000_000.0) * ppm + self.tx_freq_offset;
         (self.dl_freq + err, err)
     }

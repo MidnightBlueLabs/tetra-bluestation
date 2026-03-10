@@ -66,6 +66,24 @@ tx_ant = "TX/RX"
 rx_gain_pga = 50.0
 tx_gain_pga = 35.0
 
+# Sane defaults for ADALM-Pluto (PlutoSDR) with pgreenland timestamp firmware.
+# Requires a patched SoapyPlutoSDR driver - see contrib/plutosdr/ for instructions.
+# IP access (uri = "ip:192.168.2.1") is supported. USB direct mode (usb_direct = true)
+# provides lower latency streaming and is recommended when connected via USB.
+# Separate ppm_err_tx / ppm_err_rx allow independent TX/DL and RX/UL calibration
+# (useful since PlutoSDR TX and RX paths may have different frequency errors).
+# [phy_io.soapysdr.iocfg_plutosdr]
+# rx_ant = "A_BALANCED"
+# tx_ant = "A"
+# rx_gain_pga = 50.0         # RX gain (0-73 dB)
+# tx_gain_pga = 89.0         # TX gain (0-89 dB; 89 = max power)
+# uri = "ip:192.168.2.1"     # IIO control URI; use "usb:" for USB-only access
+# timestamp_every = 1920     # FPGA timestamp insertion interval in samples
+# usb_direct = true          # Use USB gadget for low-latency timestamped I/O (recommended)
+# [phy_io.soapysdr]
+# ppm_err_tx = 0.0           # Optional separate PPM correction for TX (DL); falls back to ppm_err
+# ppm_err_rx = 0.0           # Optional separate PPM correction for RX (UL); falls back to ppm_err
+
 ###############################################################################
 
 # Network Information

@@ -1,57 +1,79 @@
 # SoapyPlutoSDR Patches
 
-Diese Patches werden auf [pgreenland's SoapyPlutoSDR](https://github.com/pgreenland/SoapyPlutoSDR) (Branch: `sdr_gadget_timestamping_with_iio_support`) angewendet.
+These patches are applied to
+[pgreenland's SoapyPlutoSDR](https://github.com/pgreenland/SoapyPlutoSDR)
+(branch: `sdr_gadget_timestamping_with_iio_support`).
 
 ## Patches
 
 ### 1. Tick-Base Overflow Prevention (`01-tick-base-overflow.patch`)
 
-**Problem:** Der FPGA-Sample-Counter ist ein frei laufender uint64, der bei einem grossen Wert startet. Wenn `SoapySDR::ticksToTimeNs()` diesen mit 1e9 multipliziert, ueberlaeuft int64.
+**Problem:** The FPGA sample counter is a free-running uint64 that starts at a
+large value. When `SoapySDR::ticksToTimeNs()` multiplies this by 1e9, int64
+overflows.
 
-**Loesung:** Den ersten empfangenen Timestamp als "Tick-Base" von allen folgenden Timestamps subtrahieren. Auf der TX-Seite die Tick-Base wieder addieren bevor zum FPGA geschrieben wird.
+**Solution:** Subtract the first received timestamp as a "tick base" from all
+subsequent timestamps. On the TX side the tick base is added back before writing
+to the FPGA.
 
-**Betroffene Dateien:**
-- `SoapyPlutoSDR.hpp` - `shared_tick_base` und `shared_tick_base_set` Members
-- `PlutoSDR_Settings.cpp` - Tick-Base im Konstruktor initialisieren
-- `PlutoSDR_Streaming.cpp` - Tick-Base in RX/TX und IIO-Streamern verdrahten
-- `PlutoSDR_RXStreamerUSBGadget.hpp/cpp` - Tick-Base-Subtraktion im recv
-- `PlutoSDR_TXStreamerUSBGadget.hpp/cpp` - Tick-Base-Addition im send
-- `PlutoSDR_RXStreamerIPGadget.hpp/cpp` - Gleiches Muster
-- `PlutoSDR_TXStreamerIPGadget.hpp/cpp` - Gleiches Muster
+**Affected files:**
+- `SoapyPlutoSDR.hpp` – `shared_tick_base` and `shared_tick_base_set` members
+- `PlutoSDR_Settings.cpp` – Initialise tick base in constructor
+- `PlutoSDR_Streaming.cpp` – Wire tick base into RX/TX and IIO streamers
+- `PlutoSDR_RXStreamerUSBGadget.hpp/cpp` – Tick-base subtraction in recv
+- `PlutoSDR_TXStreamerUSBGadget.hpp/cpp` – Tick-base addition in send
+- `PlutoSDR_RXStreamerIPGadget.hpp/cpp` – Same pattern
+- `PlutoSDR_TXStreamerIPGadget.hpp/cpp` – Same pattern
 
-### 2. USB Gadget mit Network IIO Context (`02-usb-gadget-network-iio.patch`)
+### 2. USB Gadget with Network IIO Context (`02-usb-gadget-network-iio.patch`)
 
-**Problem:** `open_sdr_usb_gadget()` funktioniert nur wenn der IIO-Context USB ist (`usb:X.Y`). Bei Verbindung ueber `ip:192.168.2.1` kann der USB-Gadget nicht geoeffnet werden.
+**Problem:** `open_sdr_usb_gadget()` only works when the IIO context is USB
+(`usb:X.Y`). When connected via `ip:192.168.2.1` the USB gadget cannot be
+opened.
 
-**Loesung:** `handle_direct_args()` modifiziert, um USB-Gadget-Verbindung unabhaengig vom IIO-Context-Typ zu versuchen. `open_sdr_usb_gadget()` modifiziert, um PlutoSDR per USB Vendor/Product ID (0456:b673) zu finden wenn die URI keine USB Bus/Device-Nummern enthaelt. Fallback auf IP-Gadget bei Netzwerk-Verbindung.
+**Solution:** Modified `handle_direct_args()` to attempt the USB gadget
+connection regardless of the IIO context type. Modified `open_sdr_usb_gadget()`
+to find the PlutoSDR by USB Vendor/Product ID (0456:b673) when the URI does not
+contain USB bus/device numbers. Falls back to IP gadget on network connections.
 
-**Betroffene Dateien:**
-- `PlutoSDR_Settings.cpp` - `handle_direct_args()` und `open_sdr_usb_gadget()`
+**Affected files:**
+- `PlutoSDR_Settings.cpp` – `handle_direct_args()` and `open_sdr_usb_gadget()`
 
-## Anwenden
+## Applying the Patches
+
+A build script is provided that fetches a known-good version of SoapyPlutoSDR
+and applies the patches in one step:
+
+```bash
+cd contrib/plutosdr
+bash build-soapy-plutosdr.sh
+```
+
+Alternatively, apply manually:
 
 ```bash
 git clone https://github.com/pgreenland/SoapyPlutoSDR.git
 cd SoapyPlutoSDR
 git checkout sdr_gadget_timestamping_with_iio_support
 
-# Alle Patches auf einmal anwenden
+# Apply all patches at once
 git apply ../bluestation-plutosdr/patches/soapy-plutosdr/full-plutosdr-patches.patch
 
-# Bauen
+# Build
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
 sudo make install
 ```
 
-## Verifizieren
+## Verifying the Installation
 
 ```bash
 SoapySDRUtil --probe="driver=plutosdr,uri=ip:192.168.2.1"
 ```
 
-Die installierte Library sollte hier liegen:
+The installed library should be at:
+
 ```bash
 ls -la /usr/local/lib/SoapySDR/modules0.8/libPlutoSDRSupport.so
 ```

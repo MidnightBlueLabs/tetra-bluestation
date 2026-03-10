@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgLimeSdr, CfgPlutoSdr, CfgSoapySdr, CfgSxCeiver, CfgUsrpB2xx, SoapySdrDto, SoapySdrIoCfg};
+use crate::bluestation::{CfgLimeSdr, CfgPlutoSdr, CfgSoapySdr, CfgSxCeiver, CfgUsrpB2xx, PlutoSdrDto, SoapySdrDto, SoapySdrIoCfg};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -46,13 +46,13 @@ pub struct PhyIoDto {
 
 pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
     let soapysdr = src.soapysdr.map(|soapy_dto| {
-        let ppm_base = soapy_dto.ppm_err.unwrap_or(0.0);
+        let ppm_err = soapy_dto.ppm_err.unwrap_or(0.0);
         let mut soapy_cfg = CfgSoapySdr {
             ul_freq: soapy_dto.rx_freq,
             dl_freq: soapy_dto.tx_freq,
-            ppm_err: ppm_base,
-            ppm_err_tx: soapy_dto.ppm_err_tx.unwrap_or(ppm_base),
-            ppm_err_rx: soapy_dto.ppm_err_rx.unwrap_or(ppm_base),
+            ppm_err,
+            ppm_err_tx: soapy_dto.ppm_err_tx,
+            ppm_err_rx: soapy_dto.ppm_err_rx,
             tx_freq_offset: soapy_dto.tx_freq_offset.unwrap_or(0.0),
             io_cfg: SoapySdrIoCfg::default(),
         };
