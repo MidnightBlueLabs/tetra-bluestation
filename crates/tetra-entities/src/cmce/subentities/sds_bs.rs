@@ -1,5 +1,5 @@
 use tetra_config::bluestation::SharedConfig;
-use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
+use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_saps::control::sds::CmceSdsData;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
@@ -43,16 +43,13 @@ impl SdsBsSubentity {
             }
         };
 
-        // Extract destination SSI
-        let dest_ssi = if let Some(ssi) = pdu.called_party_ssi {
-            ssi as u32
-        } else if let Some(_sna) = pdu.called_party_short_number_address {
-            tracing::warn!("SDS: short number addressing not supported");
+        if !Self::feature_check_u_sds_data(&pdu) {
+            tracing::warn!("Unsupported features in U-SDS-DATA, dropping");
             return;
-        } else {
-            tracing::warn!("SDS: no destination address in U-SDS-DATA");
-            return;
-        };
+        }
+
+        // Extract destination SSI (guaranteed present after feature check)
+        let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
 
         let source_ssi = calling_party.ssi;
 
@@ -212,16 +209,13 @@ impl SdsBsSubentity {
             }
         };
 
-        // Extract destination SSI
-        let dest_ssi = if let Some(ssi) = pdu.called_party_ssi {
-            ssi as u32
-        } else if let Some(_sna) = pdu.called_party_short_number_address {
-            tracing::warn!("SDS-STATUS: short number addressing not supported");
+        if !Self::feature_check_u_status(&pdu) {
+            tracing::warn!("Unsupported features in U-STATUS, dropping");
             return;
-        } else {
-            tracing::warn!("SDS-STATUS: no destination address in U-STATUS");
-            return;
-        };
+        }
+
+        // Extract destination SSI (guaranteed present after feature check)
+        let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
 
         let source_ssi = calling_party.ssi;
 
@@ -383,5 +377,49 @@ impl SdsBsSubentity {
             }),
         };
         queue.push_back(msg);
+    }
+
+    fn feature_check_u_sds_data(pdu: &USdsData) -> bool {
+        let mut supported = true;
+        if pdu.called_party_ssi.is_none() {
+            if pdu.called_party_short_number_address.is_some() {
+                unimplemented_log!("SDS: short number addressing not supported");
+            } else {
+                tracing::warn!("SDS: no destination address in U-SDS-DATA");
+            }
+            supported = false;
+        }
+        if pdu.called_party_extension.is_some() {
+            unimplemented_log!("SDS: TSI extension addressing not supported");
+        }
+        if pdu.external_subscriber_number.is_some() {
+            unimplemented_log!("SDS: external_subscriber_number not supported");
+        }
+        if pdu.dm_ms_address.is_some() {
+            unimplemented_log!("SDS: dm_ms_address not supported");
+        }
+        supported
+    }
+
+    fn feature_check_u_status(pdu: &UStatus) -> bool {
+        let mut supported = true;
+        if pdu.called_party_ssi.is_none() {
+            if pdu.called_party_short_number_address.is_some() {
+                unimplemented_log!("SDS-STATUS: short number addressing not supported");
+            } else {
+                tracing::warn!("SDS-STATUS: no destination address in U-STATUS");
+            }
+            supported = false;
+        }
+        if pdu.called_party_extension.is_some() {
+            unimplemented_log!("SDS-STATUS: TSI extension addressing not supported");
+        }
+        if pdu.external_subscriber_number.is_some() {
+            unimplemented_log!("SDS-STATUS: external_subscriber_number not supported");
+        }
+        if pdu.dm_ms_address.is_some() {
+            unimplemented_log!("SDS-STATUS: dm_ms_address not supported");
+        }
+        supported
     }
 }
