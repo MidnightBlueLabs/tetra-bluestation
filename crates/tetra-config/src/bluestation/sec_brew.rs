@@ -51,7 +51,7 @@ pub struct CfgBrewDto {
 }
 
 fn default_brew_port() -> u16 {
-    3000
+    443
 }
 
 fn default_brew_reconnect_delay() -> u64 {

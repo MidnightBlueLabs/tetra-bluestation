@@ -164,14 +164,15 @@ voice_service = true
 
 # Server address
 # host = "core.tetrapack.online"
-# port = 3003
+# port = 443
 
 # Use TLS (wss:// / https://)
 # tls = true
 
 # HTTP Digest auth credentials, as registered in BrandMeister
-# Username should be your RadioID / DMR ID. Password is your BrandMeister hotspot password.
-# username = 012345
+# Username should be your SSID (DMR ID + 2-digit suffix).
+# Password is your BrandMeister hotspot password.
+# username = 123456700
 # password = "012345"
 
 # Reconnection delay (seconds)

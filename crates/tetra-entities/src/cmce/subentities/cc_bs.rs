@@ -1167,6 +1167,9 @@ impl CcBsSubentity {
             CallControl::NetworkCallEnd { brew_uuid } => {
                 self.rx_network_call_end(queue, brew_uuid);
             }
+            CallControl::UlInactivityTimeout { ts } => {
+                self.handle_ul_inactivity_timeout(queue, ts);
+            }
             _ => {
                 tracing::warn!("Unexpected CallControl message: {:?}", call_control);
             }
@@ -1483,6 +1486,52 @@ impl CcBsSubentity {
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
         let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
         queue.push_back(msg);
+    }
+
+    /// Handle UL inactivity timeout from UMAC: a radio disappeared mid-transmission.
+    /// Treat identically to rx_u_tx_ceased — force TX ceased, enter hangtime.
+    fn handle_ul_inactivity_timeout(&mut self, queue: &mut MessageQueue, ts: u8) {
+        // Find the active call on this timeslot with tx_active == true
+        let call_entry = self
+            .active_calls
+            .iter()
+            .find(|(_, call)| call.ts == ts && call.tx_active)
+            .map(|(id, _)| *id);
+
+        let Some(call_id) = call_entry else {
+            tracing::debug!("UL inactivity timeout on ts={} but no active transmitting call found", ts);
+            return;
+        };
+
+        let call = self.active_calls.get_mut(&call_id).unwrap();
+        tracing::warn!("UL inactivity timeout on ts={}, forcing TX ceased for call_id={}", ts, call_id);
+
+        let dest_gssi = call.dest_gssi;
+        call.tx_active = false;
+        call.hangtime_start = Some(self.dltime);
+
+        // Send D-TX CEASED via FACCH to all group members
+        self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
+
+        // Notify UMAC to enter hangtime signalling mode
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            dltime: self.dltime,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+        });
+
+        // Notify Brew to stop forwarding audio
+        if brew::is_brew_gssi_routable(&self.config, dest_gssi) {
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: self.dltime,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+            });
+        }
     }
 
     /// Send D-TX CEASED via FACCH stealing

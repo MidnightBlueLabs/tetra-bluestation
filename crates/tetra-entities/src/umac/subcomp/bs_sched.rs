@@ -144,7 +144,7 @@ impl BsChannelScheduler {
         // in signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED
         // that still need FACCH delivery.
         if !active {
-            self.dltx_queues[idx].retain(|e| matches!(e, DlSchedElem::Stealing(..)));
+            self.dl_drop_all_except_stolen(ts);
         }
 
         tracing::info!(
@@ -153,6 +153,10 @@ impl BsChannelScheduler {
             ts,
             self.hangtime_guard[idx]
         );
+    }
+
+    pub fn is_hangtime(&self, ts: u8) -> bool {
+        self.hangtime[ts as usize - 1]
     }
 
     fn is_hangtime_effective(&self, ts: u8) -> bool {
@@ -553,6 +557,7 @@ impl BsChannelScheduler {
         pdu
     }
 
+    /// Takes and removes all grants and random access acknowledgements from the given timeslot's queue, returning them as a vec.
     pub fn dl_take_all_grants_and_acks(&mut self, timeslot: u8) -> Vec<DlSchedElem> {
         let queue = &mut self.dltx_queues[timeslot as usize - 1];
         let mut taken = Vec::new();
@@ -569,6 +574,47 @@ impl BsChannelScheduler {
         taken
     }
 
+    /// Removes all elements from the schedule, except stolen blocks. This function is used
+    /// before entering hangtime to clear out any stale grants, resources, etc that can only be processed in signaling mode,
+    /// while keeping stealing blocks that may still need to be transmitted during the guard window.
+    /// Discarded elements are reporetd as such via tx_reporter if available. Returns true if elements were discarded.
+    pub fn dl_drop_all_except_stolen(&mut self, timeslot: u8) -> bool {
+        let queue = &mut self.dltx_queues[timeslot as usize - 1];
+        let mut i = 0;
+        let mut item_was_discarded = false;
+        while i < queue.len() {
+            if matches!(queue[i], DlSchedElem::Stealing(..)) {
+                i += 1;
+            } else {
+                // Found a to-be-discarded element.
+                // Remove, warn, and call tx_reporter::mark_discarded() if appliccable
+                let elem = queue.remove(i);
+                item_was_discarded = true;
+                tracing::warn!("dl_drop_all_except_stolen: discarding scheduled {:?} on ts {}", elem, timeslot);
+
+                match elem {
+                    DlSchedElem::Resource(_, _, tx_reporter) => {
+                        // Report as discarded manually
+                        if let Some(tx_reporter) = tx_reporter {
+                            tx_reporter.mark_discarded();
+                        }
+                    }
+
+                    DlSchedElem::FragBuf(_) => {
+                        // Fragger self-marks any unsent fragments as discarded when dropped, so we don't need to do anything here.
+                    }
+
+                    DlSchedElem::RandomAccessAck(_) | DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {
+                        // Silently dropped as internal or not equipped with a tx_reporter
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        item_was_discarded
+    }
+
     pub fn dl_integrate_sched_elems_for_timeslot(&mut self, ts: TdmaTime) {
         // Remove all grants and acks from queue and collect them into a vec
         let grants_and_acks = self.dl_take_all_grants_and_acks(ts.t);
@@ -582,7 +628,6 @@ impl BsChannelScheduler {
                 _ => panic!(),
             };
             let mac_resource = self.dl_get_scheduled_resource_for_ssi(ts, addr);
-
             match mac_resource {
                 Some(DlSchedElem::Resource(pdu, _sdu, _repeat)) => {
                     // Integrate grant into the resource
@@ -650,18 +695,6 @@ impl BsChannelScheduler {
                         }
 
                         DlSchedElem::Resource(pdu, sdu, tx_reporter) => {
-                            // Repeat on subsequent frames if needed (e.g. D-SETUP, TS 100 392-2 clause 23.5.2).
-                            // if repeat_count > 0 {
-                            //     let pdu_clone = pdu.clone();
-                            //     let sdu_clone = BitBuffer::from_bitbuffer(&sdu);
-                            //     tracing::debug!(
-                            //         "dl_build_block_from_signalling_schedule: repeating resource for next frame (remaining={})",
-                            //         repeat_count - 1
-                            //     );
-                            //     self.dltx_next_slot_queue
-                            //         .push(DlSchedElem::Resource(pdu_clone, sdu_clone, repeat_count - 1));
-                            // }
-
                             // Allocate bitbuf if not already done
                             let mut buf = buf_opt.unwrap_or_else(|| BitBuffer::new(SCH_F_CAP));
                             // Create fragger, either to send the whole PDU or to start fragmentation
@@ -685,13 +718,17 @@ impl BsChannelScheduler {
                             buf_opt = Some(buf);
                         }
 
-                        DlSchedElem::Stealing(..) => {
-                            // Stealing items should only appear on traffic timeslots; skip if found here
+                        DlSchedElem::Stealing(_, tx_reporter) => {
+                            // Stealing items should only appear on traffic timeslots; discard if found here
                             tracing::warn!(
-                                "dl_build_block_from_signalling_schedule: Stealing item found on non-traffic ts {}, skipping",
+                                "dl_build_block_from_signalling_schedule: Stealing item found on non-traffic ts {}, discarding",
                                 ts.t
                             );
+                            if let Some(tx_reporter) = tx_reporter {
+                                tx_reporter.mark_discarded();
+                            }
                         }
+
                         _ => panic!("finalize_ts_for_tick: Unexpected DlSchedElem type: {:?}", sched_elem),
                     }
                 }
@@ -724,7 +761,7 @@ impl BsChannelScheduler {
             let mut buf = BitBuffer::from_vec(block);
             // Raw ACELP speech (274 bits for TCH/S).
             // Clamp to TCH_S_CAP as Vec may be larger (e.g. 280 bits).
-            buf.set_raw_end(TCH_S_CAP);
+            buf.set_raw_end(buf.get_raw_start() + TCH_S_CAP);
             buf
         } else {
             // No voice data queued — send silence frame (all zeros).
