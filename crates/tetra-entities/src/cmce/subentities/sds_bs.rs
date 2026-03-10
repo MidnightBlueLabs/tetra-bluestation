@@ -89,14 +89,11 @@ impl SdsBsSubentity {
             }
         };
 
-        // Route: individual local, group local, Brew forward, or drop
+        // Route: local delivery (ISSI or GSSI), Brew forward, or drop
         let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
         let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);
 
-        let mut is_forwarded = false;
-
         if is_local_issi {
-            // Individual local delivery
             tracing::info!("SDS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_sds_data(
                 queue,
@@ -108,9 +105,7 @@ impl SdsBsSubentity {
                 &data,
                 length_bits,
             );
-            is_forwarded = true;
         } else if is_local_group {
-            // Group local delivery: one GSSI-addressed PDU
             tracing::info!("SDS: group delivery: {} -> GSSI {}", source_ssi, dest_ssi);
             self.send_d_sds_data(
                 queue,
@@ -122,37 +117,24 @@ impl SdsBsSubentity {
                 &data,
                 length_bits,
             );
-            is_forwarded = true;
-        }
-
-        // Forward to Brew (individual only, never group SDS)
-        if brew::is_active(&self.config) {
-            let brew_routable = if is_local_issi || is_local_group {
-                false
-            } else {
-                brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi)
-            };
-
-            if brew_routable {
-                tracing::info!("SDS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Cmce,
-                    dest: TetraEntity::Brew,
-                    dltime: message.dltime,
-                    msg: SapMsgInner::CmceSdsData(CmceSdsData {
-                        source_issi: source_ssi,
-                        dest_issi: dest_ssi,
-                        short_data_type_identifier: pdu.short_data_type_identifier,
-                        data: if is_forwarded { data.clone() } else { data },
-                        length_bits,
-                    }),
-                });
-                is_forwarded = true;
-            }
-        }
-
-        if !is_forwarded {
+        } else if brew::is_active(&self.config)
+            && (brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
+        {
+            tracing::info!("SDS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: message.dltime,
+                msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                    source_issi: source_ssi,
+                    dest_issi: dest_ssi,
+                    short_data_type_identifier: pdu.short_data_type_identifier,
+                    data,
+                    length_bits,
+                }),
+            });
+        } else {
             tracing::warn!("SDS: dest SSI {} not local and not Brew-routable, dropping", dest_ssi);
         }
     }
