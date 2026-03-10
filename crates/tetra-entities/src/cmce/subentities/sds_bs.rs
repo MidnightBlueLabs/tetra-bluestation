@@ -95,7 +95,7 @@ impl SdsBsSubentity {
         let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
         let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);
 
-        let mut delivered = false;
+        let mut is_forwarded = false;
 
         if is_local_issi {
             // Individual local delivery
@@ -110,7 +110,7 @@ impl SdsBsSubentity {
                 &data,
                 length_bits,
             );
-            delivered = true;
+            is_forwarded = true;
         } else if is_local_group {
             // Group local delivery: one GSSI-addressed PDU
             tracing::info!("SDS: group delivery: {} -> GSSI {}", source_ssi, dest_ssi);
@@ -124,7 +124,7 @@ impl SdsBsSubentity {
                 &data,
                 length_bits,
             );
-            delivered = true;
+            is_forwarded = true;
         }
 
         // Forward to Brew (individual only, never group SDS)
@@ -146,15 +146,15 @@ impl SdsBsSubentity {
                         source_issi: source_ssi,
                         dest_issi: dest_ssi,
                         short_data_type_identifier: pdu.short_data_type_identifier,
-                        data: if delivered { data.clone() } else { data },
+                        data: if is_forwarded { data.clone() } else { data },
                         length_bits,
                     }),
                 });
-                delivered = true;
+                is_forwarded = true;
             }
         }
 
-        if !delivered {
+        if !is_forwarded {
             tracing::warn!("SDS: dest SSI {} not local and not Brew-routable, dropping", dest_ssi);
         }
     }

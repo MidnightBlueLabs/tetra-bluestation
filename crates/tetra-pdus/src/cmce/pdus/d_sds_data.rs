@@ -86,15 +86,11 @@ impl DSdsData {
         // Conditional
         let user_defined_data_4 = if short_data_type_identifier == 3 {
             let len_bits = length_indicator.unwrap() as usize;
-            let full_bytes = len_bits / 8;
-            let remaining_bits = len_bits % 8;
-            let mut data = Vec::with_capacity(full_bytes + if remaining_bits > 0 { 1 } else { 0 });
-            for _ in 0..full_bytes {
-                data.push(buffer.read_field(8, "user_defined_data_4")? as u8);
-            }
-            if remaining_bits > 0 {
-                data.push((buffer.read_field(remaining_bits, "user_defined_data_4")? as u8) << (8 - remaining_bits));
-            }
+            let num_bytes = (len_bits + 7) / 8;
+            let mut data = vec![0u8; num_bytes];
+            buffer.read_bits_into_slice(len_bits, &mut data).ok_or(PduParseErr::BufferEnded {
+                field: Some("user_defined_data_4"),
+            })?;
             Some(data)
         } else {
             None
@@ -191,6 +187,26 @@ impl DSdsData {
         // Write terminating m-bit
         delimiters::write_mbit(buffer, 0);
         Ok(())
+    }
+}
+
+impl fmt::Display for DSdsData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "DSdsData {{ calling_party_type_identifier: {:?} calling_party_address_ssi: {:?} calling_party_extension: {:?} short_data_type_identifier: {:?} user_defined_data_1: {:?} user_defined_data_2: {:?} user_defined_data_3: {:?} length_indicator: {:?} user_defined_data_4: {:?} external_subscriber_number: {:?} dm_ms_address: {:?} }}",
+            self.calling_party_type_identifier,
+            self.calling_party_address_ssi,
+            self.calling_party_extension,
+            self.short_data_type_identifier,
+            self.user_defined_data_1,
+            self.user_defined_data_2,
+            self.user_defined_data_3,
+            self.length_indicator,
+            self.user_defined_data_4,
+            self.external_subscriber_number,
+            self.dm_ms_address,
+        )
     }
 }
 
@@ -297,25 +313,5 @@ mod tests {
         assert_eq!(parsed.calling_party_extension, None);
         assert_eq!(parsed.short_data_type_identifier, 1);
         assert_eq!(parsed.user_defined_data_2, Some(0xDEADBEEF));
-    }
-}
-
-impl fmt::Display for DSdsData {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "DSdsData {{ calling_party_type_identifier: {:?} calling_party_address_ssi: {:?} calling_party_extension: {:?} short_data_type_identifier: {:?} user_defined_data_1: {:?} user_defined_data_2: {:?} user_defined_data_3: {:?} length_indicator: {:?} user_defined_data_4: {:?} external_subscriber_number: {:?} dm_ms_address: {:?} }}",
-            self.calling_party_type_identifier,
-            self.calling_party_address_ssi,
-            self.calling_party_extension,
-            self.short_data_type_identifier,
-            self.user_defined_data_1,
-            self.user_defined_data_2,
-            self.user_defined_data_3,
-            self.length_indicator,
-            self.user_defined_data_4,
-            self.external_subscriber_number,
-            self.dm_ms_address,
-        )
     }
 }
