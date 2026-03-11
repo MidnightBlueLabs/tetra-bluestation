@@ -1070,6 +1070,16 @@ impl BrewEntity {
             data.len()
         );
 
+        // Only forward and acknowledge if destination ISSI is locally registered
+        if !self.config.state_read().subscribers.is_registered(destination) {
+            tracing::warn!(
+                "BrewEntity: SDS dest ISSI {} not registered, dropping (no report sent) uuid={}",
+                destination,
+                uuid
+            );
+            return;
+        }
+
         // Brew always sends SDS Type 4 (variable length) per protocol spec
         let user_defined_data = SdsUserData::Type4(length_bits, data);
 
@@ -1085,6 +1095,10 @@ impl BrewEntity {
                 user_defined_data,
             }),
         });
+
+        // Send SDS_REPORT (status=0) back to Brew server to complete the 3-message handshake
+        let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 0 });
+        tracing::debug!("BrewEntity: queued SDS_REPORT uuid={} status=0", uuid);
     }
 
     /// Handle outgoing SDS from CMCE → Brew (local MS → network)

@@ -476,6 +476,18 @@ pub fn build_sds_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Ve
     buf
 }
 
+/// Build a FRAME_TYPE_SDS_REPORT message (delivery acknowledgement)
+/// Wire: kind(1) + type(1) + uuid(16) + length_bits(2) + status(1) = 21 bytes
+pub fn build_sds_report(session_uuid: &Uuid, status: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(21);
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_SDS_REPORT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, 8); // length_bits = 8 (1 byte status)
+    buf.push(status);
+    buf
+}
+
 /// Build a service query (query subscriber profiles)
 pub fn build_query_subscribers(issis: &[u32]) -> Vec<u8> {
     let json = serde_json::to_string(issis).unwrap_or_else(|_| "[]".to_string());
@@ -621,6 +633,26 @@ mod tests {
             }
         } else {
             panic!("Expected CallControl message");
+        }
+    }
+
+    #[test]
+    fn test_build_parse_sds_report() {
+        let uuid = Uuid::new_v4();
+        let built = build_sds_report(&uuid, 0);
+
+        assert_eq!(built.len(), 21);
+        assert_eq!(built[0], BREW_CLASS_FRAME);
+        assert_eq!(built[1], FRAME_TYPE_SDS_REPORT);
+
+        let msg = parse_brew_message(&built).unwrap();
+        if let BrewMessage::Frame(frame) = msg {
+            assert_eq!(frame.frame_type, FRAME_TYPE_SDS_REPORT);
+            assert_eq!(frame.identifier, uuid);
+            assert_eq!(frame.length_bits, 8);
+            assert_eq!(frame.data, vec![0]);
+        } else {
+            panic!("Expected Frame message");
         }
     }
 }

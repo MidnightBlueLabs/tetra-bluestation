@@ -103,6 +103,9 @@ pub enum BrewCommand {
         length_bits: u16,
     },
 
+    /// Send SDS report to Brew (delivery acknowledgement)
+    SendSdsReport { uuid: Uuid, status: u8 },
+
     /// Disconnect gracefully
     Disconnect,
 }
@@ -709,6 +712,14 @@ impl BrewWorker {
                             } else {
                                 tracing::debug!("BrewWorker: sent SDS_TRANSFER uuid={} {} bytes", uuid, data.len());
                             }
+                        }
+                    }
+                    BrewCommand::SendSdsReport { uuid, status } => {
+                        let msg = build_sds_report(&uuid, status);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::warn!("BrewWorker: failed to send SDS_REPORT: {}", e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent SDS_REPORT uuid={} status={}", uuid, status);
                         }
                     }
                     BrewCommand::Disconnect => {

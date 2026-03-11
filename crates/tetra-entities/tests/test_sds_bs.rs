@@ -22,7 +22,7 @@ fn register_subscriber(test: &mut ComponentTest, issi: u32) {
 
 /// Helper: affiliate a subscriber with a GSSI in the StackState subscriber registry
 fn affiliate_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
-    test.config.state_write().subscribers.affiliate(issi, gssi).unwrap();
+    test.config.state_write().subscribers.affiliate(issi, gssi);
 }
 
 /// Helper: build a U-SDS-DATA message from a source ISSI to a dest SSI with 16-bit payload
