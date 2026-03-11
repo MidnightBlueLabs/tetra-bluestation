@@ -3,7 +3,7 @@ use std::panic;
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, assert_warn, unimplemented_log};
+use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
 use tetra_pdus::mle::fields::bs_service_details::BsServiceDetails;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
@@ -916,7 +916,8 @@ impl UmacBs {
         // Will have either length_ind or reservation_req, never none or both
         let mut pdu_len_bits = if let Some(length_ind) = pdu.length_ind {
             if length_ind == 0 {
-                assert_warn!(false, "rx_mac_end_hu: PDU has length ind 0");
+                // Table 21.44: length indication 0 is reserved, discard PDU
+                tracing::debug!("rx_mac_end_hu: discarding PDU with reserved length indication 0");
                 return;
             }
             let len = length_ind as usize * 8;
