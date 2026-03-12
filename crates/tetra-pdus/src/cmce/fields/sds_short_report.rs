@@ -15,6 +15,14 @@ pub struct SdsShortReport {
 }
 
 impl SdsShortReport {
+    pub fn short_report_type(&self) -> ShortReportType {
+        self.short_report_type
+    }
+
+    pub fn message_reference(&self) -> u8 {
+        self.message_reference
+    }
+
     // No from_bitbuf, to_bitbuf functions, as we'll parse this in a bit of a different way originating from an enum field in the U-STATUS PDU pre-coded status field
     pub fn from_u16(val: u16) -> Result<Self, PduParseErr> {
         // TODO FIXME implement parsing of the pre-coded status field into this struct, as defined in table 14.72

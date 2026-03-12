@@ -1,6 +1,7 @@
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
+use tetra_pdus::cmce::enums::short_report_type::ShortReportType;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
 use tetra_saps::control::sds::CmceSdsData;
 use tetra_saps::lcmc::LcmcMleUnitdataReq;
@@ -166,6 +167,33 @@ impl SdsBsSubentity {
         } else if brew::is_active(&self.config)
             && (brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
         {
+            // Brew forwarding only: when the pre-coded status carries an SDS-TL short report
+            // (ETSI 29.4.2.3), convert it to a full SDS-TL REPORT PDU (Type4) so the
+            // remote end recognizes it as a delivery confirmation. ETSI 29.3.3.4.4
+            // explicitly allows SwMI to "modify a short report to a standard report."
+            // Non-SDS-TL pre-coded statuses are forwarded as-is (Type1).
+            // Local delivery (D-STATUS) is not affected, it stays as pre-coded status above.
+            let user_defined_data = if let PreCodedStatus::SdsTl(report) = &pdu.pre_coded_status {
+                let delivery_status = match report.short_report_type() {
+                    ShortReportType::MessageReceived => 0x00,
+                    ShortReportType::MessageConsumed => 0x00,
+                    ShortReportType::DestMemFull => 0x02,
+                    ShortReportType::ProtOrEncodingNotSupported => 0x01,
+                };
+                // PID 0x82 = SDS-TL text messaging. Hardcoded because the SDS-SHORT REPORT
+                // PDU does not carry a Protocol Identifier (ETSI 29.4.3.11). In practice
+                // all observed SDS-TL traffic uses PID 0x82.
+                let sds_tl_report = vec![0x82, 0x10, delivery_status, report.message_reference()];
+                tracing::info!(
+                    "SDS-STATUS: converting SDS-TL short report to Type4 for Brew: MR={} status=0x{:02x}",
+                    report.message_reference(),
+                    delivery_status
+                );
+                SdsUserData::Type4(32, sds_tl_report)
+            } else {
+                SdsUserData::Type1(pdu.pre_coded_status.into_raw())
+            };
+
             tracing::info!("SDS-STATUS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
@@ -175,7 +203,7 @@ impl SdsBsSubentity {
                 msg: SapMsgInner::CmceSdsData(CmceSdsData {
                     source_issi: source_ssi,
                     dest_issi: dest_ssi,
-                    user_defined_data: SdsUserData::Type1(pdu.pre_coded_status.into_raw()),
+                    user_defined_data,
                 }),
             });
         } else {

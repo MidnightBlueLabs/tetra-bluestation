@@ -1098,9 +1098,12 @@ impl BrewEntity {
             }),
         });
 
-        // Send SDS_REPORT (status=0) back to Brew server to complete the 3-message handshake
+        // Send SDS_REPORT (status=0) back to Brew to release session resources.
+        // Without this, sessions are killed by timeout instead of being released cleanly.
+        // TODO: should be sent after the radio ACKs on the air interface (LLC BL-ACK),
+        // currently sent immediately after queuing for delivery.
         let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 0 });
-        tracing::debug!("BrewEntity: queued SDS_REPORT uuid={} status=0", uuid);
+        tracing::info!("BrewEntity: SDS_REPORT uuid={} status=0 -> Brew", uuid);
     }
 
     /// Handle outgoing SDS from CMCE → Brew (local MS → network)
