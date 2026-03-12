@@ -623,12 +623,21 @@ impl BrewWorker {
                 };
                 match cmd {
                     BrewCommand::RegisterSubscriber { issi } => {
+                        let already_registered = self.subscriber_groups.contains_key(&issi);
                         self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                        let msg = build_subscriber_register(issi, &[]);
+                        let msg = if already_registered {
+                            build_subscriber_reregister(issi)
+                        } else {
+                            build_subscriber_register(issi, &[])
+                        };
                         if let Err(e) = ws.send(Message::Binary(msg.into())) {
                             tracing::error!("BrewWorker: failed to send registration: {}", e);
                         } else {
-                            tracing::debug!("BrewWorker: sent REGISTER issi={}", issi);
+                            tracing::debug!(
+                                "BrewWorker: sent {} issi={}",
+                                if already_registered { "REREGISTER" } else { "REGISTER" },
+                                issi
+                            );
                         }
                     }
                     BrewCommand::DeregisterSubscriber { issi } => {
