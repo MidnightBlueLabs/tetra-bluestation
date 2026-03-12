@@ -31,6 +31,11 @@ const BREW_EXPECTED_FRAME_INTERVAL_US: f64 = 56_667.0;
 const BREW_JITTER_WARN_TARGET_FRAMES: usize = 8;
 /// Rate-limit warning logs per call.
 const BREW_JITTER_WARN_INTERVAL: Duration = Duration::from_secs(5);
+/// Timeout for draining UL voice after FloorReleased.
+/// 8 timeslots = 2 full TDMA frames ~ 113ms. This covers the stealing repeats
+/// mechanism (ETSI EN 300 392-2 Clause 23.8.4.1.3) where voice frames continue
+/// arriving in Block2 alongside repeated U-TX CEASED in Block1.
+const UL_DRAIN_TIMEOUT: i32 = 8;
 
 // ─── Active call tracking ─────────────────────────────────────────
 
@@ -87,6 +92,10 @@ struct UlForwardedCall {
     dest_gssi: u32,
     /// Number of voice frames forwarded
     frame_count: u64,
+    /// Set when FloorReleased is received. Holds the TDMA time when draining started.
+    /// While Some, voice frames are still forwarded. After UL_DRAIN_TIMEOUT ticks
+    /// with no voice, the entry is removed and GROUP_IDLE is sent.
+    draining_since: Option<TdmaTime>,
 }
 
 #[derive(Debug)]
@@ -801,6 +810,14 @@ impl TetraEntityTrait for BrewEntity {
         self.expire_hanging_calls(queue);
     }
 
+    fn tick_end(&mut self, _queue: &mut MessageQueue, _ts: TdmaTime) -> bool {
+        // Expire UL forwarded calls that finished draining after FloorReleased.
+        // This must run in tick_end (after rx_prim) so that voice frames arriving
+        // in the same tick get a chance to reset the drain timer before expiry.
+        self.expire_draining_calls();
+        false
+    }
+
     fn rx_prim(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         match message.msg {
             // UL voice from UMAC — forward to TetraPack if this timeslot is being forwarded
@@ -890,6 +907,7 @@ impl BrewEntity {
             fwd.source_issi = source_issi;
             fwd.dest_gssi = dest_gssi;
             fwd.frame_count = 0;
+            fwd.draining_since = None;
 
             // Send GROUP_TX update for the new talker
             let _ = self.command_sender.send(BrewCommand::SendGroupTx {
@@ -931,12 +949,36 @@ impl BrewEntity {
                 source_issi,
                 dest_gssi,
                 frame_count: 0,
+                draining_since: None,
             },
         );
     }
 
-    /// Handle notification that a local UL call has ended.
+    /// Handle notification that a local UL call floor has been released.
+    /// Instead of immediately removing the forwarded call, mark it as draining
+    /// so that remaining voice frames (from stealing repeats) are still forwarded.
     fn handle_local_call_tx_stopped(&mut self, call_id: u16, ts: u8) {
+        if let Some(fwd) = self.ul_forwarded.get_mut(&ts) {
+            if fwd.call_id != call_id {
+                tracing::warn!(
+                    "BrewEntity: call_id mismatch on ts={}: expected {} got {}",
+                    ts,
+                    fwd.call_id,
+                    call_id
+                );
+            }
+            fwd.draining_since = Some(self.dltime);
+            tracing::info!(
+                "BrewEntity: local call floor released, draining remaining voice: uuid={} frames={}",
+                fwd.uuid,
+                fwd.frame_count
+            );
+        }
+    }
+
+    fn handle_local_call_end(&mut self, call_id: u16, ts: u8) {
+        // Remove the forwarded entry if it still exists (may be active or draining).
+        // Send GROUP_IDLE so Brew knows the call is over.
         if let Some(fwd) = self.ul_forwarded.remove(&ts) {
             if fwd.call_id != call_id {
                 tracing::warn!(
@@ -947,35 +989,11 @@ impl BrewEntity {
                 );
             }
             tracing::info!(
-                "BrewEntity: local call transmission stopped, sending GROUP_IDLE to TetraPack: uuid={} frames={}",
+                "BrewEntity: call ended, sending GROUP_IDLE: uuid={} frames={}",
                 fwd.uuid,
                 fwd.frame_count
             );
-            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
-                uuid: fwd.uuid,
-                cause: 0, // Normal release
-            });
-        }
-    }
-
-    fn handle_local_call_end(&mut self, call_id: u16, ts: u8) {
-        // Check if ul_forwarded entry still exists (might have been removed by handle_local_call_tx_stopped)
-        if let Some(fwd) = self.ul_forwarded.remove(&ts) {
-            if fwd.call_id != call_id {
-                tracing::warn!(
-                    "BrewEntity: call_id mismatch on ts={}: expected {} got {}",
-                    ts,
-                    fwd.call_id,
-                    call_id
-                );
-            }
-            tracing::debug!(
-                "BrewEntity: local call ended (already sent GROUP_IDLE during tx_stopped): uuid={} frames={}",
-                fwd.uuid,
-                fwd.frame_count
-            );
-        } else {
-            tracing::debug!("BrewEntity: local call ended on ts={} (already cleaned up during tx_stopped)", ts);
+            let _ = self.command_sender.send(BrewCommand::SendGroupIdle { uuid: fwd.uuid, cause: 0 });
         }
     }
 
@@ -985,6 +1003,11 @@ impl BrewEntity {
         let Some(fwd) = self.ul_forwarded.get_mut(&ts) else {
             return; // Not forwarded to TetraPack
         };
+
+        // Reset drain timer on each voice frame (more frames may follow during stealing repeats)
+        if fwd.draining_since.is_some() {
+            fwd.draining_since = Some(self.dltime);
+        }
 
         fwd.frame_count += 1;
 
@@ -1029,6 +1052,35 @@ impl BrewEntity {
             length_bits: (ste_data.len() * 8) as u16,
             data: ste_data,
         });
+    }
+
+    /// Remove UL forwarded calls whose drain timer has expired.
+    /// Called each tick to check if draining entries have gone long enough without
+    /// receiving new voice frames, indicating the radio has stopped transmitting.
+    fn expire_draining_calls(&mut self) {
+        let expired: Vec<u8> = self
+            .ul_forwarded
+            .iter()
+            .filter_map(|(&ts, fwd)| {
+                if let Some(drain_start) = fwd.draining_since {
+                    if self.dltime.diff(drain_start) >= UL_DRAIN_TIMEOUT {
+                        return Some(ts);
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for ts in expired {
+            if let Some(fwd) = self.ul_forwarded.remove(&ts) {
+                tracing::info!(
+                    "BrewEntity: drain timeout, sending GROUP_IDLE: uuid={} frames={}",
+                    fwd.uuid,
+                    fwd.frame_count
+                );
+                let _ = self.command_sender.send(BrewCommand::SendGroupIdle { uuid: fwd.uuid, cause: 0 });
+            }
+        }
     }
 }
 
