@@ -451,16 +451,8 @@ pub fn build_short_transfer(session_uuid: &Uuid, source: u32, destination: u32) 
     buf.extend_from_slice(session_uuid.as_bytes());
     write_u32_le(&mut buf, source);
     write_u32_le(&mut buf, destination);
-    // number field: 32 bytes, zero-padded
-    let number_str = format!("{}", destination);
-    let number_bytes = number_str.as_bytes();
-    for i in 0..32 {
-        if i < number_bytes.len() {
-            buf.push(number_bytes[i]);
-        } else {
-            buf.push(0);
-        }
-    }
+    // number field: 32 bytes, zero-filled (external subscriber number not supported)
+    buf.extend_from_slice(&[0u8; 32]);
     buf
 }
 
