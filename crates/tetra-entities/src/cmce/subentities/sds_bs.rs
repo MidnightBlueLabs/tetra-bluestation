@@ -159,12 +159,30 @@ impl SdsBsSubentity {
             pdu.pre_coded_status
         );
 
-        // Route: local delivery only (status is individual point-to-point)
+        // Route: local delivery, Brew forward, or drop
         if self.config.state_read().subscribers.is_registered(dest_ssi) {
             tracing::info!("SDS-STATUS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_status(queue, message.dltime, source_ssi, dest_ssi, pdu.pre_coded_status);
+        } else if brew::is_active(&self.config)
+            && (brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
+        {
+            tracing::info!("SDS-STATUS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Brew,
+                dltime: message.dltime,
+                msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                    source_issi: source_ssi,
+                    dest_issi: dest_ssi,
+                    user_defined_data: SdsUserData::Type1(pdu.pre_coded_status.into_raw()),
+                }),
+            });
         } else {
-            tracing::warn!("SDS-STATUS: dest ISSI {} not locally registered, dropping", dest_ssi);
+            tracing::warn!(
+                "SDS-STATUS: dest ISSI {} not locally registered and not Brew-routable, dropping",
+                dest_ssi
+            );
         }
     }
 

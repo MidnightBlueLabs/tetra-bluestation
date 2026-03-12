@@ -1080,7 +1080,9 @@ impl BrewEntity {
             return;
         }
 
-        // Brew always sends SDS Type 4 (variable length) per protocol spec
+        // Brew protocol always delivers SDS as variable-length (Type 4). This means the
+        // downlink D-SDS-DATA will use SDTI=3, even if the original uplink was a 16-bit
+        // pre-coded status (SDTI=0 / Type 1). This is a Brew protocol constraint.
         let user_defined_data = SdsUserData::Type4(length_bits, data);
 
         // Forward to CMCE SDS subentity for downlink delivery

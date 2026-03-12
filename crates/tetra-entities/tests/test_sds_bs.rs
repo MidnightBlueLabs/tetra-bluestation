@@ -313,6 +313,85 @@ fn test_u_status_forwarded_as_d_status() {
 }
 
 #[test]
+fn test_u_status_brew_forward() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "test.local".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        whitelisted_ssis: None,
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    // Only register source, NOT dest — should forward to Brew
+    register_subscriber(&mut test, 1000001);
+
+    let u_status = UStatus {
+        area_selection: 0,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
+        called_party_short_number_address: None,
+        called_party_ssi: Some(5000001),
+        called_party_extension: None,
+        pre_coded_status: PreCodedStatus::from(0x8210),
+        external_subscriber_number: None,
+        dm_ms_address: None,
+    };
+
+    let mut sdu = BitBuffer::new_autoexpand(80);
+    u_status.to_bitbuf(&mut sdu).expect("Failed to serialize U-STATUS");
+    sdu.seek(0);
+
+    let msg = SapMsg {
+        sap: Sap::LcmcSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Cmce,
+        dltime,
+        msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
+            sdu,
+            handle: 1,
+            endpoint_id: 1,
+            link_id: 1,
+            received_tetra_address: TetraAddress::new(1000001, SsiType::Issi),
+            chan_change_resp_req: false,
+            chan_change_handle: None,
+        }),
+    };
+    test.submit_message(msg);
+    test.run_stack(Some(1));
+
+    let sink_msgs = test.dump_sinks();
+
+    // Should forward to Brew as CmceSdsData with Type1 payload
+    let brew_count = count_brew_sds(&sink_msgs);
+    assert_eq!(brew_count, 1, "Expected 1 CmceSdsData at Brew sink for U-STATUS");
+
+    // Verify the payload is Type1 with the original pre-coded status value
+    let brew_msg = sink_msgs.iter().find(|m| m.dest == TetraEntity::Brew).unwrap();
+    if let SapMsgInner::CmceSdsData(ref sds) = brew_msg.msg {
+        assert_eq!(sds.source_issi, 1000001);
+        assert_eq!(sds.dest_issi, 5000001);
+        assert_eq!(sds.user_defined_data, SdsUserData::Type1(0x8210));
+    } else {
+        panic!("Expected CmceSdsData message at Brew sink");
+    }
+
+    // Should NOT deliver locally
+    let d_sds_count = count_d_sds_data(&sink_msgs);
+    assert_eq!(d_sds_count, 0, "Should not deliver locally when dest is not registered");
+}
+
+#[test]
 fn test_u_status_unregistered_dest_dropped() {
     debug::setup_logging_verbose();
 
