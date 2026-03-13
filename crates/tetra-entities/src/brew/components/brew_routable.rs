@@ -6,6 +6,12 @@ pub fn is_active(config: &SharedConfig) -> bool {
     config.config().brew.is_some()
 }
 
+/// Returns true if the SDS over Brew feature is enabled
+#[inline]
+pub fn feature_sds_enabled(config: &SharedConfig) -> bool {
+    config.config().brew.as_ref().map_or(false, |brew| brew.feature_sds_enabled)
+}
+
 /// Returns true if the configured Brew server is TetraPack (core.tetrapack.online)
 fn is_tetrapack(config: &SharedConfig) -> bool {
     let Some(brew_config) = &config.config().brew else {
@@ -55,4 +61,11 @@ pub fn is_brew_issi_routable(config: &SharedConfig, issi: u32) -> bool {
     } else {
         true
     }
+}
+
+/// Check if an ISSI is a known TetraPack service destination for SDS.
+/// FIXME: move to config-based whitelist instead of hardcoding
+pub fn is_tetrapack_sds_service_issi(config: &SharedConfig, issi: u32) -> bool {
+    const TETRAPACK_SERVICE_ISSI: &[u32] = &[200999, 262993];
+    is_tetrapack(config) && TETRAPACK_SERVICE_ISSI.contains(&issi)
 }

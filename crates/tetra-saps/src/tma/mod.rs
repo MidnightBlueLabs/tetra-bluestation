@@ -33,9 +33,6 @@ pub enum TmaReport {
     FragmentationFailure,
     /// MS only
     RandomAccessFailure,
-
-    /// BS only
-    SuccessDownlinked,
 }
 
 /// Clause 20.4.1.1.3

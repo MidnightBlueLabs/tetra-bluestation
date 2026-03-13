@@ -5,6 +5,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use tetra_saps::control::enums::sds_user_data::SdsUserData;
+use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
 
 use crate::{MessageQueue, TetraEntityTrait};
@@ -302,13 +304,13 @@ impl BrewEntity {
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
                 BrewEvent::Connected => {
-                    tracing::info!("BrewEntity: connected to TetraPack server");
+                    tracing::debug!("BrewEntity: connected to TetraPack server");
                     self.connected = true;
                     self.resync_subscribers();
                     self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
-                    tracing::warn!("BrewEntity: disconnected: {}", reason);
+                    tracing::debug!("BrewEntity: disconnected: {}", reason); // Already warned in worker
                     self.set_network_connected(false);
                     // Release all active calls
                     self.release_all_calls(queue);
@@ -328,6 +330,18 @@ impl BrewEntity {
                 }
                 BrewEvent::VoiceFrame { uuid, length_bits, data } => {
                     self.handle_voice_frame(uuid, length_bits, data);
+                }
+                BrewEvent::SdsTransfer {
+                    uuid,
+                    source,
+                    destination,
+                    data,
+                    length_bits,
+                } => {
+                    self.handle_sds_transfer(queue, uuid, source, destination, data, length_bits);
+                }
+                BrewEvent::SdsReport { uuid, status } => {
+                    tracing::debug!("BrewEntity: SDS report uuid={} status={}", uuid, status);
                 }
                 BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
                     tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
@@ -833,8 +847,13 @@ impl TetraEntityTrait for BrewEntity {
             }) => {
                 self.rx_network_call_ready(brew_uuid, call_id, ts, usage);
             }
+            // UlInactivityTimeout is UMAC→CMCE only; Brew handles FloorReleased instead
+            SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { .. }) => {}
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
+            }
+            SapMsgInner::CmceSdsData(sds) => {
+                self.handle_sds_send(sds);
             }
             _ => {
                 tracing::debug!("BrewEntity: unexpected rx_prim from {:?} on {:?}", message.src, message.sap);
@@ -1030,9 +1049,98 @@ impl BrewEntity {
     }
 }
 
+// ─── SDS handling ─────────────────────────────────────────────────
+
+impl BrewEntity {
+    /// Handle incoming SDS transfer from Brew (network → local MS)
+    fn handle_sds_transfer(
+        &mut self,
+        queue: &mut MessageQueue,
+        uuid: Uuid,
+        source: u32,
+        destination: u32,
+        data: Vec<u8>,
+        length_bits: u16,
+    ) {
+        tracing::info!(
+            "BrewEntity: SDS transfer uuid={} src={} dst={} {} bytes",
+            uuid,
+            source,
+            destination,
+            data.len()
+        );
+
+        // Only forward and acknowledge if destination ISSI is locally registered
+        if !self.config.state_read().subscribers.is_registered(destination) {
+            tracing::warn!(
+                "BrewEntity: SDS dest ISSI {} not registered, dropping (no report sent) uuid={}",
+                destination,
+                uuid
+            );
+            return;
+        }
+
+        // Brew protocol always delivers SDS as variable-length (Type 4). This means the
+        // downlink D-SDS-DATA will use SDTI=3, even if the original uplink was a 16-bit
+        // pre-coded status (SDTI=0 / Type 1). This is a Brew protocol constraint.
+        let user_defined_data = SdsUserData::Type4(length_bits, data);
+
+        // Forward to CMCE SDS subentity for downlink delivery
+        // Set dltime to next ts1 to ensure it gets sent on MCCH
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Cmce,
+            dltime: self.dltime.forward_to_timeslot(1),
+            msg: SapMsgInner::CmceSdsData(CmceSdsData {
+                source_issi: source,
+                dest_issi: destination,
+                user_defined_data,
+            }),
+        });
+
+        // Send SDS_REPORT (status=0) back to Brew to release session resources.
+        // Without this, sessions are killed by timeout instead of being released cleanly.
+        // TODO: should be sent after the radio ACKs on the air interface (LLC BL-ACK),
+        // currently sent immediately after queuing for delivery.
+        let _ = self.command_sender.send(BrewCommand::SendSdsReport { uuid, status: 0 });
+        tracing::info!("BrewEntity: SDS_REPORT uuid={} status=0 -> Brew", uuid);
+    }
+
+    /// Handle outgoing SDS from CMCE → Brew (local MS → network)
+    fn handle_sds_send(&self, sds: CmceSdsData) {
+        if !self.connected {
+            tracing::warn!(
+                "BrewEntity: not connected, dropping outgoing SDS {} -> {}",
+                sds.source_issi,
+                sds.dest_issi
+            );
+            return;
+        }
+
+        let uuid = Uuid::new_v4();
+        tracing::info!(
+            "BrewEntity: sending SDS uuid={} src={} dst={} type={} {} bits",
+            uuid,
+            sds.source_issi,
+            sds.dest_issi,
+            sds.user_defined_data.type_identifier(),
+            sds.user_defined_data.length_bits()
+        );
+
+        let _ = self.command_sender.send(BrewCommand::SendSds {
+            uuid,
+            source: sds.source_issi,
+            destination: sds.dest_issi,
+            data: sds.user_defined_data.to_arr(),
+            length_bits: sds.user_defined_data.length_bits(),
+        });
+    }
+}
+
 impl Drop for BrewEntity {
     fn drop(&mut self) {
-        tracing::info!("BrewEntity: shutting down, sending graceful disconnect");
+        tracing::debug!("BrewEntity: shutting down, sending graceful disconnect");
         let _ = self.command_sender.send(BrewCommand::Disconnect);
 
         // Give the worker thread time to send DEAFFILIATE + DEREGISTER and close
@@ -1042,7 +1150,7 @@ impl Drop for BrewEntity {
             loop {
                 if handle.is_finished() {
                     let _ = handle.join();
-                    tracing::info!("BrewEntity: worker thread joined cleanly");
+                    tracing::debug!("BrewEntity: worker thread joined cleanly");
                     break;
                 }
                 if start.elapsed() >= timeout {

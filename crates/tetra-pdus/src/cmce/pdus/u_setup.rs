@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, type3_elem_id::CmceType3ElemId};
+use crate::cmce::enums::{cmce_pdu_type_ul::CmcePduTypeUl, party_type_identifier::PartyTypeIdentifier, type3_elem_id::CmceType3ElemId};
 use crate::cmce::fields::basic_service_information::BasicServiceInformation;
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, expect_pdu_type, pdu_parse_error::PduParseErr};
@@ -38,12 +38,8 @@ pub struct USetup {
     pub call_priority: u8,
     /// Type1, 2 bits, See note 3,
     pub clir_control: u8,
-    /// Type1, 2 bits, Short/SSI/TSI,
-    /// 0 = Short Number Address (SNA)
-    /// 1 = Short Subscriber Identity (SSI)
-    /// 2 = TETRA Subscriber Identity (TSI)
-    /// 3 = Reserved
-    pub called_party_type_identifier: u8,
+    /// Type1, 2 bits, Called party type identifier
+    pub called_party_type_identifier: PartyTypeIdentifier,
     /// Conditional 8 bits, See note 4, condition: called_party_type_identifier == 0
     pub called_party_short_number_address: Option<u64>,
     /// Conditional 24 bits, See note 4, condition: called_party_type_identifier == 1 || called_party_type_identifier == 2
@@ -82,21 +78,26 @@ impl USetup {
         // Type1
         let clir_control = buffer.read_field(2, "clir_control")? as u8;
         // Type1
-        let called_party_type_identifier = buffer.read_field(2, "called_party_type_identifier")? as u8;
+        let cpti_raw = buffer.read_field(2, "called_party_type_identifier")?;
+        let called_party_type_identifier = PartyTypeIdentifier::try_from(cpti_raw).map_err(|_| PduParseErr::InvalidValue {
+            field: "called_party_type_identifier",
+            value: cpti_raw,
+        })?;
         // Conditional
-        let called_party_short_number_address = if called_party_type_identifier == 0 {
+        let called_party_short_number_address = if called_party_type_identifier == PartyTypeIdentifier::Sna {
             Some(buffer.read_field(8, "called_party_short_number_address")?)
         } else {
             None
         };
         // Conditional
-        let called_party_ssi = if called_party_type_identifier == 1 || called_party_type_identifier == 2 {
-            Some(buffer.read_field(24, "called_party_ssi")?)
-        } else {
-            None
-        };
+        let called_party_ssi =
+            if called_party_type_identifier == PartyTypeIdentifier::Ssi || called_party_type_identifier == PartyTypeIdentifier::Tsi {
+                Some(buffer.read_field(24, "called_party_ssi")?)
+            } else {
+                None
+            };
         // Conditional
-        let called_party_extension = if called_party_type_identifier == 2 {
+        let called_party_extension = if called_party_type_identifier == PartyTypeIdentifier::Tsi {
             Some(buffer.read_field(24, "called_party_extension")?)
         } else {
             None
@@ -161,7 +162,7 @@ impl USetup {
         // Type1
         buffer.write_bits(self.clir_control as u64, 2);
         // Type1
-        buffer.write_bits(self.called_party_type_identifier as u64, 2);
+        buffer.write_bits(self.called_party_type_identifier.into_raw(), 2);
         // Conditional
         if let Some(ref value) = self.called_party_short_number_address {
             buffer.write_bits(*value, 8);

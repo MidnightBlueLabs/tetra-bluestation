@@ -206,6 +206,21 @@ impl BitBuffer {
         Some(v as u8)
     }
 
+    /// Read `num_bits` at the current pos, advancing pos, and write them into the provided output slice as bytes
+    pub fn read_bits_into_slice(&mut self, num_bits: usize, buf: &mut [u8]) -> Option<()> {
+        let num_bytes = (num_bits + 7) / 8;
+        assert!(buf.len() >= num_bytes, "output buffer too small for num_bits");
+
+        let mut bits_remaining = num_bits;
+        for i in 0..num_bytes {
+            let bits_in_byte = usize::min(bits_remaining, 8);
+            let read_byte = self.read_bits(bits_in_byte)? as u8;
+            buf[i] = read_byte << (8 - bits_in_byte);
+            bits_remaining -= bits_in_byte;
+        }
+        Some(())
+    }
+
     fn _realloc_tail(&mut self, new_cap_bits: usize) {
         let new_cap_bytes = (new_cap_bits + 7) / 8;
         assert!(
@@ -855,6 +870,17 @@ mod tests {
         let mut arr = vec![0u8; 8];
         bb.to_bitarr(&mut arr);
         assert_eq!(arr, vec![1, 0, 1, 1, 0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn test_read_bits_into_slice() {
+        let mut bb = BitBuffer::from_bitstr("10110011011");
+        let mut out = [0u8; 2];
+
+        bb.read_bits_into_slice(11, &mut out).unwrap();
+
+        assert_eq!(out, [0b10110011, 0b01100000]);
+        assert_eq!(bb.get_pos(), 11);
     }
 
     #[test]

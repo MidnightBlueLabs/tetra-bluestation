@@ -13,6 +13,8 @@ use tetra_saps::tma::TmaUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::llc::components::fcs;
+use tetra_pdus::llc::consts::consts::N252_BL_MAX_TLSDU_RETRANSMITS_ACKED;
+use tetra_pdus::llc::consts::timers::T251_SENDER_RETRY_TIMER;
 use tetra_pdus::llc::enums::llc_pdu_type::LlcPduType;
 use tetra_pdus::llc::pdus::bl_ack::BlAck;
 use tetra_pdus::llc::pdus::bl_adata::BlAdata;
@@ -31,6 +33,8 @@ pub struct ExpectedInAck {
     pub tx_reporter: Option<TxReporter>,
     // Optional retransmission buffer, to allow for automatic retransmission of the PDU if no acknowledgement is received
     pub retransmission_buf: Option<BitBuffer>,
+    /// Number of retransmissions performed so far
+    pub retransmit_count: u8,
 }
 
 /// Struct that maintains state for an ACK we still need to send back.
@@ -97,39 +101,72 @@ impl Llc {
     }
 
     /// Register that we expect an ACK for this link (acknowledged mode only)
-    fn register_expected_ack(&mut self, t: TdmaTime, addr: TetraAddress, n: u8, tx_reporter: Option<TxReporter>) {
+    fn register_expected_ack(
+        &mut self,
+        t: TdmaTime,
+        addr: TetraAddress,
+        n: u8,
+        tx_reporter: Option<TxReporter>,
+        retransmission_buf: Option<BitBuffer>,
+    ) {
         self.expected_in_acks.push(ExpectedInAck {
             t_start: t,
             n,
             addr,
             ts: t.t,
             tx_reporter,
-            retransmission_buf: None,
+            retransmission_buf,
+            retransmit_count: 0,
         });
     }
 
-    /// Process incoming ACK. Remove outstanding ACK expectation. We ignore unexpected ones, might be a retransmission
-    fn process_incoming_ack(&mut self, tn: u8, addr: TetraAddress, n: u8) {
+    /// Process incoming ACK per ETSI 22.3.2.3(k).
+    /// Matches by SSI and N(R) so that retransmitted BL-DATA entries are matched correctly.
+    fn process_incoming_ack(&mut self, _tn: u8, addr: TetraAddress, n: u8) {
         for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].t_start.t == tn && self.expected_in_acks[i].addr.ssi == addr.ssi {
-                if self.expected_in_acks[i].n != n {
-                    tracing::warn!(
-                        "Received unexpected ACK for t: {} ssi: {} got n {}, expected {}",
-                        tn,
-                        addr.ssi,
-                        n,
-                        self.expected_in_acks[i].n
-                    );
-                }
+            if self.expected_in_acks[i].addr.ssi != addr.ssi {
+                continue;
+            }
 
-                // Remove this expected ACK from the list, and if it has a TxReporter, mark it as acknowledged
+            // SSI matches — check N(R)
+            if self.expected_in_acks[i].n == n {
+                // Successful ACK: N(R) matches N(S)
                 let ack = self.expected_in_acks.remove(i);
                 if let Some(tx_reporter) = ack.tx_reporter {
                     tx_reporter.mark_acknowledged();
                 }
                 return;
             }
+
+            // N(R) mismatch — per ETSI 22.3.2.3(k), not a successful ACK
+            tracing::warn!(
+                "LLC: received unexpected ACK for SSI {}: N(R)={}, expected N(S)={}",
+                addr.ssi,
+                n,
+                self.expected_in_acks[i].n
+            );
+
+            if self.expected_in_acks[i].retransmission_buf.is_some()
+                && u32::from(self.expected_in_acks[i].retransmit_count) < N252_BL_MAX_TLSDU_RETRANSMITS_ACKED
+            {
+                // Retransmissions remain — leave entry for timer-driven retry
+                return;
+            }
+
+            // No retransmission possible or exhausted — remove and fail
+            let ack = self.expected_in_acks.remove(i);
+            if let Some(tx_reporter) = ack.tx_reporter {
+                tx_reporter.mark_lost();
+            }
+            return;
         }
+
+        // No expected entry matched this SSI at all
+        tracing::warn!(
+            "LLC: received ACK for SSI {} with N(R)={}, but no outstanding ACK expected",
+            addr.ssi,
+            n
+        );
     }
 
     fn rx_tma_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -226,9 +263,9 @@ impl Llc {
             pdu_buf.seek(0);
             tracing::debug!("-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
             // Register that we expect an ACK back (acknowledged mode only)
-            self.register_expected_ack(message.dltime, prim.main_address, ns, prim.tx_reporter.clone());
+            self.register_expected_ack(message.dltime, prim.main_address, ns, prim.tx_reporter.clone(), None);
         } else {
-            // BL-DATA (unacknowledged, with or without FCS)
+            // BL-DATA (acknowledged, with or without FCS) — ETSI Clause 22.3.2.3
             let pdu = BlData {
                 has_fcs: prim.fcs_flag,
                 ns,
@@ -239,7 +276,16 @@ impl Llc {
             pdu_buf.copy_bits(&mut prim.tl_sdu, sdu_len);
             pdu_buf.seek(0);
             tracing::debug!("-> {:?} sdu {}", pdu, pdu_buf.dump_bin());
-            // No ACK expected for unacknowledged BL-DATA
+            // Clone PDU buffer for potential retransmission
+            let retransmission_buf = BitBuffer::from_bitbuffer(&pdu_buf);
+            // Register expected ACK — BL-DATA is acknowledged mode per ETSI Clause 22.3.2.3
+            self.register_expected_ack(
+                message.dltime,
+                prim.main_address,
+                ns,
+                prim.tx_reporter.clone(),
+                Some(retransmission_buf),
+            );
         }
 
         let sapmsg = SapMsg {
@@ -536,9 +582,82 @@ impl TetraEntityTrait for Llc {
     }
 
     fn tick_end(&mut self, queue: &mut MessageQueue, _ts: TdmaTime) -> bool {
+        let dltime = self.dltime;
+        let mut had_activity = false;
+
+        // Sweep expected_in_acks for retransmission timeouts (ETSI T.251 / N.252)
+        let mut i = 0;
+        while i < self.expected_in_acks.len() {
+            let age = dltime.diff(self.expected_in_acks[i].t_start);
+            if age >= 0 && age as u32 >= T251_SENDER_RETRY_TIMER {
+                if u32::from(self.expected_in_acks[i].retransmit_count) < N252_BL_MAX_TLSDU_RETRANSMITS_ACKED {
+                    if let Some(ref buf) = self.expected_in_acks[i].retransmission_buf {
+                        let mut pdu_buf = BitBuffer::from_bitbuffer(buf);
+                        pdu_buf.seek(0);
+                        let addr = self.expected_in_acks[i].addr;
+                        let ns = self.expected_in_acks[i].n;
+                        self.expected_in_acks[i].retransmit_count += 1;
+                        let attempt = self.expected_in_acks[i].retransmit_count;
+                        self.expected_in_acks[i].t_start = dltime;
+
+                        tracing::info!("LLC: retransmitting BL-DATA for SSI {}, ns={}, attempt {}", addr.ssi, ns, attempt);
+
+                        let sapmsg = SapMsg {
+                            sap: Sap::TmaSap,
+                            src: TetraEntity::Llc,
+                            dest: TetraEntity::Umac,
+                            dltime,
+                            msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
+                                req_handle: 0,
+                                pdu: pdu_buf,
+                                main_address: addr,
+                                endpoint_id: 0,
+                                stealing_permission: false,
+                                subscriber_class: 0,
+                                air_interface_encryption: None,
+                                stealing_repeats_flag: None,
+                                data_category: None,
+                                chan_alloc: None,
+                                tx_reporter: None,
+                            }),
+                        };
+                        queue.push_back(sapmsg);
+                        had_activity = true;
+                        i += 1;
+                    } else {
+                        // No retransmission buffer (e.g. BL-ADATA) — ACK never arrived, clean up
+                        let entry = self.expected_in_acks.remove(i);
+                        tracing::warn!(
+                            "LLC: ACK timeout for SSI {}, ns={}, no retransmission buffer",
+                            entry.addr.ssi,
+                            entry.n
+                        );
+                        if let Some(tx_reporter) = entry.tx_reporter {
+                            tx_reporter.mark_lost();
+                        }
+                        // Don't increment i — removal shifted elements down
+                    }
+                } else {
+                    // Exhausted retransmissions
+                    let entry = self.expected_in_acks.remove(i);
+                    tracing::warn!(
+                        "LLC: BL-DATA delivery failed for SSI {}, ns={}, exhausted retransmissions",
+                        entry.addr.ssi,
+                        entry.n
+                    );
+                    if let Some(tx_reporter) = entry.tx_reporter {
+                        tx_reporter.mark_lost();
+                    }
+                    // Don't increment i — removal shifted elements down
+                }
+            } else {
+                i += 1;
+            }
+        }
+
         // Check if any unsent ACKs are still here
         // Take oldest element from scheduled_out_acks, and remove it from the list
-        let ret = !self.scheduled_out_acks.is_empty();
+        had_activity |= !self.scheduled_out_acks.is_empty();
         while let Some(ack) = self.scheduled_out_acks.first() {
             tracing::debug!("tick_end: auto-ack for ssi: {}, n: {}, ts: {}", ack.addr.ssi, ack.n, ack.ts);
 
@@ -593,6 +712,6 @@ impl TetraEntityTrait for Llc {
             self.scheduled_out_acks.remove(0);
         }
 
-        ret
+        had_activity
     }
 }
