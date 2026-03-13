@@ -4,6 +4,35 @@ use std::collections::HashMap;
 use tetra_core::ranges::SortedDisjointSsiRanges;
 use toml::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum HomeModeDisplaySdsTextCodingScheme {
+    LATIN,
+    UTF16,
+}
+
+#[derive(Debug, Clone)]
+pub struct CfgHomeModeDisplay {
+    pub source_issi: u32,
+    /// Send interval in TDMA frames (1 frame = 4 timeslots)
+    pub interval_frames: u32,
+    /// SDS Type4 protocol identifier byte.
+    pub protocol_id: u8,
+    /// Text coding scheme prepended to home mode display text user data.
+    /// `LATIN` => ISO-8859-1 8-bit, `UTF16` => UCS-2/UTF-16BE.
+    pub text_coding_scheme: HomeModeDisplaySdsTextCodingScheme,
+    /// UTF-8 text payload appended after text coding scheme.
+    pub text: String,
+}
+
+#[derive(Default, Deserialize)]
+pub struct HomeModeDisplayDto {
+    pub source_issi: Option<u32>,
+    pub interval_frames: Option<u32>,
+    pub protocol_id: Option<u8>,
+    pub text_coding_scheme: Option<HomeModeDisplaySdsTextCodingScheme>,
+    pub text: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CfgCellInfo {
     // 2 bits, from 18.4.2.1 D-MLE-SYNC
@@ -53,6 +82,10 @@ pub struct CfgCellInfo {
     pub frame_18_ext: bool,
 
     pub local_ssi_ranges: SortedDisjointSsiRanges,
+
+    /// Periodic automatic broadcast of Home Mode Display SDS.
+    /// Enabled when `Some`, i.e. `[cell_info.home_mode_display]` exists in config.
+    pub home_mode_display: Option<CfgHomeModeDisplay>,
 }
 
 #[derive(Default, Deserialize)]
@@ -89,6 +122,8 @@ pub struct CellInfoDto {
     pub frame_18_ext: Option<bool>,
 
     pub local_ssi_ranges: Option<Vec<(u32, u32)>>,
+
+    pub home_mode_display: Option<HomeModeDisplayDto>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -127,5 +162,77 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
             .local_ssi_ranges
             .map(SortedDisjointSsiRanges::from_vec_tuple)
             .unwrap_or(SortedDisjointSsiRanges::from_vec_ssirange(vec![])),
+        home_mode_display: ci.home_mode_display.map(|h| CfgHomeModeDisplay {
+            source_issi: h.source_issi.unwrap_or(0),
+            interval_frames: h.interval_frames.unwrap_or(18),
+            protocol_id: h.protocol_id.unwrap_or(220),
+            text_coding_scheme: h.text_coding_scheme.unwrap_or(HomeModeDisplaySdsTextCodingScheme::LATIN),
+            text: h.text.unwrap_or_default(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cell_dto() -> CellInfoDto {
+        CellInfoDto {
+            main_carrier: 0,
+            freq_band: 0,
+            freq_offset: 0,
+            duplex_spacing: 0,
+            reverse_operation: false,
+            custom_duplex_spacing: None,
+            location_area: 0,
+            neighbor_cell_broadcast: None,
+            late_entry_supported: None,
+            subscriber_class: None,
+            registration: None,
+            deregistration: None,
+            priority_cell: None,
+            no_minimum_mode: None,
+            migration: None,
+            system_wide_services: None,
+            voice_service: None,
+            circuit_mode_data_service: None,
+            sndcp_service: None,
+            aie_service: None,
+            advanced_link: None,
+            system_code: None,
+            colour_code: None,
+            sharing_mode: None,
+            ts_reserved_frames: None,
+            u_plane_dtx: None,
+            frame_18_ext: None,
+            local_ssi_ranges: None,
+            home_mode_display: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_home_mode_display_disabled_when_subconfig_missing() {
+        let cfg = cell_dto_to_cfg(base_cell_dto());
+        assert!(cfg.home_mode_display.is_none());
+    }
+
+    #[test]
+    fn test_home_mode_display_enabled_by_subconfig_presence_and_protocol_default() {
+        let mut dto = base_cell_dto();
+        dto.home_mode_display = Some(HomeModeDisplayDto {
+            source_issi: Some(123456),
+            interval_frames: Some(25),
+            protocol_id: None,
+            text_coding_scheme: Some(HomeModeDisplaySdsTextCodingScheme::LATIN),
+            text: Some("HOME MODE".to_string()),
+        });
+
+        let cfg = cell_dto_to_cfg(dto);
+        let home_mode = cfg.home_mode_display.expect("home_mode_display should be enabled");
+        assert_eq!(home_mode.source_issi, 123456);
+        assert_eq!(home_mode.interval_frames, 25);
+        assert_eq!(home_mode.protocol_id, 220);
+        assert_eq!(home_mode.text, "HOME MODE");
     }
 }
