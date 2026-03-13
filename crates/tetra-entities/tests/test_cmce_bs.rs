@@ -3,6 +3,7 @@ mod common;
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug};
+use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
@@ -64,7 +65,7 @@ fn build_u_setup_msg(dltime: TdmaTime, calling_issi: u32, dest_gssi: u32) -> Sap
         request_to_transmit_send_data: false,
         call_priority: 0,
         clir_control: 0,
-        called_party_type_identifier: 1,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
         called_party_ssi: Some(dest_gssi as u64),
         called_party_short_number_address: None,
         called_party_extension: None,

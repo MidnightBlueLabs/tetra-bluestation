@@ -44,14 +44,22 @@ impl MmBs {
         groups: Vec<u32>,
         action: BrewSubscriberAction,
     ) {
-        // If brew is active, take all brew-routable groups and emit an update to brew entity
+        // If brew is active, forward subscriber updates to the Brew entity.
+        // Register/Deregister must always be sent for brew-routable ISSIs,
+        // even when there are no group affiliations yet. The Brew worker
+        // decides whether to send REGISTER or REREGISTER based on its own state.
+        // Affiliate/Deaffiliate only sent when there are brew-routable groups.
         if brew::is_active(&self.config) {
             let brew_groups = groups
                 .iter()
                 .filter(|gssi| brew::is_brew_gssi_routable(&self.config, **gssi))
                 .copied()
                 .collect::<Vec<u32>>();
-            if !brew_groups.is_empty() {
+            let should_send = match action {
+                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => brew::is_brew_issi_routable(&self.config, issi),
+                BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
+            };
+            if should_send {
                 let brew_update = MmSubscriberUpdate {
                     issi,
                     groups: brew_groups,
@@ -106,6 +114,7 @@ impl MmBs {
         let ssi = prim.received_address.ssi;
         let detached_client = self.client_mgr.remove_client(ssi);
         if let Some(client) = detached_client {
+            self.config.state_write().subscribers.deregister(ssi);
             if !client.groups.is_empty() {
                 let groups: Vec<u32> = client.groups.iter().copied().collect();
                 self.emit_subscriber_update(_queue, message.dltime, ssi, groups, BrewSubscriberAction::Deaffiliate);
@@ -164,6 +173,7 @@ impl MmBs {
         if is_new {
             match self.client_mgr.try_register_client(issi, true) {
                 Ok(_) => {
+                    self.config.state_write().subscribers.register(issi);
                     self.emit_subscriber_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
                 }
                 Err(e) => {
@@ -343,6 +353,7 @@ impl MmBs {
                 // Re-register so group attachment can proceed.
                 match self.client_mgr.try_register_client(issi, true) {
                     Ok(_) => {
+                        self.config.state_write().subscribers.register(issi);
                         self.emit_subscriber_update(queue, message.dltime, issi, Vec::new(), BrewSubscriberAction::Register);
                     }
                     Err(e) => {
@@ -360,6 +371,12 @@ impl MmBs {
                 match self.client_mgr.client_detach_all_groups(issi) {
                     Ok(_) => {
                         if !prior_groups.is_empty() {
+                            {
+                                let mut state = self.config.state_write();
+                                for &gssi in &prior_groups {
+                                    state.subscribers.deaffiliate(issi, gssi);
+                                }
+                            }
                             self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
                         }
                     }
@@ -471,6 +488,7 @@ impl MmBs {
                 match self.client_mgr.client_group_attach(issi, gssi, false) {
                     Ok(changed) => {
                         if changed {
+                            self.config.state_write().subscribers.deaffiliate(issi, gssi);
                             deaff_groups.push(gssi);
                         }
                         let gid = GroupIdentityDownlink {
@@ -490,6 +508,7 @@ impl MmBs {
                 match self.client_mgr.client_group_attach(issi, gssi, true) {
                     Ok(changed) => {
                         if changed {
+                            self.config.state_write().subscribers.affiliate(issi, gssi);
                             aff_groups.push(gssi);
                         }
                         // We have added the client to this group. Add an entry to the downlink response

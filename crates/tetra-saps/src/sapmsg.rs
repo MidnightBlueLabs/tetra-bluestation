@@ -6,6 +6,7 @@ use tetra_core::tetra_entities::TetraEntity;
 
 use crate::control::brew::MmSubscriberUpdate;
 use crate::control::call_control::CallControl;
+use crate::control::sds::CmceSdsData;
 use crate::tmd::TmdCircuitDataInd;
 use crate::tmd::TmdCircuitDataReq;
 use crate::tnmm::TnmmTestDemand;
@@ -79,6 +80,9 @@ pub enum SapMsgInner {
 
     // MM -> Brew/CMCE subscriber update
     MmSubscriberUpdate(MmSubscriberUpdate),
+
+    // CMCE SDS <-> Brew SDS routing
+    CmceSdsData(CmceSdsData),
 
     // LTPD-SAP (MLE-LTPD)
     LtpdMleUnitdataInd(LtpdMleUnitdataInd),

@@ -65,7 +65,7 @@ impl BsDefrag {
 
         tracing::debug!(
             "defrag_buffer for ts {} ssi: {}, t: {}-{}, frags: {}: {}",
-            ts,
+            t.t,
             buf.addr.ssi,
             buf.t_first,
             buf.t_last,

@@ -231,10 +231,21 @@ impl BsFragger {
     }
 }
 
+impl Drop for BsFragger {
+    fn drop(&mut self) {
+        if !self.is_fully_transmitted
+            && let Some(tx_reporter) = &self.tx_reporter
+            && tx_reporter.get_state() == tetra_core::TxState::Pending
+        {
+            tx_reporter.mark_discarded();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tetra_core::{
-        TxReceipt,
+        TxReceipt, TxState,
         address::{SsiType, TetraAddress},
         debug,
     };
@@ -394,5 +405,20 @@ mod tests {
             reconstructed.starts_with(vec),
             "Original vec should be contained in reconstructed string"
         );
+    }
+
+    #[test]
+    fn test_drop_marks_discarded_when_not_fully_transmitted() {
+        debug::setup_logging_verbose();
+        let pdu = get_default_resource();
+        let sdu = BitBuffer::from_bitstr("10101010");
+        let (receipt, reporter) = TxReceipt::new(false);
+
+        let _fragger = BsFragger::new(pdu, sdu, Some(reporter));
+        drop(_fragger);
+
+        assert_eq!(receipt.get_state(), TxState::Discarded);
+        assert!(receipt.is_in_final_state());
+        assert!(!receipt.is_transmitted());
     }
 }

@@ -22,7 +22,7 @@ impl CmceBs {
     pub fn new(config: SharedConfig) -> Self {
         Self {
             config: config.clone(),
-            sds: SdsBsSubentity::new(),
+            sds: SdsBsSubentity::new(config.clone()),
             cc: CcBsSubentity::new(config.clone()),
             ss: SsBsSubentity::new(),
         }
@@ -51,15 +51,16 @@ impl CmceBs {
             | CmcePduTypeUl::UInfo
             | CmcePduTypeUl::URelease
             | CmcePduTypeUl::USetup
-            | CmcePduTypeUl::UStatus
             | CmcePduTypeUl::UTxCeased
             | CmcePduTypeUl::UTxDemand
             | CmcePduTypeUl::UCallRestore => {
                 self.cc.route_xx_deliver(_queue, message);
             }
+            CmcePduTypeUl::UStatus => {
+                self.sds.route_status_deliver(_queue, message);
+            }
             CmcePduTypeUl::USdsData => {
-                unimplemented_log!("{:?}", pdu_type);
-                // self.sds.route_xx_deliver(_queue, message);
+                self.sds.route_rf_deliver(_queue, message);
             }
             CmcePduTypeUl::UFacility => {
                 unimplemented_log!("{:?}", pdu_type);
@@ -105,6 +106,9 @@ impl TetraEntityTrait for CmceBs {
                 }
                 SapMsgInner::MmSubscriberUpdate(update) => {
                     self.cc.handle_subscriber_update(queue, update);
+                }
+                SapMsgInner::CmceSdsData(_) => {
+                    self.sds.rx_sds_from_brew(queue, message);
                 }
                 _ => {
                     panic!("Unexpected control message: {:?}", message.msg);

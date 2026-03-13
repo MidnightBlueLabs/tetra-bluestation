@@ -73,4 +73,7 @@ pub enum CallControl {
     NetworkCallEnd {
         brew_uuid: uuid::Uuid, // Identifies the call to end
     },
+    /// UL inactivity detected on a traffic timeslot — no voice frames received
+    /// for the timeout period. Sent by UMAC to CMCE.
+    UlInactivityTimeout { ts: u8 },
 }
