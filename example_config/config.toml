@@ -29,6 +29,8 @@ backend = "SoapySdr"
 tx_freq = 438025000
 rx_freq = 433025000
 ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tuning error
+fs_bs = 600000.0
+fs_monitor = 600000.0
 
 # Sane defaults for LimeSDR
 # [phy_io.soapysdr.iocfg_limesdr]

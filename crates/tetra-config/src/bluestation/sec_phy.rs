@@ -50,6 +50,8 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
             ul_freq: soapy_dto.rx_freq,
             dl_freq: soapy_dto.tx_freq,
             ppm_err: soapy_dto.ppm_err.unwrap_or(0.0),
+            fs_bs: soapy_dto.fs_bs,
+            fs_monitor: soapy_dto.fs_monitor,
             io_cfg: SoapySdrIoCfg::default(),
         };
 
