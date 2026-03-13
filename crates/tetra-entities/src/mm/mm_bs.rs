@@ -44,14 +44,22 @@ impl MmBs {
         groups: Vec<u32>,
         action: BrewSubscriberAction,
     ) {
-        // If brew is active, take all brew-routable groups and emit an update to brew entity
+        // If brew is active, forward subscriber updates to the Brew entity.
+        // Register/Deregister must always be sent for brew-routable ISSIs,
+        // even when there are no group affiliations yet. The Brew worker
+        // decides whether to send REGISTER or REREGISTER based on its own state.
+        // Affiliate/Deaffiliate only sent when there are brew-routable groups.
         if brew::is_active(&self.config) {
             let brew_groups = groups
                 .iter()
                 .filter(|gssi| brew::is_brew_gssi_routable(&self.config, **gssi))
                 .copied()
                 .collect::<Vec<u32>>();
-            if !brew_groups.is_empty() {
+            let should_send = match action {
+                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => brew::is_brew_issi_routable(&self.config, issi),
+                BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
+            };
+            if should_send {
                 let brew_update = MmSubscriberUpdate {
                     issi,
                     groups: brew_groups,
