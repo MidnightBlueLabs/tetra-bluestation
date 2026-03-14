@@ -209,6 +209,14 @@ impl SoapyIo {
             }
         }
 
+        // Apply optional sample-rate overrides from the TOML config if provided
+        if let Some(fs) = soapy_cfg.fs_bs {
+            sdr_settings.fs_bs = fs;
+        }
+        if let Some(fs) = soapy_cfg.fs_monitor {
+            sdr_settings.fs_monitor = fs;
+        }
+
         tracing::info!(
             "Got driver key '{}' hardware_key '{}', using settings for {}",
             driver_key,
