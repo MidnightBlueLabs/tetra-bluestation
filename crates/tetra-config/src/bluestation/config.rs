@@ -90,6 +90,10 @@ impl StackConfig {
             };
         }
 
+        if self.cell.ms_txpwr_max_cell > 7 {
+            return Err("ms_txpwr_max_cell must be 0-7 (3 bits)");
+        }
+
         Ok(())
     }
 }
