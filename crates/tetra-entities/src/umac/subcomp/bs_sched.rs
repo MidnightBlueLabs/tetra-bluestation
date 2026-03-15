@@ -1094,9 +1094,9 @@ impl BsChannelScheduler {
 
                     if hang_effective && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
                         aach.dl_usage = AccessAssignDlUsage::AssignedControl;
-                        aach.ul_usage = AccessAssignUlUsage::CommonAndAssigned;
-                        // ACCESS-ASSIGN header=1 requires an access field for both UL subslots.
-                        // Keep it consistent with TS1 defaults.
+                        // AssignedOnly (Header 2) allows random access for MSs on
+                        // the assigned channel while blocking common control MSs.
+                        aach.ul_usage = AccessAssignUlUsage::AssignedOnly;
                         aach.f2_af = Some(AccessField {
                             access_code: 0,
                             base_frame_len: 4,
