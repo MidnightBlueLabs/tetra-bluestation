@@ -259,7 +259,7 @@ impl BsChannelScheduler {
                 grant_timeslots
             );
 
-            if self.cur_dltime.is_mandatory_clch() {
+            if candidate_t.is_mandatory_clch() {
                 // Not an opportunity; skip
                 continue;
             }
@@ -1068,33 +1068,18 @@ impl BsChannelScheduler {
                     assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
                     assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?"); // TODO FIXME check spec
 
-                    // STRATEGY:
-                    // - Send UL AssignedOnly if both ul1 and ul2 has been granted to an MS
-                    // - Send UL CommonAndAssigned if only ul1 has been granted
-                    // - Send UL CommonOnly if no grants have been made
+                    // Always CommonOnly on TS1 (MCCH). Per ETSI 23.5.2.2.2, the MS
+                    // with a grant transmits in granted slots without checking the AACH.
                     aach.dl_usage = AccessAssignDlUsage::CommonControl;
-                    aach.ul_usage = self.ul_get_usage(ts);
-                    match aach.ul_usage {
-                        AccessAssignUlUsage::CommonOnly => {
-                            aach.f1_af1 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                            aach.f2_af2 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                        }
-                        AccessAssignUlUsage::CommonAndAssigned | AccessAssignUlUsage::AssignedOnly => {
-                            aach.f2_af = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                        }
-                        _ => {
-                            // Traffic or unallocated; no AccessFields
-                        }
-                    }
+                    aach.ul_usage = AccessAssignUlUsage::CommonOnly;
+                    aach.f1_af1 = Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 4,
+                    });
+                    aach.f2_af2 = Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 4,
+                    });
                 }
                 2..=4 => {
                     // Additional channels (TS2..TS4).
@@ -1162,23 +1147,22 @@ impl BsChannelScheduler {
     fn generate_default_blks(&self, ts: TdmaTime) -> TmvUnitdataReq {
         match (ts.f, ts.t) {
             (1..=17, 1) => {
-                // Two options: [Blk1: Null | Blk2: SYSINFO] or [Both: Null]
-                // We'll alternate based on multiframe
-                match ts.m % 2 {
+                // Two options: [Blk1: SCH/HD Null | Blk2: BNCH SYSINFO] or [Both: SCH/F Null]
+                // Alternate every frame
+                match ts.f % 2 {
                     0 => {
-                        // Null + SYSINFO
-                        // SYSINFO gets added later, su we just make a half-slot Null pdu here
-                        let mut buf1 = BitBuffer::new(SCH_F_CAP);
+                        // Half-slot Null PDU on SCH/HD, SYSINFO gets added later as BNCH blk2
+                        let mut buf1 = BitBuffer::new(SCH_HD_CAP);
                         let blk1 = MacResource::null_pdu();
                         blk1.to_bitbuf(&mut buf1);
                         TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchF,
+                            logical_channel: LogicalChannel::SchHd,
                             mac_block: buf1,
                             scrambling_code: self.scrambling_code,
                         }
                     }
                     1 => {
-                        // Full-slot Null pdu
+                        // Full-slot Null PDU
                         let mut buf = BitBuffer::new(SCH_F_CAP);
                         let blk = MacResource::null_pdu();
                         blk.to_bitbuf(&mut buf);
