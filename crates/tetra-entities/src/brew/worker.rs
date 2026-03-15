@@ -1,6 +1,6 @@
 //! Brew WebSocket worker thread handling HTTP Digest Auth, TLS, and bidirectional Brew message exchange
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
@@ -60,6 +60,12 @@ pub enum BrewEvent {
     /// SDS report received
     SdsReport { uuid: Uuid, status: u8 },
 
+    /// Subscriber profile response received for an SDS routing query
+    SubscriberProfiles {
+        queried_issis: Vec<u32>,
+        profiles: HashMap<u32, BrewSubscriberProfile>,
+    },
+
     /// Error from server
     ServerError { error_type: u8, data: Vec<u8> },
 }
@@ -105,6 +111,9 @@ pub enum BrewCommand {
 
     /// Send SDS report to Brew (delivery acknowledgement)
     SendSdsReport { uuid: Uuid, status: u8 },
+
+    /// Query Brew for external subscriber presence before routing SDS
+    QuerySubscribers { issis: Vec<u32> },
 
     /// Disconnect gracefully
     Disconnect,
@@ -274,6 +283,8 @@ pub struct BrewWorker {
     subscriber_groups: HashMap<u32, HashSet<u32>>,
     /// Pending SDS transfers keyed by UUID, awaiting matching SDS_TRANSFER frame
     pending_sds: HashMap<Uuid, PendingSds>,
+    /// Outstanding subscriber presence queries awaiting a type-2 service response
+    pending_subscriber_queries: VecDeque<Vec<u32>>,
 }
 
 impl BrewWorker {
@@ -286,6 +297,7 @@ impl BrewWorker {
             command_receiver,
             subscriber_groups: HashMap::new(),
             pending_sds: HashMap::new(),
+            pending_subscriber_queries: VecDeque::new(),
         }
     }
 
@@ -742,6 +754,20 @@ impl BrewWorker {
                             tracing::debug!("BrewWorker: sent SDS_REPORT uuid={} status={}", uuid, status);
                         }
                     }
+                    BrewCommand::QuerySubscribers { issis } => {
+                        if !brew::feature_sds_enabled(&self.config) {
+                            tracing::warn!("BrewWorker: ignoring QuerySubscribers command because SDS over Brew is disabled in config");
+                            continue;
+                        }
+
+                        let msg = build_query_subscribers(&issis);
+                        if let Err(e) = ws.send(Message::Binary(msg.into())) {
+                            tracing::error!("BrewWorker: failed to send subscriber query for {:?}: {}", issis, e);
+                        } else {
+                            tracing::debug!("BrewWorker: sent subscriber query for {:?}", issis);
+                            self.pending_subscriber_queries.push_back(issis);
+                        }
+                    }
                     BrewCommand::Disconnect => {
                         self.graceful_teardown(ws);
                         return Ok(());
@@ -775,11 +801,37 @@ impl BrewWorker {
                     });
                 }
                 BrewMessage::Service(svc) => {
-                    tracing::debug!("BrewWorker: service type={}: {}", svc.service_type, svc.json_data);
+                    self.handle_service(svc);
                 }
             },
             Err(e) => {
                 tracing::warn!("BrewWorker: failed to parse message ({} bytes): {}", data.len(), e);
+            }
+        }
+    }
+
+    fn handle_service(&mut self, svc: BrewServiceMessage) {
+        tracing::debug!("BrewWorker: service type={}: {}", svc.service_type, svc.json_data);
+
+        match svc.service_type {
+            2 => {
+                let Some(queried_issis) = self.pending_subscriber_queries.pop_front() else {
+                    tracing::warn!("BrewWorker: unsolicited subscriber profile response: {}", svc.json_data);
+                    return;
+                };
+
+                let profiles = match parse_subscriber_profiles(&svc.json_data) {
+                    Ok(profiles) => profiles,
+                    Err(e) => {
+                        tracing::warn!("BrewWorker: failed to parse subscriber profile response: {}", e);
+                        HashMap::new()
+                    }
+                };
+
+                let _ = self.event_sender.send(BrewEvent::SubscriberProfiles { queried_issis, profiles });
+            }
+            other => {
+                tracing::debug!("BrewWorker: unhandled service type {}", other);
             }
         }
     }
@@ -917,5 +969,114 @@ impl BrewWorker {
                 tracing::debug!("BrewWorker: unhandled frame type {} uuid={}", ft, frame.identifier);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossbeam_channel::unbounded;
+    use tetra_config::bluestation::{
+        CfgBrew, CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, SharedConfig, StackConfig, StackMode, StackState,
+    };
+    use tetra_core::ranges::SortedDisjointSsiRanges;
+
+    use super::*;
+
+    fn test_config() -> SharedConfig {
+        SharedConfig::from_parts(
+            StackConfig {
+                stack_mode: StackMode::Bs,
+                debug_log: None,
+                phy_io: CfgPhyIo {
+                    backend: PhyBackend::None,
+                    dl_tx_file: None,
+                    ul_rx_file: None,
+                    ul_input_file: None,
+                    dl_input_file: None,
+                    soapysdr: None,
+                },
+                net: CfgNetInfo { mcc: 204, mnc: 1337 },
+                cell: CfgCellInfo {
+                    colour_code: 1,
+                    location_area: 2,
+                    main_carrier: 1521,
+                    freq_band: 4,
+                    freq_offset_hz: 0,
+                    duplex_spacing_id: 4,
+                    custom_duplex_spacing: None,
+                    reverse_operation: false,
+                    neighbor_cell_broadcast: 0,
+                    late_entry_supported: false,
+                    subscriber_class: 65535,
+                    registration: true,
+                    deregistration: true,
+                    priority_cell: false,
+                    no_minimum_mode: false,
+                    migration: false,
+                    system_wide_services: true,
+                    voice_service: true,
+                    circuit_mode_data_service: false,
+                    sndcp_service: false,
+                    aie_service: false,
+                    advanced_link: false,
+                    system_code: 3,
+                    sharing_mode: 0,
+                    ts_reserved_frames: 0,
+                    u_plane_dtx: false,
+                    frame_18_ext: false,
+                    local_ssi_ranges: SortedDisjointSsiRanges::from_vec_ssirange(vec![]),
+                },
+                brew: Some(CfgBrew {
+                    host: "test.local".into(),
+                    port: 3000,
+                    tls: false,
+                    username: None,
+                    password: None,
+                    reconnect_delay: Duration::from_secs(1),
+                    jitter_initial_latency_frames: 0,
+                    feature_sds_enabled: true,
+                    whitelisted_ssis: None,
+                }),
+            },
+            StackState::default(),
+        )
+    }
+
+    #[test]
+    fn test_handle_service_subscriber_profiles_uses_pending_query_context() {
+        let (event_sender, event_receiver) = unbounded();
+        let (_command_sender, command_receiver) = unbounded();
+        let mut worker = BrewWorker::new(test_config(), event_sender, command_receiver);
+        worker.pending_subscriber_queries.push_back(vec![1_234_567]);
+
+        worker.handle_service(BrewServiceMessage {
+            service_type: 2,
+            json_data: r#"{"1234567":{"status":1}}"#.into(),
+        });
+
+        let BrewEvent::SubscriberProfiles { queried_issis, profiles } = event_receiver.try_recv().unwrap() else {
+            panic!("expected subscriber profile event");
+        };
+        assert_eq!(queried_issis, vec![1_234_567]);
+        assert_eq!(profiles.get(&1_234_567).and_then(|profile| profile.status), Some(1));
+    }
+
+    #[test]
+    fn test_handle_service_invalid_profiles_yields_empty_profile_map() {
+        let (event_sender, event_receiver) = unbounded();
+        let (_command_sender, command_receiver) = unbounded();
+        let mut worker = BrewWorker::new(test_config(), event_sender, command_receiver);
+        worker.pending_subscriber_queries.push_back(vec![1_234_567]);
+
+        worker.handle_service(BrewServiceMessage {
+            service_type: 2,
+            json_data: r#"{"not-an-issi":{"status":1}}"#.into(),
+        });
+
+        let BrewEvent::SubscriberProfiles { queried_issis, profiles } = event_receiver.try_recv().unwrap() else {
+            panic!("expected subscriber profile event");
+        };
+        assert_eq!(queried_issis, vec![1_234_567]);
+        assert!(profiles.is_empty());
     }
 }

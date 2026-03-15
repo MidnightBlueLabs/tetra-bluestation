@@ -62,10 +62,3 @@ pub fn is_brew_issi_routable(config: &SharedConfig, issi: u32) -> bool {
         true
     }
 }
-
-/// Check if an ISSI is a known TetraPack service destination for SDS.
-/// FIXME: move to config-based whitelist instead of hardcoding
-pub fn is_tetrapack_sds_service_issi(config: &SharedConfig, issi: u32) -> bool {
-    const TETRAPACK_SERVICE_ISSI: &[u32] = &[200999, 262993];
-    is_tetrapack(config) && TETRAPACK_SERVICE_ISSI.contains(&issi)
-}

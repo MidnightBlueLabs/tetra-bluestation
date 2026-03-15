@@ -33,6 +33,8 @@ const BREW_EXPECTED_FRAME_INTERVAL_US: f64 = 56_667.0;
 const BREW_JITTER_WARN_TARGET_FRAMES: usize = 8;
 /// Rate-limit warning logs per call.
 const BREW_JITTER_WARN_INTERVAL: Duration = Duration::from_secs(5);
+/// Maximum time to wait for Brew subscriber presence before dropping queued SDS.
+const SDS_ROUTE_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ─── Active call tracking ─────────────────────────────────────────
 
@@ -96,6 +98,12 @@ struct JitterFrame {
     rx_seq: u64,
     rx_at: Instant,
     acelp_data: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct PendingSdsQuery {
+    requested_at: Instant,
+    messages: Vec<CmceSdsData>,
 }
 
 #[derive(Debug, Default)]
@@ -254,6 +262,9 @@ pub struct BrewEntity {
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
 
+    /// Pending SDS messages awaiting Brew subscriber profile lookup, keyed by destination ISSI
+    pending_sds_queries: HashMap<u32, PendingSdsQuery>,
+
     /// Whether the worker is connected
     connected: bool,
 
@@ -294,6 +305,7 @@ impl BrewEntity {
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
             subscriber_groups: HashMap::new(),
+            pending_sds_queries: HashMap::new(),
             connected: false,
             worker_handle: Some(handle),
         }
@@ -312,6 +324,13 @@ impl BrewEntity {
                 BrewEvent::Disconnected(reason) => {
                     tracing::debug!("BrewEntity: disconnected: {}", reason); // Already warned in worker
                     self.set_network_connected(false);
+                    if !self.pending_sds_queries.is_empty() {
+                        tracing::warn!(
+                            "BrewEntity: dropping {} pending SDS presence queries after disconnect",
+                            self.pending_sds_queries.len()
+                        );
+                        self.pending_sds_queries.clear();
+                    }
                     // Release all active calls
                     self.release_all_calls(queue);
                 }
@@ -345,6 +364,9 @@ impl BrewEntity {
                 }
                 BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
                     tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
+                }
+                BrewEvent::SubscriberProfiles { queried_issis, profiles } => {
+                    self.handle_subscriber_profiles(queried_issis, profiles);
                 }
                 BrewEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
@@ -809,6 +831,7 @@ impl TetraEntityTrait for BrewEntity {
         self.dltime = ts;
         // Process all pending events from the worker thread
         self.process_events(queue);
+        self.expire_pending_sds_queries();
         // Feed one buffered frame at each traffic playout opportunity.
         self.drain_jitter_playout(queue);
         // Expire hanging calls that have exceeded hangtime
@@ -1108,7 +1131,7 @@ impl BrewEntity {
     }
 
     /// Handle outgoing SDS from CMCE → Brew (local MS → network)
-    fn handle_sds_send(&self, sds: CmceSdsData) {
+    fn handle_sds_send(&mut self, sds: CmceSdsData) {
         if !self.connected {
             tracing::warn!(
                 "BrewEntity: not connected, dropping outgoing SDS {} -> {}",
@@ -1118,6 +1141,61 @@ impl BrewEntity {
             return;
         }
 
+        if let Some(pending) = self.pending_sds_queries.get_mut(&sds.dest_issi) {
+            pending.messages.push(sds);
+            return;
+        }
+
+        let dest_issi = sds.dest_issi;
+        if let Err(e) = self.command_sender.send(BrewCommand::QuerySubscribers { issis: vec![dest_issi] }) {
+            tracing::warn!("BrewEntity: failed to request Brew subscriber presence for {}: {}", dest_issi, e);
+            return;
+        }
+
+        tracing::info!("BrewEntity: querying Brew subscriber presence for ISSI {}", dest_issi);
+        self.pending_sds_queries.insert(
+            dest_issi,
+            PendingSdsQuery {
+                requested_at: Instant::now(),
+                messages: vec![sds],
+            },
+        );
+    }
+
+    fn handle_subscriber_profiles(&mut self, queried_issis: Vec<u32>, profiles: HashMap<u32, super::protocol::BrewSubscriberProfile>) {
+        for issi in queried_issis {
+            let Some(pending) = self.pending_sds_queries.remove(&issi) else {
+                tracing::debug!("BrewEntity: subscriber profile response for ISSI {} without pending SDS", issi);
+                continue;
+            };
+
+            if profiles.get(&issi).and_then(|profile| profile.status) == Some(1) {
+                tracing::info!(
+                    "BrewEntity: Brew presence confirmed for ISSI {}, routing {} queued SDS message(s)",
+                    issi,
+                    pending.messages.len()
+                );
+                for sds in pending.messages {
+                    self.send_sds_to_brew(sds);
+                }
+            } else {
+                tracing::warn!("ISSI ({}) is not Routeable Locally or Externally, Dropping", issi);
+            }
+        }
+    }
+
+    fn expire_pending_sds_queries(&mut self) {
+        self.pending_sds_queries.retain(|issi, pending| {
+            if pending.requested_at.elapsed() >= SDS_ROUTE_QUERY_TIMEOUT {
+                tracing::warn!("ISSI ({}) is not Routeable Locally or Externally, Dropping", issi);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    fn send_sds_to_brew(&self, sds: CmceSdsData) {
         let uuid = Uuid::new_v4();
         tracing::info!(
             "BrewEntity: sending SDS uuid={} src={} dst={} type={} {} bits",
