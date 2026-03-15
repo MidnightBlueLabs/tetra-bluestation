@@ -120,53 +120,34 @@ impl Llc {
         });
     }
 
-    /// Process incoming ACK per ETSI 22.3.2.3(k).
-    /// Matches by SSI and N(R) so that retransmitted BL-DATA entries are matched correctly.
+    /// Process incoming ACK per ETSI 22.3.2.3(j).
+    /// The stack uses echo convention: the ACK N(R) equals the N(S) of the acknowledged PDU.
+    /// Scans all entries for the SSI to find an N(R) match, since multiple
+    /// outstanding entries may exist when stop-and-wait is violated.
     fn process_incoming_ack(&mut self, _tn: u8, addr: TetraAddress, n: u8) {
+        // Scan all entries for matching SSI and N(R)
         for i in 0..self.expected_in_acks.len() {
-            if self.expected_in_acks[i].addr.ssi != addr.ssi {
-                continue;
-            }
-
-            // SSI matches — check N(R)
-            if self.expected_in_acks[i].n == n {
-                // Successful ACK: N(R) matches N(S)
+            if self.expected_in_acks[i].addr.ssi == addr.ssi && self.expected_in_acks[i].n == n {
                 let ack = self.expected_in_acks.remove(i);
                 if let Some(tx_reporter) = ack.tx_reporter {
                     tx_reporter.mark_acknowledged();
                 }
                 return;
             }
+        }
 
-            // N(R) mismatch — per ETSI 22.3.2.3(k), not a successful ACK
+        // No N(R) match found
+        let has_ssi = self.expected_in_acks.iter().any(|e| e.addr.ssi == addr.ssi);
+        if !has_ssi {
             tracing::warn!(
-                "LLC: received unexpected ACK for SSI {}: N(R)={}, expected N(S)={}",
+                "LLC: received ACK for SSI {} with N(R)={}, but no outstanding ACK expected",
                 addr.ssi,
-                n,
-                self.expected_in_acks[i].n
+                n
             );
-
-            if self.expected_in_acks[i].retransmission_buf.is_some()
-                && u32::from(self.expected_in_acks[i].retransmit_count) < N252_BL_MAX_TLSDU_RETRANSMITS_ACKED
-            {
-                // Retransmissions remain — leave entry for timer-driven retry
-                return;
-            }
-
-            // No retransmission possible or exhausted — remove and fail
-            let ack = self.expected_in_acks.remove(i);
-            if let Some(tx_reporter) = ack.tx_reporter {
-                tx_reporter.mark_lost();
-            }
             return;
         }
 
-        // No expected entry matched this SSI at all
-        tracing::warn!(
-            "LLC: received ACK for SSI {} with N(R)={}, but no outstanding ACK expected",
-            addr.ssi,
-            n
-        );
+        tracing::warn!("LLC: received ACK for SSI {} with N(R)={}, no matching N(S) found", addr.ssi, n);
     }
 
     fn rx_tma_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
@@ -237,6 +218,15 @@ impl Llc {
             };
             queue.push_back(sapmsg);
             return;
+        }
+
+        // BL is stop-and-wait (window size 1, ETSI 22.2.1.1). Warn if we are
+        // about to send while an ACK is still outstanding for this SSI.
+        if self.expected_in_acks.iter().any(|e| e.addr.ssi == prim.main_address.ssi) {
+            tracing::warn!(
+                "LLC: sending BL-DATA for SSI {} while ACK still outstanding (window=1 violation)",
+                prim.main_address.ssi
+            );
         }
 
         // If an ack still needs to be sent, get the relevant expected sequence number
