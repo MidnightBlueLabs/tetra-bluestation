@@ -770,7 +770,7 @@ impl CcBsSubentity {
                 Self::signal_umac_circuit_close(queue, circuit, self.dltime);
             }
 
-            // Ensure UMAC clears any hangtime override for this slot even if the circuit close is delayed.
+            // Ensure UMAC clears hangtime even if the CMCE circuit was already closed above.
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -912,7 +912,6 @@ impl CcBsSubentity {
         queue.push_back(msg);
 
         // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
-        // This stops downlink TCH fill frames (zeros) and enables UL CommonAndAssigned so MS can request the floor.
         queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
