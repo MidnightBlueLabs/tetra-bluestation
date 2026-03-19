@@ -1,5 +1,8 @@
 //! Brew protocol binary message parsing and serialization (2-byte [kind, type] prefix, little-endian)
 
+use std::collections::HashMap;
+
+use serde::Deserialize;
 use uuid::Uuid;
 
 // ─── Message classes ───────────────────────────────────────────────
@@ -122,6 +125,20 @@ pub struct BrewErrorMessage {
 pub struct BrewServiceMessage {
     pub service_type: u8,
     pub json_data: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct BrewSubscriberProfile {
+    #[serde(default)]
+    pub call: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub status: Option<u8>,
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 // ─── Parsing ──────────────────────────────────────────────────────
@@ -506,6 +523,21 @@ pub fn build_query_subscribers(issis: &[u32]) -> Vec<u8> {
     buf
 }
 
+pub fn parse_subscriber_profiles(json_data: &str) -> Result<HashMap<u32, BrewSubscriberProfile>, String> {
+    let raw_profiles: HashMap<String, BrewSubscriberProfile> =
+        serde_json::from_str(json_data).map_err(|e| format!("invalid subscriber profile JSON: {}", e))?;
+
+    let mut profiles = HashMap::with_capacity(raw_profiles.len());
+    for (issi, profile) in raw_profiles {
+        let issi = issi
+            .parse::<u32>()
+            .map_err(|e| format!("invalid subscriber profile ISSI '{}': {}", issi, e))?;
+        profiles.insert(issi, profile);
+    }
+
+    Ok(profiles)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +693,36 @@ mod tests {
         } else {
             panic!("Expected Frame message");
         }
+    }
+
+    #[test]
+    fn test_build_query_subscribers_appends_null_terminator() {
+        let built = build_query_subscribers(&[1_234_567]);
+        assert_eq!(built[0], BREW_CLASS_SERVICE);
+        assert_eq!(built[1], 1);
+        assert_eq!(built.last().copied(), Some(0));
+    }
+
+    #[test]
+    fn test_parse_subscriber_profiles() {
+        let profiles = parse_subscriber_profiles(
+            r#"{
+                "1234567": {
+                    "call": "N0CALL",
+                    "text": "APRS text",
+                    "active": true,
+                    "status": 1,
+                    "date": "2025-03-10T00:00:00.000000Z"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let profile = profiles.get(&1_234_567).unwrap();
+        assert_eq!(profile.call.as_deref(), Some("N0CALL"));
+        assert_eq!(profile.text.as_deref(), Some("APRS text"));
+        assert_eq!(profile.active, Some(true));
+        assert_eq!(profile.status, Some(1));
+        assert_eq!(profile.date.as_deref(), Some("2025-03-10T00:00:00.000000Z"));
     }
 }
