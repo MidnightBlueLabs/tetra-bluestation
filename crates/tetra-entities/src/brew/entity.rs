@@ -33,8 +33,6 @@ const BREW_EXPECTED_FRAME_INTERVAL_US: f64 = 56_667.0;
 const BREW_JITTER_WARN_TARGET_FRAMES: usize = 8;
 /// Rate-limit warning logs per call.
 const BREW_JITTER_WARN_INTERVAL: Duration = Duration::from_secs(5);
-/// Maximum time to wait for Brew subscriber presence before dropping queued SDS.
-const SDS_ROUTE_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ─── Active call tracking ─────────────────────────────────────────
 
@@ -1186,7 +1184,7 @@ impl BrewEntity {
 
     fn expire_pending_sds_queries(&mut self) {
         self.pending_sds_queries.retain(|issi, pending| {
-            if pending.requested_at.elapsed() >= SDS_ROUTE_QUERY_TIMEOUT {
+            if pending.requested_at.elapsed() >= HEARTBEAT_TIMEOUT {
                 tracing::warn!("ISSI ({}) is not Routeable Locally or Externally, Dropping", issi);
                 false
             } else {
