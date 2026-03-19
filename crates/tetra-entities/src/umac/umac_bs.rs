@@ -129,10 +129,10 @@ impl UmacBs {
             duplex_spacing: c.cell.duplex_spacing_id,
             reverse_operation: c.cell.reverse_operation,
             num_of_csch: 0, // Common secondary control channels
-            ms_txpwr_max_cell: 5,
-            rxlev_access_min: 3,
-            access_parameter: 7,
-            radio_dl_timeout: 3,
+            ms_txpwr_max_cell: c.cell.ms_txpwr_max_cell,
+            rxlev_access_min: 3, // -110 dBm (permissive, suitable for single-cell)
+            access_parameter: 7, // -39 dBm (MS open-loop power control setpoint)
+            radio_dl_timeout: 3, // 432 timeslots (~6s radio link timeout)
             cck_id: None,
             hyperframe_number: Some(0), // Updated dynamically in scheduler
             option_field: SysinfoOptFieldFlag::DefaultDefForAccCodeA,

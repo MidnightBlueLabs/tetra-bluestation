@@ -8,6 +8,7 @@ use crate::mm::enums::energy_saving_mode::EnergySavingMode;
 use crate::mm::enums::location_update_type::LocationUpdateType;
 use crate::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
 use crate::mm::enums::type34_elem_id_ul::MmType34ElemIdUl;
+use crate::mm::fields::class_of_ms::ClassOfMs;
 use crate::mm::fields::group_identity_location_demand::GroupIdentityLocationDemand;
 
 /// Representation of the U-LOCATION UPDATE DEMAND PDU (Clause 16.9.3.4).
@@ -28,7 +29,7 @@ pub struct ULocationUpdateDemand {
     /// Conditional 10 bits, Ciphering parameters
     pub ciphering_parameters: Option<u64>,
     /// Type2, 24 bits, See note 2,
-    pub class_of_ms: Option<u64>,
+    pub class_of_ms: Option<ClassOfMs>,
     /// Type2, 3 bits, Energy saving mode
     pub energy_saving_mode: Option<EnergySavingMode>,
     /// Type2, LA information
@@ -84,7 +85,7 @@ impl ULocationUpdateDemand {
         let mut obit = delimiters::read_obit(buffer)?;
 
         // Type2
-        let class_of_ms = typed::parse_type2_generic(obit, buffer, 24, "class_of_ms")?;
+        let class_of_ms = typed::parse_type2_struct(obit, buffer, ClassOfMs::from_bitbuf)?;
         // Type2
         let val = typed::parse_type2_generic(obit, buffer, 3, "energy_saving_mode")?;
         let energy_saving_mode = match val {
@@ -183,7 +184,7 @@ impl ULocationUpdateDemand {
         }
 
         // Type2
-        typed::write_type2_generic(obit, buffer, self.class_of_ms, 24);
+        typed::write_type2_struct(obit, buffer, &self.class_of_ms, ClassOfMs::to_bitbuf)?;
 
         // Type2
         typed::write_type2_generic(obit, buffer, self.energy_saving_mode.map(|esm| esm.into()), 3);

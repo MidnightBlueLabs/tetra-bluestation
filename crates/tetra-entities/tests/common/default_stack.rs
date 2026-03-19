@@ -64,6 +64,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         ts_reserved_frames: 0,
         u_plane_dtx: false,
         frame_18_ext: false,
+        ms_txpwr_max_cell: 4,
         local_ssi_ranges: SortedDisjointSsiRanges::from_vec_ssirange(vec![]),
         timezone: None,
     }
