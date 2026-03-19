@@ -100,6 +100,10 @@ pub struct CfgSoapySdr {
     pub dl_freq: f64,
     /// PPM frequency error correction
     pub ppm_err: f64,
+    /// Optional sample rate for BS mode (Hz)
+    pub fs_bs: Option<f64>,
+    /// Optional sample rate for monitor mode (Hz)
+    pub fs_monitor: Option<f64>,
     /// Hardware-specific I/O configuration
     pub io_cfg: SoapySdrIoCfg,
 }
@@ -125,6 +129,8 @@ pub struct SoapySdrDto {
     pub rx_freq: f64,
     pub tx_freq: f64,
     pub ppm_err: Option<f64>,
+    pub fs_bs: Option<f64>,
+    pub fs_monitor: Option<f64>,
 
     pub iocfg_usrpb2xx: Option<UsrpB2xxDto>,
     pub iocfg_limesdr: Option<LimeSdrDto>,

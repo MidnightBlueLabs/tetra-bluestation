@@ -107,6 +107,14 @@ impl SoapyIo {
         let hardware_key = dev.hardware_key().unwrap_or_default();
         let sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, &driver_key, &hardware_key, mode);
 
+        // Apply optional sample-rate overrides from the TOML config if provided
+        if let Some(fs) = soapy_cfg.fs_bs {
+            sdr_settings.fs_bs = fs;
+        }
+        if let Some(fs) = soapy_cfg.fs_monitor {
+            sdr_settings.fs_monitor = fs;
+        }
+
         tracing::info!(
             "Got driver key '{}' hardware_key '{}', using settings for {}",
             driver_key,
