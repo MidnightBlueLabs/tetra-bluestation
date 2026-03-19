@@ -59,39 +59,24 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 # tx_gain_dac = 9.0
 # tx_gain_mixer = 30.0
 
+# Sane defaults for Original Adalm Pluto and Pluto+
+# !!! See Wiki for full parameter breakdown and setup requirements.
+# [phy_io.soapysdr.iocfg_pluto]
+# rx_ant = "A_BALANCED"
+# tx_ant = "A"
+# rx_gain_pga = 20.0
+# tx_gain_pga = 89.0
+# uri = "ip:192.168.42.42"  # Pluto+ only, do not set for original Pluto. Other options: "usb:1.3.5", or hostname.
+# direct = true #Advanced driver parameter. Do not change unless really needed.
+# timestamp_every = 1500 #Advanced driver parameter. Do not change unless really needed.
+# loopback = false #Advanced driver parameter. Do not change unless really needed.
+
 # Sane defaults for Ettus USRP B210 (and probably B200)
 [phy_io.soapysdr.iocfg_usrpb2xx]
 rx_ant = "TX/RX"
 tx_ant = "TX/RX"
 rx_gain_pga = 50.0
 tx_gain_pga = 35.0
-
-# Sane defaults for Original Adalm Pluto and Pluto+
-# Don't use the low quality USB cables delivered with Pluto+!
-# Firmware with timestamping needed:
-#  https://github.com/pgreenland/plutosdr-fw/releases (Pluto)
-#  https://github.com/wahlm/plutosdr-fw-timestamp/releases (Pluto+)
-# and specific Soapy driver needed:
-#  https://github.com/pgreenland/SoapyPlutoSDR/tree/sdr_gadget_timestamping
-# Other Pluto "clones" are not supported!
-# [phy_io.soapysdr.iocfg_pluto]
-# rx_ant = "A_BALANCED"
-# tx_ant = "A"
-# rx_gain_pga = 20.0
-# tx_gain_pga = 89.0
-# optional "uri" to select connection used for Pluto+ (e.g. IP/ethernet),
-#  don't uncomment and use for Pluto!
-#  (check availability with "SoapySDRUtil --find")
-#  examples:
-# uri = "usb:1.3.5"
-# uri = "ip:pluto.local"
-# uri = "ip:plutoplus.your.domain"
-# uri = "ip:192.168.42.42"
-# configurable Soapy driver parameters with default values follow,
-#  don't uncomment and change values, unless you know what you are doing
-# direct = true
-# timestamp_every = 1500
-# loopback = false
 
 ###############################################################################
 
