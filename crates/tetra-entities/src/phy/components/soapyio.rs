@@ -61,9 +61,6 @@ macro_rules! soapycheck {
 
 impl SoapyIo {
     pub fn new(cfg: &SharedConfig) -> Result<Self, soapysdr::Error> {
-        let rx_ch = 0;
-        let tx_ch = 0;
-
         let binding = cfg.config();
         let soapy_cfg = binding
             .phy_io
@@ -71,11 +68,84 @@ impl SoapyIo {
             .as_ref()
             .expect("SoapySdr config must be set for SoapySdr PhyIo");
 
+        let mode = cfg.config().stack_mode;
+
+        // TODO: allow manual selection of a device using a list of device arguments.
+        // This would be useful for those with multiple supported devices connected.
+
+        // Enumerate devices and find the first supported device
+
+        let mut args_device_and_type: Option<(soapysdr::Args, soapysdr::Device, SupportedDevice)> = None;
+
+        for dev_args in soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate("")) {
+            // TODO: log dev_args here
+
+            // Copy dev_args in case they will be needed later for reopening the device.
+            // Annoyingly soapysdr::Args does not implement copy or clone,
+            // so we have to do it manually here.
+            let mut dev_args_copy = soapysdr::Args::new();
+            for (key, value) in dev_args.iter() {
+                dev_args_copy.set(key, value);
+            }
+
+            match soapysdr::Device::new(dev_args) {
+                Ok(dev) => {
+                    let driver_key = dev.driver_key().unwrap_or_default();
+                    let hardware_key = dev.hardware_key().unwrap_or_default();
+
+                    // Check whether the device is supported
+                    if let Some(detected_device) = SupportedDevice::detect(&driver_key, &hardware_key) {
+                        tracing::info!("Found supported device with driver_key '{}' hardware_key '{}'", driver_key, hardware_key);
+                        args_device_and_type = Some((dev_args_copy, dev, detected_device));
+                        // Stop when the first detected device has been found
+                        break;
+                    } else {
+                        tracing::info!("Skipping unsupported device with driver_key '{}' hardware_key '{}'", driver_key, hardware_key);
+                    }
+                },
+                Err(err) => {
+                    // Skip devices that cannot be opened
+                    tracing::info!("Skipping a SoapySDR device because opening failed: {}", err);
+                }
+            }
+        }
+
+        let (mut dev_args, mut dev, detected_device) = match args_device_and_type {
+            Some(d) => d,
+            None => {
+                return Err(soapysdr::Error {
+                    code: soapysdr::ErrorCode::Other,
+                    message: "No supported devices found".to_string(),
+                });
+            },
+        };
+
+        let sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode);
+
+        tracing::info!("Using settings: {:?}", sdr_settings);
+
+        // If additional driver arguments are needed, reopen the device with them
+        if sdr_settings.dev_args.len() > 0 {
+            // Append additional arguments from settings
+            for (key, value) in sdr_settings.dev_args {
+                dev_args.set(key, value);
+            }
+
+            tracing::info!("Reopening device with additional arguments");
+            // Make sure device gets closed first. Not sure if needed.
+            std::mem::drop(dev);
+            dev = soapycheck!("open SoapySDR device with additional arguments", soapysdr::Device::new(dev_args));
+        }
+
+
+        // These could be made a part of SdrSettings as well
+        let rx_ch = 0;
+        let tx_ch = 0;
+
         // Get PPM corrected freqs
         let (dl_corrected, _) = soapy_cfg.dl_freq_corrected();
         let (ul_corrected, _) = soapy_cfg.ul_freq_corrected();
 
-        let mode = cfg.config().stack_mode;
         let (rx_freq, tx_freq) = match mode {
             StackMode::Bs => (
                 Some(ul_corrected - SOAPY_FREQ_OFFSET), // Offset RX center frequency from carrier frequency
@@ -89,60 +159,6 @@ impl SoapyIo {
                 unimplemented!("Monitor mode not implemented yet");
             }
         };
-
-        let mut dev_args = soapysdr::Args::new();
-        // TODO: get rid of this part and automatically enumerate devices instead
-        dev_args.set("driver", soapy_cfg.io_cfg.get_soapy_driver_name());
-
-        let mut dev = soapycheck!("open SoapySDR device", soapysdr::Device::new(dev_args));
-
-        // Get default settings based on detected hardware
-        let driver_key = dev.driver_key().unwrap_or_default();
-        let hardware_key = dev.hardware_key().unwrap_or_default();
-
-        let detected_device = SupportedDevice::detect(&driver_key, &hardware_key);
-
-        let sdr_settings = if let Some(detected_device) = detected_device {
-            SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode)
-        } else {
-            tracing::info!(
-                "Unsupported device with driver_key '{}' hardware_key '{}'",
-                driver_key,
-                hardware_key,
-            );
-            return Err(soapysdr::Error {
-                code: soapysdr::ErrorCode::Other,
-                message: "Unsupported device".to_string(),
-            })
-        };
-
-        tracing::info!(
-            "Got driver_key '{}' hardware_key '{}', using settings for {}",
-            driver_key,
-            hardware_key,
-            sdr_settings.name,
-        );
-        tracing::info!("Using: {:?}", sdr_settings);
-
-        // If additional driver arguments are needed, reopen the device with them
-        if sdr_settings.dev_args.len() > 0 {
-            let mut dev_args = soapysdr::Args::new();
-
-            // Use the same device selection arguments as the first time.
-            // Looks like we need to create dev_args again,
-            // otherwise complation fails with "use of moved value".
-            dev_args.set("driver", soapy_cfg.io_cfg.get_soapy_driver_name());
-
-            // Append additional arguments from settings
-            for (key, value) in sdr_settings.dev_args {
-                dev_args.set(key, value);
-            }
-
-            tracing::info!("Reopening device with additional arguments");
-            // Make sure device gets closed first. Not sure if needed.
-            std::mem::drop(dev);
-            dev = soapycheck!("open SoapySDR device with additional arguments", soapysdr::Device::new(dev_args));
-        }
 
         let rx_enabled = rx_freq.is_some();
         let tx_enabled = tx_freq.is_some();

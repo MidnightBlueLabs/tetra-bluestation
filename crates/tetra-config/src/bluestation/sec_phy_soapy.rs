@@ -18,22 +18,6 @@ pub struct SoapySdrIoCfg {
     pub iocfg_pluto: Option<CfgPluto>,
 }
 
-impl SoapySdrIoCfg {
-    pub fn get_soapy_driver_name(&self) -> &'static str {
-        if self.iocfg_usrpb2xx.is_some() {
-            "uhd"
-        } else if self.iocfg_limesdr.is_some() {
-            "lime"
-        } else if self.iocfg_sxceiver.is_some() {
-            "sx"
-        } else if self.iocfg_pluto.is_some() {
-            "plutosdr"
-        } else {
-            "unknown"
-        }
-    }
-}
-
 impl Default for SoapySdrIoCfg {
     fn default() -> Self {
         Self {

@@ -30,18 +30,8 @@ tx_freq = 438025000
 rx_freq = 433025000
 ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tuning error
 
-# Sane defaults for LimeSDR
-# [phy_io.soapysdr.iocfg_limesdr]
-# rx_ant = "LNAL"
-# tx_ant = "BAND1"
-# rx_gain_lna = 18.0
-# rx_gain_tia = 6.0
-# rx_gain_pga = 10.0
-# tx_gain_pad = 22.0
-# tx_gain_iamp = 3.0
-
-# Sane defaults for LimeSDR Mini v2
-# [phy_io.soapysdr.iocfg_limesdr]
+# Sane defaults for various LimeSDR models
+[phy_io.soapysdr.iocfg_limesdr]
 # rx_ant = "LNAW"
 # tx_ant = "BAND2"
 # rx_gain_lna = 18.0
@@ -51,7 +41,7 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 # tx_gain_iamp = 3.0
 
 # Sane defaults for SXceiver
-# [phy_io.soapysdr.iocfg_sxceiver]
+[phy_io.soapysdr.iocfg_sxceiver]
 # rx_ant = "RX"
 # tx_ant = "TX"
 # rx_gain_lna = 42.0
@@ -61,7 +51,7 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 
 # Sane defaults for Original Adalm Pluto and Pluto+
 # !!! See Wiki for full parameter breakdown and setup requirements.
-# [phy_io.soapysdr.iocfg_pluto]
+[phy_io.soapysdr.iocfg_pluto]
 # rx_ant = "A_BALANCED"
 # tx_ant = "A"
 # rx_gain_pga = 20.0
@@ -73,10 +63,10 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 
 # Sane defaults for Ettus USRP B210 (and probably B200)
 [phy_io.soapysdr.iocfg_usrpb2xx]
-rx_ant = "TX/RX"
-tx_ant = "TX/RX"
-rx_gain_pga = 50.0
-tx_gain_pga = 35.0
+# rx_ant = "TX/RX"
+# tx_ant = "TX/RX"
+# rx_gain_pga = 50.0
+# tx_gain_pga = 35.0
 
 ###############################################################################
 
