@@ -142,10 +142,10 @@ impl SdrSettings {
             rx_gain: vec![
                 ("LNA".to_string(), cfg.rx_gain_lna.unwrap_or(18.0)),
                 ("TIA".to_string(), cfg.rx_gain_tia.unwrap_or(6.0)),
-                ("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(0.0)),
+                ("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(10.0)),
             ],
             tx_gain: vec![
-                ("PAD".to_string(), cfg.tx_gain_pad.unwrap_or(30.0)),
+                ("PAD".to_string(), cfg.tx_gain_pad.unwrap_or(22.0)),
                 ("IAMP".to_string(), cfg.tx_gain_iamp.unwrap_or(6.0)),
             ],
 
