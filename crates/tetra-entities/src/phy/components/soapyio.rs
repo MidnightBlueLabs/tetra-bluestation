@@ -5,8 +5,7 @@ use tetra_config::bluestation::StackMode;
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDevError;
 
 use super::dsp_types::*;
-use super::soapy_settings;
-use super::soapy_settings::SdrSettings;
+use super::soapy_settings::{SdrSettings, SupportedDevice};
 use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 
 type StreamType = ComplexSample;
@@ -91,31 +90,62 @@ impl SoapyIo {
             }
         };
 
-        let dev_args_str = soapy_settings::get_device_arguments(&soapy_cfg.io_cfg, mode);
-        tracing::info!("Using device arguments: {:?}", dev_args_str);
-
         let mut dev_args = soapysdr::Args::new();
-        for (key, value) in dev_args_str {
-            dev_args.set(key, value);
-        }
+        // TODO: get rid of this part and automatically enumerate devices instead
+        dev_args.set("driver", soapy_cfg.io_cfg.get_soapy_driver_name());
 
-        let dev = soapycheck!("open SoapySDR device", soapysdr::Device::new(dev_args));
-
-        let rx_enabled = rx_freq.is_some();
-        let tx_enabled = tx_freq.is_some();
+        let mut dev = soapycheck!("open SoapySDR device", soapysdr::Device::new(dev_args));
 
         // Get default settings based on detected hardware
         let driver_key = dev.driver_key().unwrap_or_default();
         let hardware_key = dev.hardware_key().unwrap_or_default();
-        let sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, &driver_key, &hardware_key, mode);
+
+        let detected_device = SupportedDevice::detect(&driver_key, &hardware_key);
+
+        let sdr_settings = if let Some(detected_device) = detected_device {
+            SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode)
+        } else {
+            tracing::info!(
+                "Unsupported device with driver_key '{}' hardware_key '{}'",
+                driver_key,
+                hardware_key,
+            );
+            return Err(soapysdr::Error {
+                code: soapysdr::ErrorCode::Other,
+                message: "Unsupported device".to_string(),
+            })
+        };
 
         tracing::info!(
-            "Got driver key '{}' hardware_key '{}', using settings for {}",
+            "Got driver_key '{}' hardware_key '{}', using settings for {}",
             driver_key,
             hardware_key,
             sdr_settings.name,
         );
         tracing::info!("Using: {:?}", sdr_settings);
+
+        // If additional driver arguments are needed, reopen the device with them
+        if sdr_settings.dev_args.len() > 0 {
+            let mut dev_args = soapysdr::Args::new();
+
+            // Use the same device selection arguments as the first time.
+            // Looks like we need to create dev_args again,
+            // otherwise complation fails with "use of moved value".
+            dev_args.set("driver", soapy_cfg.io_cfg.get_soapy_driver_name());
+
+            // Append additional arguments from settings
+            for (key, value) in sdr_settings.dev_args {
+                dev_args.set(key, value);
+            }
+
+            tracing::info!("Reopening device with additional arguments");
+            // Make sure device gets closed first. Not sure if needed.
+            std::mem::drop(dev);
+            dev = soapycheck!("open SoapySDR device with additional arguments", soapysdr::Device::new(dev_args));
+        }
+
+        let rx_enabled = rx_freq.is_some();
+        let tx_enabled = tx_freq.is_some();
 
         let mut rx_fs: f64 = 0.0;
         if rx_enabled {

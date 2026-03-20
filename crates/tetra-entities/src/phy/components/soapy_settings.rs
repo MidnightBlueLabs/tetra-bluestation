@@ -2,6 +2,75 @@
 
 use tetra_config::bluestation::{StackMode, sec_phy_soapy::*};
 
+
+/// Enum of all supported devices
+pub enum SupportedDevice {
+    LimeSdr(LimeSdrModel),
+    SXceiver,
+    PlutoSdr,
+    Usrp(UsrpModel),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LimeSdrModel {
+    LimeSdrUsb,
+    LimeSdrMiniV2,
+    LimeNetMicro,
+    /// Other LimeSDR models with FX3 driver
+    OtherFx3,
+    /// Other LimeSDR models with FT601 driver
+    OtherFt601,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UsrpModel {
+    B200,
+    B210,
+    Other,
+}
+
+impl SupportedDevice {
+    /// Detect an SDR device based on driver key and hardware key.
+    /// Return None if the device is not supported.
+    pub fn detect(driver_key: &str, hardware_key: &str) -> Option<Self> {
+        match (driver_key, hardware_key) {
+            ("FX3", "LimeSDR-USB") =>
+                Some(Self::LimeSdr(LimeSdrModel::LimeSdrUsb)),
+            ("FX3", _) =>
+                Some(Self::LimeSdr(LimeSdrModel::OtherFx3)),
+
+            ("FT601", "LimeSDR-Mini_v2") =>
+                Some(Self::LimeSdr(LimeSdrModel::LimeSdrMiniV2)),
+            ("FT601", "LimeNET-Micro") =>
+                Some(Self::LimeSdr(LimeSdrModel::LimeNetMicro)),
+            ("FT601", _) =>
+                Some(Self::LimeSdr(LimeSdrModel::OtherFt601)),
+
+            ("sx", _) =>
+                Some(Self::SXceiver),
+
+            ("PlutoSDR", _) =>
+                Some(Self::PlutoSdr),
+
+            // USRP B210 seems to report as ("b200", "B210"),
+            // but the driver key is also known to be "uhd" in some cases.
+            // The reason is unknown but might be due to
+            // gateware, firmware or driver version differences.
+            // Try to detect USRP correctly in all cases.
+            ("b200", "B200") | ("uhd", "B200") =>
+                Some(Self::Usrp(UsrpModel::B200)),
+            ("b200", "B210") | ("uhd", "B210") =>
+                Some(Self::Usrp(UsrpModel::B210)),
+            ("b200", _) | ("uhd", _) =>
+                Some(Self::Usrp(UsrpModel::Other)),
+            // TODO: add other USRP models if needed
+
+            _ => None,
+        }
+    }
+}
+
+
 #[derive(Clone, Debug)]
 pub struct SdrSettings {
     /// Settings template, holding which SDR is used
@@ -25,73 +94,26 @@ pub struct SdrSettings {
     pub rx_args: Vec<(String, String)>,
     /// Transmit stream arguments
     pub tx_args: Vec<(String, String)>,
-}
 
-/// Get device arguments based on IO configuration.
-///
-/// This is separate from SdrSettings because device arguments
-/// must be known before opening the device,
-/// whereas SdrSettings may depend on information
-/// that is obtained after the device has been opened.
-pub fn get_device_arguments(io_cfg: &SoapySdrIoCfg, _mode: StackMode) -> Vec<(String, String)> {
-    let mut args = Vec::<(String, String)>::new();
-
-    let driver = io_cfg.get_soapy_driver_name();
-    args.push(("driver".to_string(), driver.to_string()));
-
-    // Additional device arguments for devices that need them
-    match driver {
-        "plutosdr" => {
-            let cfg: &Option<CfgPluto> = &io_cfg.iocfg_pluto;
-            // If cfg is None, use default which sets all optional fields to None.
-            let cfg_pluto = if let Some(cfg) = cfg { &cfg } else { &CfgPluto::default() };
-
-            args.push((
-                "direct".to_string(),
-                cfg_pluto.direct.map_or("1", |v| if v { "1" } else { "0" }).to_string(),
-            ));
-            args.push(("timestamp_every".to_string(), cfg_pluto.timestamp_every.unwrap_or(1500).to_string()));
-            if let Some(ref uri) = cfg_pluto.uri {
-                args.push(("uri".to_string(), uri.to_string()));
-            }
-            if let Some(loopback) = cfg_pluto.loopback {
-                args.push(("loopback".to_string(), (if loopback { "1" } else { "0" }).to_string()));
-            }
-        }
-        _ => {}
-    }
-
-    args
+    /// Additional device arguments
+    pub dev_args: Vec<(String, String)>,
 }
 
 impl SdrSettings {
     /// Get settings based on SDR type
-    pub fn get_settings(io_cfg: &SoapySdrIoCfg, driver_key: &str, hardware_key: &str, mode: StackMode) -> Self {
-        match (driver_key, hardware_key) {
-            ("FX3", "LimeSDR-USB") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrUsb),
-            ("FX3", "LimeSDR-Mini_v2") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrMiniV2),
-            ("FX3", _) => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::OtherFx3),
+    pub fn get_settings(io_cfg: &SoapySdrIoCfg, device: SupportedDevice, mode: StackMode) -> Self {
+        match device {
+            SupportedDevice::LimeSdr(model) =>
+                Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, model),
 
-            // TODO: remove one of these once we know whether LimeSDR-Mini_v2 reports FX3 or FT601
-            ("FT601", "LimeSDR-Mini_v2") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrMiniV2),
-            ("FT601", "LimeNET-Micro") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeNetMicro),
-            ("FT601", _) => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::OtherFt601),
+            SupportedDevice::SXceiver =>
+                Self::settings_sxceiver(&io_cfg.iocfg_sxceiver, mode),
 
-            ("sx", _) => Self::settings_sxceiver(&io_cfg.iocfg_sxceiver, mode),
+            SupportedDevice::PlutoSdr =>
+                Self::settings_pluto(&io_cfg.iocfg_pluto, mode),
 
-            // USRP B210 seems to report as ("b200", "B210"),
-            // but the driver key is also known to be "uhd" in some cases.
-            // The reason is unknown but might be due to
-            // gateware, firmware or driver version differences.
-            // Try to detect USRP correctly in all cases.
-            ("b200", "B200") | ("uhd", "B200") => Self::settings_usrp(&io_cfg.iocfg_usrpb2xx, mode, UsrpModel::B200),
-            ("b200", "B210") | ("uhd", "B210") => Self::settings_usrp(&io_cfg.iocfg_usrpb2xx, mode, UsrpModel::B210),
-            ("b200", _) | ("uhd", _) => Self::settings_usrp(&io_cfg.iocfg_usrpb2xx, mode, UsrpModel::Other),
-            // TODO: add other USRP models if needed
-
-            ("PlutoSDR", _) => Self::settings_pluto(&io_cfg.iocfg_pluto, mode),
-
-            _ => Self::unknown(mode),
+            SupportedDevice::Usrp(model) =>
+                Self::settings_usrp(&io_cfg.iocfg_usrpb2xx, mode, model),
         }
     }
 
@@ -125,13 +147,7 @@ impl SdrSettings {
             tx_gain: vec![],
             rx_args: vec![],
             tx_args: vec![],
-        }
-    }
-
-    fn unknown(mode: StackMode) -> Self {
-        SdrSettings {
-            name: "Unknown SDR device".to_string(),
-            ..Self::default(mode)
+            dev_args: vec![],
         }
     }
 
@@ -261,28 +277,27 @@ impl SdrSettings {
             rx_args: vec![],
             tx_args: vec![],
 
+            dev_args: {
+                let mut args = Vec::<(String, String)>::new();
+                args.push((
+                    "direct".to_string(),
+                    cfg.direct.map_or("1", |v| if v { "1" } else { "0" }).to_string(),
+                ));
+                args.push(("timestamp_every".to_string(), cfg.timestamp_every.unwrap_or(1500).to_string()));
+                if let Some(ref uri) = cfg.uri {
+                    args.push(("uri".to_string(), uri.to_string()));
+                }
+                if let Some(loopback) = cfg.loopback {
+                    args.push(("loopback".to_string(), (if loopback { "1" } else { "0" }).to_string()));
+                }
+                args
+            },
+
             ..Self::default(mode)
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum LimeSdrModel {
-    LimeSdrUsb,
-    LimeSdrMiniV2,
-    LimeNetMicro,
-    /// Other LimeSDR models with FX3 driver
-    OtherFx3,
-    /// Other LimeSDR models with FT601 driver
-    OtherFt601,
-}
-
-#[derive(Debug, PartialEq)]
-enum UsrpModel {
-    B200,
-    B210,
-    Other,
-}
 
 /// Get processing block size in samples for a given sample rate.
 /// This can be used to optimize performance for some SDRs.
