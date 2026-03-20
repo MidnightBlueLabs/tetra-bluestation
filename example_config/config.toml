@@ -37,7 +37,7 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 # rx_gain_lna = 18.0
 # rx_gain_tia = 6.0
 # rx_gain_pga = 10.0
-# tx_gain_pad = 18.0
+# tx_gain_pad = 22.0
 # tx_gain_iamp = 3.0
 
 # Sane defaults for LimeSDR Mini v2
@@ -47,7 +47,7 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 # rx_gain_lna = 18.0
 # rx_gain_tia = 6.0
 # rx_gain_pga = 10.0
-# tx_gain_pad = 18.0
+# tx_gain_pad = 22.0
 # tx_gain_iamp = 3.0
 
 # Sane defaults for SXceiver
