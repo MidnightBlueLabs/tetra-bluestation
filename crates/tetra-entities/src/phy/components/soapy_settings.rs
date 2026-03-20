@@ -68,11 +68,21 @@ impl SdrSettings {
     /// Get settings based on SDR type
     pub fn get_settings(io_cfg: &SoapySdrIoCfg, driver_key: &str, hardware_key: &str, mode: StackMode) -> Self {
         match (driver_key, hardware_key) {
-            (_, "LimeSDR-USB") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSDRModel::LimeSdrUsb),
-            (_, "LimeSDR-Mini_v2") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSDRModel::LimeSdrMiniV2),
+            ("FX3", "LimeSDR-USB") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrUsb),
+            ("FX3", "LimeSDR-Mini_v2") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrMiniV2),
+            ("FX3", _) => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::OtherFx3),
+
+            // TODO: remove one of these once we know whether LimeSDR-Mini_v2 reports FX3 or FT601
+            ("FT601", "LimeSDR-Mini_v2") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeSdrMiniV2),
+            ("FT601", "LimeNET-Micro") => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::LimeNetMicro),
+            ("FT601", _) => Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, LimeSdrModel::OtherFt601),
 
             ("sx", _) => Self::settings_sxceiver(&io_cfg.iocfg_sxceiver),
 
+            // Is b200 actually reported as the driver in some cases?
+            // Or is it a mistake and could be removed from here?
+            // Or is b200 supposed to be the hardware key, like ("uhd", "b200")?
+            // Should we add similar logic as LimeSDR for different USRP models?
             ("uhd", _) | ("b200", _) => Self::settings_usrp_b2x0(&io_cfg.iocfg_usrpb2xx, mode),
 
             ("PlutoSDR", _) => Self::settings_pluto(&io_cfg.iocfg_pluto, mode),
@@ -95,20 +105,26 @@ impl SdrSettings {
         }
     }
 
-    fn settings_limesdr(cfg: &Option<CfgLimeSdr>, mode: StackMode, model: LimeSDRModel) -> Self {
+    fn settings_limesdr(cfg: &Option<CfgLimeSdr>, mode: StackMode, model: LimeSdrModel) -> Self {
         // If cfg is None, use default which sets all optional fields to None.
         let cfg = if let Some(cfg) = cfg { &cfg } else { &CfgLimeSdr::default() };
 
         SdrSettings {
-            name: format!("{:?}", model),
+            name: match model {
+                LimeSdrModel::LimeSdrUsb => "LimeSDR USB",
+                LimeSdrModel::LimeSdrMiniV2 => "LimeSDR Mini 2.0",
+                LimeSdrModel::LimeNetMicro => "LimeNET Micro",
+                LimeSdrModel::OtherFx3 => "Unknown LimeSDR model with FX3",
+                LimeSdrModel::OtherFt601 => "Unknown LimeSDR model with FT601",
+            }.to_string(),
             use_get_hardware_time: true,
             fs: if mode == StackMode::Mon { 16384e3 } else { 512e3 },
 
             rx_ant: Some(
                 cfg.rx_ant.clone().unwrap_or(
                     match model {
-                        LimeSDRModel::LimeSdrUsb => "LNAL",
-                        LimeSDRModel::LimeSdrMiniV2 => "LNAW",
+                        LimeSdrModel::LimeSdrUsb => "LNAL",
+                        _ => "LNAW",
                     }
                     .to_string(),
                 ),
@@ -116,8 +132,8 @@ impl SdrSettings {
             tx_ant: Some(
                 cfg.tx_ant.clone().unwrap_or(
                     match model {
-                        LimeSDRModel::LimeSdrUsb => "BAND1",
-                        LimeSDRModel::LimeSdrMiniV2 => "BAND2",
+                        LimeSdrModel::LimeSdrUsb => "BAND1",
+                        _ => "BAND2",
                     }
                     .to_string(),
                 ),
@@ -208,9 +224,14 @@ impl SdrSettings {
 }
 
 #[derive(Debug, PartialEq)]
-enum LimeSDRModel {
+enum LimeSdrModel {
     LimeSdrUsb,
     LimeSdrMiniV2,
+    LimeNetMicro,
+    /// Other LimeSDR models with FX3 driver
+    OtherFx3,
+    /// Other LimeSDR models with FT601 driver
+    OtherFt601,
 }
 
 /// Get processing block size in samples for a given sample rate.
