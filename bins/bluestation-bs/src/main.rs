@@ -7,6 +7,7 @@ use tetra_config::bluestation::{PhyBackend, SharedConfig, StackMode, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::brew::entity::BrewEntity;
+use tetra_entities::brew::new_websocket_transport;
 use tetra_entities::{
     cmce::cmce_bs::CmceBs,
     llc::llc_bs_ms::Llc,
@@ -62,8 +63,9 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> MessageRouter {
     router.register_entity(Box::new(cmce));
 
     // Register Brew entity if enabled
-    if cfg.config().brew.is_some() {
-        let brew_entity = BrewEntity::new(cfg.clone());
+    if let Some(ref brew_cfg) = cfg.config().brew {
+        let transport = new_websocket_transport(brew_cfg);
+        let brew_entity = BrewEntity::new(cfg.clone(), transport);
         router.register_entity(Box::new(brew_entity));
         eprintln!(" -> Brew/TetraPack integration enabled");
     }

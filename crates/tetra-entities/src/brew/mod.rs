@@ -1,4 +1,8 @@
-//! Brew protocol integration for TETRA group call bridging via TetraPack/BrandMeister WebSocket API
+//! Brew protocol integration for TETRA group call bridging via a pluggable network transport
+//!
+//! The transport (WebSocket, QUIC, TCP, …) is injected at construction time.
+//! See [`websocket_transport_config`] for the default WebSocket configuration
+//! used with TetraPack/BrandMeister.
 
 pub mod components;
 pub mod entity;
@@ -11,3 +15,32 @@ pub use components::brew_routable::is_active;
 pub use components::brew_routable::is_brew_gssi_routable;
 pub use components::brew_routable::is_brew_issi_routable;
 pub use components::brew_routable::is_tetrapack_sds_service_issi;
+
+use std::time::Duration;
+
+use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
+use tetra_config::bluestation::CfgBrew;
+
+/// Build a [`WebSocketTransportConfig`] from the Brew section of the stack config.
+///
+/// This wires the Brew-specific defaults (endpoint path `/brew/`, subprotocol `"brew"`,
+/// heartbeat intervals) into the generic WebSocket transport.
+pub fn websocket_transport_config(cfg: &CfgBrew) -> WebSocketTransportConfig {
+    WebSocketTransportConfig {
+        host: cfg.host.clone(),
+        port: cfg.port,
+        use_tls: cfg.tls,
+        username: cfg.username.clone(),
+        password: cfg.password.clone(),
+        endpoint_path: "/brew/".to_string(),
+        subprotocol: Some("brew".to_string()),
+        user_agent: format!("BlueStation/{}", tetra_core::STACK_VERSION),
+        heartbeat_interval: Duration::from_secs(30),
+        heartbeat_timeout: Duration::from_secs(10),
+    }
+}
+
+/// Create a [`WebSocketTransport`] configured for Brew from the stack config.
+pub fn new_websocket_transport(cfg: &CfgBrew) -> WebSocketTransport {
+    WebSocketTransport::new(websocket_transport_config(cfg))
+}

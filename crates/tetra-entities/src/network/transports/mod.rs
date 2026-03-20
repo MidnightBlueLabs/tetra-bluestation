@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub mod quic;
 pub mod tcp;
 pub mod udp;
+pub mod websocket;
 
 /// Network transport abstraction for Entity-to-network external communications
 ///
@@ -29,6 +30,14 @@ pub trait NetworkTransport: Send {
 
     /// Wait for a single response on the reliable channel (blocking with timeout)
     fn wait_for_response_reliable(&mut self) -> Result<NetworkMessage, NetworkError>;
+
+    /// Disconnect the transport gracefully
+    fn disconnect(&mut self) {}
+
+    /// Check if the transport is currently connected
+    fn is_connected(&self) -> bool {
+        true
+    }
 }
 
 /// Factory trait for creating transport instances

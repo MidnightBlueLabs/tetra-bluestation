@@ -1,4 +1,7 @@
-//! Brew protocol entity bridging TetraPack WebSocket to UMAC/MLE with hangtime-based circuit reuse
+//! Brew protocol entity bridging a remote network backend to UMAC/MLE with hangtime-based circuit reuse
+//!
+//! Transport-agnostic: the concrete transport (WebSocket, QUIC, TCP, …) is
+//! injected at construction time via [`BrewEntity::new`].
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
@@ -10,6 +13,7 @@ use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
 
 use crate::brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
+use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
@@ -116,18 +120,22 @@ pub struct BrewEntity {
 }
 
 impl BrewEntity {
-    pub fn new(config: SharedConfig) -> Self {
+    /// Create a new BrewEntity with the given transport.
+    ///
+    /// The transport is moved into a worker thread. Any [`NetworkTransport`]
+    /// implementation can be used (WebSocket, QUIC, TCP, …).
+    pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, transport: T) -> Self {
         // Create channels
         let (event_sender, event_receiver) = unbounded::<BrewEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
 
-        // Spawn worker thread
+        // Spawn worker thread with the provided transport
         let brew_config = config.config().as_ref().brew.clone().unwrap(); // Never fails
         let worker_config = config.clone();
         let handle = thread::Builder::new()
             .name("brew-worker".to_string())
             .spawn(move || {
-                let mut worker = BrewWorker::new(worker_config, event_sender, command_receiver);
+                let mut worker = BrewWorker::new(worker_config, event_sender, command_receiver, transport);
                 worker.run();
             })
             .expect("failed to spawn BrewWorker thread");
