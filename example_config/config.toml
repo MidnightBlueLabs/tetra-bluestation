@@ -29,44 +29,12 @@ backend = "SoapySdr"
 tx_freq = 438025000
 rx_freq = 433025000
 ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tuning error
-
-# Sane defaults for various LimeSDR models
-[phy_io.soapysdr.iocfg_limesdr]
-# rx_ant = "LNAW"
-# tx_ant = "BAND2"
-# rx_gain_lna = 18.0
-# rx_gain_tia = 6.0
-# rx_gain_pga = 10.0
-# tx_gain_pad = 22.0
-# tx_gain_iamp = 3.0
-
-# Sane defaults for SXceiver
-[phy_io.soapysdr.iocfg_sxceiver]
-# rx_ant = "RX"
-# tx_ant = "TX"
-# rx_gain_lna = 42.0
-# rx_gain_pga = 16.0
-# tx_gain_dac = 9.0
-# tx_gain_mixer = 30.0
-
-# Sane defaults for Original Adalm Pluto and Pluto+
-# !!! See Wiki for full parameter breakdown and setup requirements.
-[phy_io.soapysdr.iocfg_pluto]
-# rx_ant = "A_BALANCED"
-# tx_ant = "A"
-# rx_gain_pga = 20.0
-# tx_gain_pga = 89.0
-# uri = "ip:192.168.42.42"  # Pluto+ only, do not set for original Pluto. Other options: "usb:1.3.5", or hostname.
-# direct = true #Advanced driver parameter. Do not change unless really needed.
-# timestamp_every = 1500 #Advanced driver parameter. Do not change unless really needed.
-# loopback = false #Advanced driver parameter. Do not change unless really needed.
-
-# Sane defaults for Ettus USRP B210 (and probably B200)
-[phy_io.soapysdr.iocfg_usrpb2xx]
-# rx_ant = "TX/RX"
-# tx_ant = "TX/RX"
-# rx_gain_pga = 50.0
-# tx_gain_pga = 35.0
+# Optional device selection arguments,
+# useful in case multiple supported devices are connected
+device = "driver=lime"
+# test
+tx_ant = "BAND2"
+tx_gain_pad = 40.0
 
 ###############################################################################
 

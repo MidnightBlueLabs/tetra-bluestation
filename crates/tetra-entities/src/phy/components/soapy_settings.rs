@@ -100,20 +100,46 @@ pub struct SdrSettings {
 }
 
 impl SdrSettings {
-    /// Get settings based on SDR type
-    pub fn get_settings(io_cfg: &SoapySdrIoCfg, device: SupportedDevice, mode: StackMode) -> Self {
+    /// Get settings based on SDR type and SoapySDR configuration
+    pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
+        let mut settings = Self::get_defaults(device, mode);
+
+        // Override settings if specified in configuration
+        if let Some(ant) = &cfg.rx_ant {
+            settings.rx_ant = Some(ant.clone());
+        }
+        if let Some(ant) = &cfg.tx_ant {
+            settings.tx_ant = Some(ant.clone());
+        }
+        for (name, value) in settings.rx_gain.iter_mut() {
+            if let Some(gain) = cfg.rx_gains.get(&(*name.to_lowercase())) {
+                *value = *gain;
+            }
+        }
+        for (name, value) in settings.tx_gain.iter_mut() {
+            if let Some(gain) = cfg.tx_gains.get(&(*name.to_lowercase())) {
+                *value = *gain;
+            }
+        }
+        // TODO: check for extra gain fields in cfg
+
+        settings
+    }
+
+    /// Get default settings based on SDR type
+    fn get_defaults(device: SupportedDevice, mode: StackMode) -> Self {
         match device {
             SupportedDevice::LimeSdr(model) =>
-                Self::settings_limesdr(&io_cfg.iocfg_limesdr, mode, model),
+                Self::settings_limesdr(mode, model),
 
             SupportedDevice::SXceiver =>
-                Self::settings_sxceiver(&io_cfg.iocfg_sxceiver, mode),
+                Self::settings_sxceiver(mode),
 
             SupportedDevice::PlutoSdr =>
-                Self::settings_pluto(&io_cfg.iocfg_pluto, mode),
+                Self::settings_pluto(mode),
 
             SupportedDevice::Usrp(model) =>
-                Self::settings_usrp(&io_cfg.iocfg_usrpb2xx, mode, model),
+                Self::settings_usrp(mode, model),
         }
     }
 
@@ -124,7 +150,7 @@ impl SdrSettings {
     /// more fields are added to SdrSettings to handle some special cases.
     fn default(mode: StackMode) -> Self {
         Self {
-            name: "".to_string(), // should be always overridden
+            name: String::new(), // should be always overridden
 
             // With FCFB bin spacing of 500 Hz and overlap factor or 1/4,
             // FFT size becomes fs/500 and must be a multiple of 4.
@@ -151,11 +177,8 @@ impl SdrSettings {
         }
     }
 
-    fn settings_limesdr(cfg: &Option<CfgLimeSdr>, mode: StackMode, model: LimeSdrModel) -> Self {
-        // If cfg is None, use default which sets all optional fields to None.
-        let cfg = if let Some(cfg) = cfg { &cfg } else { &CfgLimeSdr::default() };
-
-        SdrSettings {
+    fn settings_limesdr(mode: StackMode, model: LimeSdrModel) -> Self {
+        Self {
             name: match model {
                 LimeSdrModel::LimeSdrUsb => "LimeSDR USB",
                 LimeSdrModel::LimeSdrMiniV2 => "LimeSDR Mini 2.0",
@@ -164,33 +187,24 @@ impl SdrSettings {
                 LimeSdrModel::OtherFt601 => "Unknown LimeSDR model with FT601",
             }.to_string(),
 
-            rx_ant: Some(
-                cfg.rx_ant.clone().unwrap_or(
-                    match model {
-                        LimeSdrModel::LimeSdrUsb => "LNAL",
-                        _ => "LNAW",
-                    }
-                    .to_string(),
-                ),
-            ),
-            tx_ant: Some(
-                cfg.tx_ant.clone().unwrap_or(
-                    match model {
-                        LimeSdrModel::LimeSdrUsb => "BAND1",
-                        _ => "BAND2",
-                    }
-                    .to_string(),
-                ),
-            ),
+            rx_ant: Some(match model {
+                LimeSdrModel::LimeSdrUsb => "LNAL",
+                _ => "LNAW",
+            }.to_string()),
+
+            tx_ant: Some(match model {
+                LimeSdrModel::LimeSdrUsb => "BAND1",
+                _ => "BAND2",
+            }.to_string()),
 
             rx_gain: vec![
-                ("LNA".to_string(), cfg.rx_gain_lna.unwrap_or(18.0)),
-                ("TIA".to_string(), cfg.rx_gain_tia.unwrap_or(6.0)),
-                ("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(10.0)),
+                ("LNA".to_string(), 18.0),
+                ("TIA".to_string(), 6.0),
+                ("PGA".to_string(), 10.0),
             ],
             tx_gain: vec![
-                ("PAD".to_string(), cfg.tx_gain_pad.unwrap_or(22.0)),
-                ("IAMP".to_string(), cfg.tx_gain_iamp.unwrap_or(6.0)),
+                ("PAD".to_string(), 22.0),
+                ("IAMP".to_string(), 6.0),
             ],
 
             // Minimum latency for BS/MS, maximum throughput for monitor
@@ -201,27 +215,24 @@ impl SdrSettings {
         }
     }
 
-    fn settings_sxceiver(cfg: &Option<CfgSxCeiver>, mode: StackMode) -> Self {
-        // If cfg is None, use default which sets all optional fields to None.
-        let cfg = if let Some(cfg) = cfg { &cfg } else { &CfgSxCeiver::default() };
-
+    fn settings_sxceiver(mode: StackMode) -> Self {
         // TODO: pass detected clock rate or list of supported sample rates
         // to get_settings and choose sample rate accordingly.
         let fs = 600e3;
-        SdrSettings {
+        Self {
             name: "SXceiver".to_string(),
             fs,
 
-            rx_ant: Some(cfg.rx_ant.clone().unwrap_or("RX".to_string())),
-            tx_ant: Some(cfg.tx_ant.clone().unwrap_or("TX".to_string())),
+            rx_ant: Some("RX".to_string()),
+            tx_ant: Some("TX".to_string()),
 
             rx_gain: vec![
-                ("LNA".to_string(), cfg.rx_gain_lna.unwrap_or(42.0)),
-                ("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(16.0)),
+                ("LNA".to_string(), 42.0),
+                ("PGA".to_string(), 16.0),
             ],
             tx_gain: vec![
-                ("DAC".to_string(), cfg.tx_gain_dac.unwrap_or(9.0)),
-                ("MIXER".to_string(), cfg.tx_gain_mixer.unwrap_or(30.0)),
+                ("DAC".to_string(), 9.0),
+                ("MIXER".to_string(), 30.0),
             ],
 
             rx_args: vec![("period".to_string(), block_size(fs).to_string())],
@@ -231,35 +242,26 @@ impl SdrSettings {
         }
     }
 
-    fn settings_usrp(cfg: &Option<CfgUsrpB2xx>, mode: StackMode, model: UsrpModel) -> Self {
-        // If cfg is None, use default which sets all optional fields to None.
-        let cfg = if let Some(cfg) = cfg { &cfg } else { &CfgUsrpB2xx::default() };
-
-        SdrSettings {
+    fn settings_usrp(mode: StackMode, model: UsrpModel) -> Self {
+        Self {
             name: match model {
                 UsrpModel::B200 => "USRP B200",
                 UsrpModel::B210 => "USRP B210",
                 UsrpModel::Other => "Unknown USRP model",
             }.to_string(),
 
-            rx_ant: Some(cfg.rx_ant.clone().unwrap_or("TX/RX".to_string())),
-            tx_ant: Some(cfg.tx_ant.clone().unwrap_or("TX/RX".to_string())),
+            rx_ant: Some("TX/RX".to_string()),
+            tx_ant: Some("TX/RX".to_string()),
 
-            rx_gain: vec![("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(50.0))],
-            tx_gain: vec![("PGA".to_string(), cfg.tx_gain_pga.unwrap_or(35.0))],
-
-            rx_args: vec![],
-            tx_args: vec![],
+            rx_gain: vec![("PGA".to_string(), 50.0)],
+            tx_gain: vec![("PGA".to_string(), 35.0)],
 
             ..Self::default(mode)
         }
     }
 
-    fn settings_pluto(cfg: &Option<CfgPluto>, mode: StackMode) -> Self {
-        // If cfg is None, use default which sets all optional fields to None.
-        let cfg = if let Some(cfg) = cfg { &cfg } else { &CfgPluto::default() };
-
-        SdrSettings {
+    fn settings_pluto(mode: StackMode) -> Self {
+        Self {
             name: "Pluto".to_string(),
             // get_hardware_time is apparently not implemented for pluto.
             use_get_hardware_time: false,
@@ -268,30 +270,17 @@ impl SdrSettings {
             // That would allow a power-of-two FFT size for lower CPU use.
             fs: 1e6,
 
-            rx_ant: Some(cfg.rx_ant.clone().unwrap_or("A_BALANCED".to_string())),
-            tx_ant: Some(cfg.tx_ant.clone().unwrap_or("A".to_string())),
+            rx_ant: Some("A_BALANCED".to_string()),
+            tx_ant: Some("A".to_string()),
 
-            rx_gain: vec![("PGA".to_string(), cfg.rx_gain_pga.unwrap_or(20.0))],
-            tx_gain: vec![("PGA".to_string(), cfg.tx_gain_pga.unwrap_or(89.0))],
+            rx_gain: vec![("PGA".to_string(), 20.0)],
+            tx_gain: vec![("PGA".to_string(), 89.0)],
 
-            rx_args: vec![],
-            tx_args: vec![],
-
-            dev_args: {
-                let mut args = Vec::<(String, String)>::new();
-                args.push((
-                    "direct".to_string(),
-                    cfg.direct.map_or("1", |v| if v { "1" } else { "0" }).to_string(),
-                ));
-                args.push(("timestamp_every".to_string(), cfg.timestamp_every.unwrap_or(1500).to_string()));
-                if let Some(ref uri) = cfg.uri {
-                    args.push(("uri".to_string(), uri.to_string()));
-                }
-                if let Some(loopback) = cfg.loopback {
-                    args.push(("loopback".to_string(), (if loopback { "1" } else { "0" }).to_string()));
-                }
-                args
-            },
+            dev_args: vec![
+                ("direct".to_string(), "1".to_string()),
+                ("timestamp_every".to_string(), "1500".to_string()),
+                ("loopback".to_string(), "0".to_string()),
+            ],
 
             ..Self::default(mode)
         }

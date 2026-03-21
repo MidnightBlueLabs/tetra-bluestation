@@ -32,11 +32,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
     if !root.phy_io.extra.is_empty() {
         return Err(format!("Unrecognized fields: phy_io::{:?}", sorted_keys(&root.phy_io.extra)).into());
     }
-    if let Some(ref soapy) = root.phy_io.soapysdr {
+    // TODO: check for extra fields properly
+    // now that it may contain RX and TX gains
+    /*if let Some(ref soapy) = root.phy_io.soapysdr {
         if !soapy.extra.is_empty() {
             return Err(format!("Unrecognized fields: phy_io.soapysdr::{:?}", sorted_keys(&soapy.extra)).into());
         }
-    }
+    }*/
     if !root.net_info.extra.is_empty() {
         return Err(format!("Unrecognized fields in net_info: {:?}", sorted_keys(&root.net_info.extra)).into());
     }

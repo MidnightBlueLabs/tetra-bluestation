@@ -79,7 +79,7 @@ impl SoapyIo {
         let mut args_device_and_type: Option<(soapysdr::Args, soapysdr::Device, SupportedDevice)> = None;
         let mut soapyremote_used = false;
 
-        for dev_args in soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate("")) {
+        for dev_args in soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate(soapy_cfg.device.as_str())) {
             let mut args_formatted: String = String::new();
             // Copy dev_args in case they will be needed later for reopening the device.
             // Annoyingly soapysdr::Args does not implement copy or clone,
@@ -133,7 +133,7 @@ impl SoapyIo {
             },
         };
 
-        let mut sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode);
+        let mut sdr_settings = SdrSettings::get_settings(&soapy_cfg, detected_device, mode);
         if soapyremote_used {
             // Getting hardware time may be too slow over SoapyRemote
             sdr_settings.use_get_hardware_time = false;
