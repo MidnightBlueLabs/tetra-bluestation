@@ -28,6 +28,7 @@ pub struct SoapyIo {
     /// so that sample counter startsB210 from 0 even if timestamp does not.
     initial_time: Option<i64>,
     rx_next_count: SampleCount,
+    prev_time_ns: i64,
 
     /// If false, timestamp of latest RX read is used to estimate
     /// current hardware time. This is used in case get_hardware_time
@@ -76,17 +77,29 @@ impl SoapyIo {
         // Enumerate devices and find the first supported device
 
         let mut args_device_and_type: Option<(soapysdr::Args, soapysdr::Device, SupportedDevice)> = None;
+        let mut soapyremote_used = false;
 
         for dev_args in soapycheck!("Enumerate SoapySDR devices", soapysdr::enumerate("")) {
-            // TODO: log dev_args here
-
+            let mut args_formatted: String = String::new();
             // Copy dev_args in case they will be needed later for reopening the device.
             // Annoyingly soapysdr::Args does not implement copy or clone,
             // so we have to do it manually here.
             let mut dev_args_copy = soapysdr::Args::new();
             for (key, value) in dev_args.iter() {
                 dev_args_copy.set(key, value);
+                if key == "driver" && value == "remote" {
+                    soapyremote_used = true;
+                }
+                // Format args for printing
+                if args_formatted.len() > 0 {
+                        args_formatted.push_str(",");
+                }
+                args_formatted.push_str(key);
+                args_formatted.push_str("=");
+                args_formatted.push_str(value);
             }
+
+            tracing::info!("Trying to open a device with arguments: {}", args_formatted);
 
             match soapysdr::Device::new(dev_args) {
                 Ok(dev) => {
@@ -120,7 +133,11 @@ impl SoapyIo {
             },
         };
 
-        let sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode);
+        let mut sdr_settings = SdrSettings::get_settings(&soapy_cfg.io_cfg, detected_device, mode);
+        if soapyremote_used {
+            // Getting hardware time may be too slow over SoapyRemote
+            sdr_settings.use_get_hardware_time = false;
+        }
 
         tracing::info!("Using settings: {:?}", sdr_settings);
 
@@ -253,11 +270,7 @@ impl SoapyIo {
             tx_fs,
             initial_time: None,
             rx_next_count: 0,
-            // TODO: if SoapyRemote support is added back,
-            // always set use_get_hardware_time to false when SoapyRemote is used.
-            // The setting was originally added to deal with unacceptably slow
-            // get_hardware_time over SoapyRemote but turns out it is needed
-            // for some SDR devices as well, so it now a part of sdr_settings.
+            prev_time_ns: -1,
             use_get_hardware_time: sdr_settings.use_get_hardware_time,
             dev,
             rx,
@@ -272,13 +285,26 @@ impl SoapyIo {
                 Ok(len) => {
                     // Get timestamp, set initial time if not yet set
                     let time = rx.time_ns();
-                    if self.initial_time.is_none() {
+                    // rust-soapysdr does not let us if a timestamp was available
+                    // so we have to guess by checking whether it has changed from its previous value.
+                    let timestamp_available = time != self.prev_time_ns;
+                    self.prev_time_ns = time;
+
+                    if self.initial_time.is_none() && timestamp_available {
                         self.initial_time = Some(time - ticks_to_time_ns(self.rx_next_count, self.rx_fs));
                         tracing::trace!("Set initial_time to {} ns", self.initial_time.unwrap());
                     };
 
                     // Re-compute total count from timestamp (gracefully handles lost samples).
-                    let mut count = time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs);
+                    let mut count = if timestamp_available {
+                        time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs)
+                    } else {
+                        // If timestamp was not available,
+                        // assume the read continues right after the previous read.
+                        // Some drivers, particularly SoapyRemote,
+                        // may provide a timestamp only in some of the reads.
+                        self.rx_next_count
+                    };
 
                     // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic
                     // This is known to happen for LimeSDR Mini v2 after some time
