@@ -2,11 +2,12 @@ mod common;
 
 use std::time::Duration;
 
-use tetra_config::bluestation::{CfgBrew, StackMode};
+use tetra_config::bluestation::{CfgBrew, CfgHomeModeDisplay, HomeModeDisplaySdsTextCodingScheme, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, debug};
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
+use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
 use tetra_pdus::cmce::pdus::u_sds_data::USdsData;
 use tetra_pdus::cmce::pdus::u_status::UStatus;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
@@ -72,6 +73,22 @@ fn count_brew_sds(msgs: &[SapMsg]) -> usize {
     msgs.iter()
         .filter(|m| m.dest == TetraEntity::Brew && matches!(&m.msg, SapMsgInner::CmceSdsData(_)))
         .count()
+}
+
+fn home_mode_cfg(
+    source_issi: u32,
+    interval_multiframes: u32,
+    protocol_id: u8,
+    text_coding_scheme: HomeModeDisplaySdsTextCodingScheme,
+    text: &str,
+) -> CfgHomeModeDisplay {
+    CfgHomeModeDisplay {
+        source_issi,
+        interval_multiframes,
+        protocol_id,
+        text_coding_scheme,
+        text: text.to_string(),
+    }
 }
 
 #[test]
@@ -245,6 +262,255 @@ fn test_sds_group_delivery() {
                 assert_eq!(prim.main_address.ssi_type, SsiType::Gssi);
             }
         }
+    }
+}
+
+#[test]
+fn test_periodic_home_mode_display_sds_broadcast() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.home_mode_display = Some(home_mode_cfg(
+        1000001,
+        2, // every 144 ticks (2 multiframes)
+        220,
+        HomeModeDisplaySdsTextCodingScheme::LATIN,
+        "HOME MODE",
+    ));
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    // Startup delay is hardcoded to 90 frames = 360 slots.
+    test.run_stack(Some(360));
+    let sink_msgs = test.dump_sinks();
+    let delayed_mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(delayed_mle_msgs.len(), 0, "Expected no Home Mode SDS before startup delay expires");
+
+    // First transmission at delay boundary.
+    test.run_stack(Some(1));
+    let sink_msgs = test.dump_sinks();
+    let mut mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(
+        mle_msgs.len(),
+        1,
+        "Expected first periodic D-SDS-DATA broadcast after startup delay"
+    );
+
+    // Second transmission after periodic interval (2 multiframes = 144 slots).
+    test.run_stack(Some(144));
+    let sink_msgs = test.dump_sinks();
+    let second_mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(second_mle_msgs.len(), 1, "Expected second periodic D-SDS-DATA broadcast");
+    mle_msgs.extend(second_mle_msgs);
+
+    let mut seen_msg_refs = Vec::new();
+    for msg in mle_msgs {
+        let SapMsgInner::LcmcMleUnitdataReq(ref prim) = msg.msg else {
+            panic!("Expected LcmcMleUnitdataReq");
+        };
+
+        assert_eq!(prim.main_address.ssi, 0x00FF_FFFF);
+        assert_eq!(prim.main_address.ssi_type, SsiType::Gssi);
+
+        let mut sdu = BitBuffer::from_bitbuffer(&prim.sdu);
+        let parsed = DSdsData::from_bitbuf(&mut sdu).expect("Failed to parse periodic D-SDS-DATA");
+        assert_eq!(parsed.calling_party_address_ssi, Some(1000001));
+        match parsed.user_defined_data {
+            SdsUserData::Type4(bits, data) => {
+                assert_eq!(bits, 104);
+                assert_eq!(data[0], 220); // Protocol identifier
+                assert_eq!(data[1], 0x00); // SDS-TRANSFER + no delivery report + short form recommended + no S/F info
+                seen_msg_refs.push(data[2]); // Message reference
+                assert_eq!(data[3], 1); // Text coding scheme: ISO-8859-1 8-bit alphabet
+                assert_eq!(&data[4..], b"HOME MODE");
+            }
+            other => panic!("Expected SDS Type4 payload, got {:?}", other),
+        }
+    }
+
+    seen_msg_refs.sort_unstable();
+    assert_eq!(seen_msg_refs, vec![0, 1], "Expected incrementing SDS-TL message references");
+}
+
+#[test]
+fn test_periodic_home_mode_display_sds_custom_protocol_id() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.home_mode_display = Some(home_mode_cfg(1000001, 18, 201, HomeModeDisplaySdsTextCodingScheme::LATIN, "HM"));
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    // 90-frame startup delay + 1 boundary tick for first send.
+    test.run_stack(Some(361));
+
+    let sink_msgs = test.dump_sinks();
+    let mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(mle_msgs.len(), 1, "Expected 1 periodic D-SDS-DATA broadcast");
+
+    let SapMsgInner::LcmcMleUnitdataReq(ref prim) = mle_msgs[0].msg else {
+        panic!("Expected LcmcMleUnitdataReq");
+    };
+
+    let mut sdu = BitBuffer::from_bitbuffer(&prim.sdu);
+    let parsed = DSdsData::from_bitbuf(&mut sdu).expect("Failed to parse periodic D-SDS-DATA");
+    match parsed.user_defined_data {
+        SdsUserData::Type4(bits, data) => {
+            assert_eq!(bits, 48);
+            assert_eq!(data[0], 201); // Configured protocol identifier
+            assert_eq!(data[1], 0x00); // SDS-TRANSFER + no delivery report
+            assert_eq!(data[2], 0); // First message reference
+            assert_eq!(data[3], 0x01); // Text coding scheme: ISO-8859-1
+            assert_eq!(&data[4..], b"HM");
+        }
+        other => panic!("Expected SDS Type4 payload, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_periodic_home_mode_display_sds_respects_startup_delay() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.home_mode_display = Some(home_mode_cfg(
+        1000001,
+        18,
+        220,
+        HomeModeDisplaySdsTextCodingScheme::LATIN,
+        "HOME MODE",
+    ));
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    // Startup delay is hardcoded to 90 frames = 360 slots.
+    // 360 ticks from startup still leaves elapsed age below 360 slots in this harness.
+    test.run_stack(Some(360));
+    let sink_msgs = test.dump_sinks();
+    let mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(mle_msgs.len(), 0, "Expected no Home Mode SDS before startup delay expires");
+
+    // Next tick crosses the delay threshold and should trigger first send.
+    test.run_stack(Some(1));
+    let sink_msgs = test.dump_sinks();
+    let mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(mle_msgs.len(), 1, "Expected first Home Mode SDS at startup delay boundary");
+}
+
+#[test]
+fn test_periodic_home_mode_display_sds_utf16be_encoding() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.home_mode_display = Some(home_mode_cfg(1000001, 18, 220, HomeModeDisplaySdsTextCodingScheme::UTF16, "Ā"));
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    test.run_stack(Some(361));
+
+    let sink_msgs = test.dump_sinks();
+    let mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(mle_msgs.len(), 1, "Expected 1 periodic D-SDS-DATA broadcast");
+
+    let SapMsgInner::LcmcMleUnitdataReq(ref prim) = mle_msgs[0].msg else {
+        panic!("Expected LcmcMleUnitdataReq");
+    };
+
+    let mut sdu = BitBuffer::from_bitbuffer(&prim.sdu);
+    let parsed = DSdsData::from_bitbuf(&mut sdu).expect("Failed to parse periodic D-SDS-DATA");
+    match parsed.user_defined_data {
+        SdsUserData::Type4(bits, data) => {
+            assert_eq!(bits, 48);
+            assert_eq!(data[0], 220); // Protocol identifier
+            assert_eq!(data[1], 0x00); // SDS-TRANSFER + no delivery report
+            assert_eq!(data[2], 0); // First message reference
+            assert_eq!(data[3], 0x1A); // Text coding scheme: UCS-2/UTF-16BE
+            assert_eq!(&data[4..], &[0x01, 0x00]); // "Ā" in UTF-16BE
+        }
+        other => panic!("Expected SDS Type4 payload, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_periodic_home_mode_display_sds_latin1_lossy_replacement() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.cell.home_mode_display = Some(home_mode_cfg(
+        1000001,
+        18,
+        220,
+        HomeModeDisplaySdsTextCodingScheme::LATIN,
+        "AĀB", // 'Ā' cannot be represented in Latin-1
+    ));
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    test.run_stack(Some(361));
+
+    let sink_msgs = test.dump_sinks();
+    let mle_msgs: Vec<_> = sink_msgs
+        .iter()
+        .filter(|m| m.dest == TetraEntity::Mle && matches!(&m.msg, SapMsgInner::LcmcMleUnitdataReq(_)))
+        .collect();
+    assert_eq!(mle_msgs.len(), 1, "Expected 1 periodic D-SDS-DATA broadcast");
+
+    let SapMsgInner::LcmcMleUnitdataReq(ref prim) = mle_msgs[0].msg else {
+        panic!("Expected LcmcMleUnitdataReq");
+    };
+
+    let mut sdu = BitBuffer::from_bitbuffer(&prim.sdu);
+    let parsed = DSdsData::from_bitbuf(&mut sdu).expect("Failed to parse periodic D-SDS-DATA");
+    match parsed.user_defined_data {
+        SdsUserData::Type4(bits, data) => {
+            assert_eq!(bits, 56);
+            assert_eq!(data[0], 220); // Protocol identifier
+            assert_eq!(data[1], 0x00); // SDS-TRANSFER + no delivery report
+            assert_eq!(data[2], 0); // First message reference
+            assert_eq!(data[3], 0x01); // Text coding scheme: ISO-8859-1
+            assert_eq!(&data[4..], b"A?B"); // unsupported chars are replaced with '?'
+        }
+        other => panic!("Expected SDS Type4 payload, got {:?}", other),
     }
 }
 

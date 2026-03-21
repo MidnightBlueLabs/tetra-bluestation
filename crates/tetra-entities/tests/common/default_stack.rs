@@ -66,6 +66,7 @@ pub fn default_cell_info(freq_info: FreqInfo) -> CfgCellInfo {
         frame_18_ext: false,
         local_ssi_ranges: SortedDisjointSsiRanges::from_vec_ssirange(vec![]),
         timezone: None,
+        home_mode_display: None,
     }
 }
 

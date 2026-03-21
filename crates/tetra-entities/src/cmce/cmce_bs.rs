@@ -85,6 +85,7 @@ impl TetraEntityTrait for CmceBs {
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
         // Propagate tick to subentities
         self.cc.tick_start(queue, ts);
+        self.sds.tick_start(queue, ts);
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
