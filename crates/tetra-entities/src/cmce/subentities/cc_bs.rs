@@ -656,6 +656,14 @@ impl CcBsSubentity {
             for task in tasks {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
+                        // Skip late-entry D-SETUP during hangtime. The traffic channel is still
+                        // allocated and sending D-SETUP with NotGranted can prevent floor requests.
+                        if let Some(active) = self.active_calls.get(&call_id) {
+                            if active.hangtime_start.is_some() {
+                                continue;
+                            }
+                        }
+
                         // Get our cached D-SETUP, build a prim and send it down the stack
                         let Some((pdu, dest_addr, receipt)) = self.cached_setups.get_mut(&call_id) else {
                             tracing::error!("No cached D-SETUP for call id {}", call_id);
