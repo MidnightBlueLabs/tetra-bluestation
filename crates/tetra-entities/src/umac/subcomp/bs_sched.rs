@@ -74,6 +74,11 @@ pub struct BsChannelScheduler {
     /// sending traffic-plane TCH blocks. Instead, transmit signalling-plane idle (Null PDUs)
     /// and signal UL usage as AssignedOnly so MS can request the floor.
     hangtime: [bool; 4],
+
+    /// Per-timeslot set of SSIs whose RandomAccessAck was dropped by dl_drop_all_except_stolen.
+    /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
+    /// acknowledge the random access per ETSI 21.4.3.1.
+    pending_ra_acks: [Vec<u32>; 4],
 }
 
 #[derive(Debug)]
@@ -119,6 +124,7 @@ impl BsChannelScheduler {
             ulsched: EMPTY_SCHED,
             circuits: CircuitMgr::new(),
             hangtime: [false, false, false, false],
+            pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         }
     }
 
@@ -421,6 +427,19 @@ impl BsChannelScheduler {
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
+    /// Consumes and returns true if a pending random access ack exists for the given SSI on
+    /// this timeslot. Used when building STCH blocks so the MAC-RESOURCE can carry
+    /// random_access_flag=true per ETSI 21.4.3.1.
+    pub fn take_pending_ra_ack(&mut self, ts: u8, ssi: u32) -> bool {
+        let pending = &mut self.pending_ra_acks[ts as usize - 1];
+        if let Some(pos) = pending.iter().position(|&s| s == ssi) {
+            pending.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Enqueue a pre-built STCH block for FACCH/stealing on a traffic timeslot.
     /// The block must be 124 type1 bits containing MAC-U-SIGNAL header + TM-SDU.
     pub fn dl_enqueue_stealing(&mut self, ts: u8, block: BitBuffer, tx_reporter: Option<TxReporter>) {
@@ -591,7 +610,13 @@ impl BsChannelScheduler {
                         // Fragger self-marks any unsent fragments as discarded when dropped, so we don't need to do anything here.
                     }
 
-                    DlSchedElem::RandomAccessAck(_) | DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {
+                    DlSchedElem::RandomAccessAck(addr) => {
+                        // Save the SSI so the next STCH for this address can carry
+                        // random_access_flag=true (ETSI 21.4.3.1)
+                        self.pending_ra_acks[timeslot as usize - 1].push(addr.ssi);
+                    }
+
+                    DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {
                         // Silently dropped as internal or not equipped with a tx_reporter
                     }
                     _ => unreachable!(),

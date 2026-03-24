@@ -1121,11 +1121,13 @@ impl UmacBs {
 
                 let usage_marker = prim.chan_alloc.as_ref().and_then(|ca| ca.usage);
                 // Per ETSI 21.4.3.1: "The random access flag shall be used for the BS to
-                // acknowledge a successful random access." Only ISSI-addressed FACCH
-                // stealings (e.g. individual D-TX GRANTED) are CC-level responses to a
-                // preceding MAC-ACCESS. GSSI-addressed (group D-TX GRANTED/CEASED) and
-                // plain SSI-addressed (LLC auto-acks) are not random access responses.
-                let is_random_access_response = prim.main_address.ssi_type == SsiType::Issi;
+                // acknowledge a successful random access so as to prevent the MS sending
+                // further random access requests."
+                // Set the flag if this address has a pending RA (dropped by
+                // dl_drop_all_except_stolen when leaving hangtime), or if the address
+                // is ISSI (direct CC-level response to a MAC-ACCESS).
+                let has_pending_ra = self.channel_scheduler.take_pending_ra_ack(ts, prim.main_address.ssi);
+                let is_random_access_response = has_pending_ra || prim.main_address.ssi_type == SsiType::Issi;
                 let mut mac_pdu = MacResource {
                     fill_bits: false,
                     pos_of_grant: 0,
