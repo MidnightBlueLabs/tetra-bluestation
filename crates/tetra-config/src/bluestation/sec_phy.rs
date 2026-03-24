@@ -50,7 +50,7 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
             ul_freq: soapy_dto.rx_freq,
             dl_freq: soapy_dto.tx_freq,
             ppm_err: soapy_dto.ppm_err.unwrap_or(0.0),
-            device: soapy_dto.device.unwrap_or(String::new()),
+            device: soapy_dto.device,
             rx_ant: soapy_dto.rx_ant,
             tx_ant: soapy_dto.tx_ant,
             rx_gains: soapy_dto.extra.iter().filter_map(|(key, value)| {

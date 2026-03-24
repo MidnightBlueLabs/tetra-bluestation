@@ -11,8 +11,9 @@ pub struct CfgSoapySdr {
     pub dl_freq: f64,
     /// PPM frequency error correction
     pub ppm_err: f64,
-    /// Argument string passed to enumerate to select a specific SDR device
-    pub device: String,
+    /// Argument string to select a specific SDR device.
+    /// If None, devices will be enumerated until the first supported device is found.
+    pub device: Option<String>,
     /// RX antenna. Device specific default will be used if None.
     pub rx_ant: Option<String>,
     /// TX antenna. Device specific default will be used if None.

@@ -29,12 +29,28 @@ backend = "SoapySdr"
 tx_freq = 438025000
 rx_freq = 433025000
 ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tuning error
-# Optional device selection arguments,
-# useful in case multiple supported devices are connected
-device = "driver=lime"
-# test
-tx_ant = "BAND2"
-tx_gain_pad = 40.0
+
+# Optional device selection arguments.
+# If not specified, the first supported device found is selected automatically.
+# You may need to specify this if you have multiple supported device connected,
+# or if your device cannot be automatically detected by enumeration.
+# For example, to use a Pluto+ with a given IP address:
+# device = "driver=plutosdr,uri=ip:192.168.42.42"
+# To select a LimeSDR with a given serial number (check with SoapySDRUtil --find):
+# device = "driver=lime,serial=123456789"
+
+# Optional antenna selection to override device-specific defaults
+# rx_ant = "LNAW"
+# tx_ant = "BAND2"
+
+# Optional gain values to override device-specific defaults.
+# For example, to increase transmit power on a LimeSDR:
+# tx_gain_pad = 50.0
+# To adjust LNA gain to optimize RX performance on a LimeSDR or SXceiver:
+# rx_gain_lna = 30.0
+
+# Antennas, gain names and ranges of gain values are device dependent.
+# To list them, try something like: SoapySDRUtil --probe=driver=lime
 
 ###############################################################################
 
