@@ -4,6 +4,7 @@ use tetra_config::bluestation::{SharedConfig, StackMode, sec_phy_soapy::CfgSoapy
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDevError;
 
 use super::dsp_types::*;
+use super::soapy_settings;
 use super::soapy_settings::{SdrSettings, SupportedDevice};
 use super::soapy_time::{ticks_to_time_ns, time_ns_to_ticks};
 
@@ -411,7 +412,13 @@ fn open_device(soapy_cfg: &CfgSoapySdr, mode: StackMode) -> Result<(soapysdr::De
         find_supported_device(soapysdr::Args::new())
     }?;
 
-    let mut sdr_settings = SdrSettings::get_settings(&soapy_cfg, opened_device.detected_device, mode);
+    let mut sdr_settings = match SdrSettings::get_settings(&soapy_cfg, opened_device.detected_device, mode) {
+        Ok(sdr_settings) => sdr_settings,
+        Err(soapy_settings::Error::InvalidConfiguration) => return Err(soapysdr::Error {
+            code: soapysdr::ErrorCode::Other,
+            message: "Invalid SDR device configuration".to_string(),
+        }),
+    };
 
     if opened_device.soapyremote_used {
         // Getting hardware time may be too slow over SoapyRemote

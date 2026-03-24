@@ -103,9 +103,13 @@ pub struct SdrSettings {
     pub dev_args: Vec<(String, String)>,
 }
 
+pub enum Error {
+    InvalidConfiguration,
+}
+
 impl SdrSettings {
     /// Get settings based on SDR type and SoapySDR configuration
-    pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
+    pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Result<Self, Error> {
         let mut settings = Self::get_defaults(cfg, device, mode);
 
         // Override settings if specified in configuration
@@ -132,7 +136,8 @@ impl SdrSettings {
             }
         }
         if !cfg_gains.is_empty() {
-            tracing::warn!("Unsupported RX gains for {}: {:?}", settings.name, cfg_gains)
+            tracing::error!("Unsupported RX gains for {}: {:?}", settings.name, cfg_gains);
+            return Err(Error::InvalidConfiguration)
         }
 
         let mut cfg_gains = cfg.tx_gains.clone();
@@ -142,12 +147,13 @@ impl SdrSettings {
             }
         }
         if !cfg_gains.is_empty() {
-            tracing::warn!("Unsupported TX gains for {}: {:?}", settings.name, cfg_gains)
+            tracing::error!("Unsupported TX gains for {}: {:?}", settings.name, cfg_gains);
+            return Err(Error::InvalidConfiguration)
         }
 
         // TODO: check for extra gain fields in cfg
 
-        settings
+        Ok(settings)
     }
 
     /// Get default settings based on SDR type
