@@ -81,6 +81,10 @@ pub struct SdrSettings {
     pub use_get_hardware_time: bool,
     /// Receive and transmit sample rate.
     pub fs: f64,
+    /// Receive channel number
+    pub rx_ch: usize,
+    /// Transmit channel number
+    pub tx_ch: usize,
     /// Receive antenna
     pub rx_ant: Option<String>,
     /// Transmit antenna
@@ -105,22 +109,42 @@ impl SdrSettings {
         let mut settings = Self::get_defaults(device, mode);
 
         // Override settings if specified in configuration
+        if let Some(fs) = cfg.fs {
+            settings.fs = fs;
+        }
+        if let Some(ch) = cfg.rx_ch {
+            settings.rx_ch = ch;
+        }
+        if let Some(ch) = cfg.tx_ch {
+            settings.tx_ch = ch;
+        }
         if let Some(ant) = &cfg.rx_ant {
             settings.rx_ant = Some(ant.clone());
         }
         if let Some(ant) = &cfg.tx_ant {
             settings.tx_ant = Some(ant.clone());
         }
+
+        let mut cfg_gains = cfg.rx_gains.clone();
         for (name, value) in settings.rx_gain.iter_mut() {
-            if let Some(gain) = cfg.rx_gains.get(&(*name.to_lowercase())) {
-                *value = *gain;
+            if let Some(gain) = cfg_gains.remove(&(*name.to_lowercase())) {
+                *value = gain;
             }
         }
+        if !cfg_gains.is_empty() {
+            tracing::warn!("Unsupported RX gains for {}: {:?}", settings.name, cfg_gains)
+        }
+
+        let mut cfg_gains = cfg.tx_gains.clone();
         for (name, value) in settings.tx_gain.iter_mut() {
-            if let Some(gain) = cfg.tx_gains.get(&(*name.to_lowercase())) {
-                *value = *gain;
+            if let Some(gain) = cfg_gains.remove(&(*name.to_lowercase())) {
+                *value = gain;
             }
         }
+        if !cfg_gains.is_empty() {
+            tracing::warn!("Unsupported TX gains for {}: {:?}", settings.name, cfg_gains)
+        }
+
         // TODO: check for extra gain fields in cfg
 
         settings
@@ -171,6 +195,8 @@ impl SdrSettings {
             tx_ant: None,
             rx_gain: vec![],
             tx_gain: vec![],
+            rx_ch: 0,
+            tx_ch: 0,
             rx_args: vec![],
             tx_args: vec![],
             dev_args: vec![],

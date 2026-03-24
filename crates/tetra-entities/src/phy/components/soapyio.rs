@@ -72,9 +72,8 @@ impl SoapyIo {
 
         let (dev, sdr_settings) = open_device(&soapy_cfg, mode)?;
 
-        // These could be made a part of SdrSettings as well
-        let rx_ch = 0;
-        let tx_ch = 0;
+        let rx_ch = sdr_settings.rx_ch;
+        let tx_ch = sdr_settings.tx_ch;
 
         // Get PPM corrected freqs
         let (dl_corrected, _) = soapy_cfg.dl_freq_corrected();

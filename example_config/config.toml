@@ -40,8 +40,8 @@ ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tu
 # device = "driver=lime,serial=123456789"
 
 # Optional antenna selection to override device-specific defaults
-# rx_ant = "LNAW"
-# tx_ant = "BAND2"
+# rx_antenna = "LNAW"
+# tx_antenna = "BAND2"
 
 # Optional gain values to override device-specific defaults.
 # For example, to increase transmit power on a LimeSDR:

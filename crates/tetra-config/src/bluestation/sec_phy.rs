@@ -51,8 +51,11 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
             dl_freq: soapy_dto.tx_freq,
             ppm_err: soapy_dto.ppm_err.unwrap_or(0.0),
             device: soapy_dto.device,
-            rx_ant: soapy_dto.rx_ant,
-            tx_ant: soapy_dto.tx_ant,
+            fs: soapy_dto.sample_rate,
+            rx_ch: soapy_dto.rx_channel,
+            tx_ch: soapy_dto.tx_channel,
+            rx_ant: soapy_dto.rx_antenna,
+            tx_ant: soapy_dto.tx_antenna,
             rx_gains: soapy_dto.extra.iter().filter_map(|(key, value)| {
                 key.strip_prefix("rx_gain_").map(|gain_name| {
                     (gain_name.to_string().to_lowercase(), match value {

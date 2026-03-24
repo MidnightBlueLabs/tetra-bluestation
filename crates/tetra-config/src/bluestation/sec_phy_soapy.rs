@@ -24,6 +24,12 @@ pub struct CfgSoapySdr {
     /// TX gain values.
     /// Device specific defaults will be used for gains that are not set.
     pub tx_gains: HashMap<String, f64>,
+    /// RX and TX sample rate. Device specific default will be used if None.
+    pub fs: Option<f64>,
+    /// RX channel number
+    pub rx_ch: Option<usize>,
+    /// TX channel number
+    pub tx_ch: Option<usize>,
 }
 
 impl CfgSoapySdr {
@@ -50,8 +56,12 @@ pub struct SoapySdrDto {
 
     pub device: Option<String>,
 
-    pub rx_ant: Option<String>,
-    pub tx_ant: Option<String>,
+    pub rx_antenna: Option<String>,
+    pub tx_antenna: Option<String>,
+
+    pub sample_rate: Option<f64>,
+    pub rx_channel: Option<usize>,
+    pub tx_channel: Option<usize>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
