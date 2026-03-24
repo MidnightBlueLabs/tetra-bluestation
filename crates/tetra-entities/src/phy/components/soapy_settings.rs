@@ -106,7 +106,7 @@ pub struct SdrSettings {
 impl SdrSettings {
     /// Get settings based on SDR type and SoapySDR configuration
     pub fn get_settings(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
-        let mut settings = Self::get_defaults(device, mode);
+        let mut settings = Self::get_defaults(cfg, device, mode);
 
         // Override settings if specified in configuration
         if let Some(fs) = cfg.fs {
@@ -151,13 +151,13 @@ impl SdrSettings {
     }
 
     /// Get default settings based on SDR type
-    fn get_defaults(device: SupportedDevice, mode: StackMode) -> Self {
+    fn get_defaults(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
         match device {
             SupportedDevice::LimeSdr(model) =>
                 Self::settings_limesdr(mode, model),
 
             SupportedDevice::SXceiver =>
-                Self::settings_sxceiver(mode),
+                Self::settings_sxceiver(mode, cfg.fs),
 
             SupportedDevice::PlutoSdr =>
                 Self::settings_pluto(mode),
@@ -241,10 +241,16 @@ impl SdrSettings {
         }
     }
 
-    fn settings_sxceiver(mode: StackMode) -> Self {
+    fn settings_sxceiver(mode: StackMode, fs_override: Option<f64>) -> Self {
         // TODO: pass detected clock rate or list of supported sample rates
         // to get_settings and choose sample rate accordingly.
-        let fs = 600e3;
+        // Ok, it is not strictly needed now that sample rate can be overridden.
+        // That added another minor issue, though:
+        // sample rate affects the optimal period size
+        // and override is applied after it is computed.
+        // OK, duplicate handle sample rate override here
+        // as an ugly little extra special case...
+        let fs = fs_override.unwrap_or(600e3);
         Self {
             name: "SXceiver".to_string(),
             fs,
