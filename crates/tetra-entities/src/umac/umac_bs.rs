@@ -1442,8 +1442,8 @@ impl UmacBs {
     /// for UL_INACTIVITY_TIMESLOTS on a timeslot with an active UL circuit (and not in
     /// hangtime), send UlInactivityTimeout to CMCE.
     fn check_ul_inactivity(&mut self, queue: &mut MessageQueue) {
-        // 18 multiframes × 18 frames × 4 timeslots = 1296 timeslots ≈ 18.36s
-        const UL_INACTIVITY_TIMESLOTS: i32 = 18 * 18 * 4;
+        // 3 multiframes ~ 3s. Above T.213 (1s) to tolerate DTX and brief RF fading.
+        const UL_INACTIVITY_TIMESLOTS: i32 = 3 * 18 * 4;
 
         for ts in 1..=4u8 {
             let idx = ts as usize - 1;
