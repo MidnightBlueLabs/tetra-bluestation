@@ -983,6 +983,18 @@ impl CcBsSubentity {
 
         tracing::info!("U-TX DEMAND: ISSI {} requests floor on call_id={}", requesting_party.ssi, call_id);
 
+        // ETSI 14.5.2.2.1 b): if another MS is already transmitting, the SwMI should
+        // normally wait for that party to finish before granting. Reject the request.
+        if call.tx_active {
+            tracing::warn!(
+                "U-TX DEMAND from ISSI {} rejected, ISSI {} already transmitting on call_id={}",
+                requesting_party.ssi,
+                call.source_issi,
+                call_id
+            );
+            return;
+        }
+
         // Grant the floor to the requesting MS
         let ts = call.ts;
         call.tx_active = true;
@@ -1220,9 +1232,26 @@ impl CcBsSubentity {
             return;
         }
 
-        // Check if there's an active call for this GSSI (speaker change scenario)
+        // Check if there is an active call for this GSSI (speaker change scenario)
         if let Some((call_id, call)) = self.active_calls.iter_mut().find(|(_, c)| c.dest_gssi == dest_gssi) {
-            // Speaker change during active or hangtime
+            // Reject speaker change if a local MS is already transmitting
+            if call.tx_active {
+                tracing::warn!(
+                    "CMCE: network speaker change rejected, ISSI {} already transmitting on gssi={}",
+                    call.source_issi,
+                    dest_gssi
+                );
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    dltime: self.dltime,
+                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                });
+                return;
+            }
+
+            // Speaker change during hangtime
             tracing::info!(
                 "CMCE: network call speaker change gssi={} new_speaker={} (was {})",
                 dest_gssi,
