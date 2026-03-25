@@ -1,6 +1,6 @@
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::Layer2Service;
-use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
 use tetra_pdus::cmce::enums::short_report_type::ShortReportType;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
@@ -14,17 +14,35 @@ use tetra_pdus::cmce::pdus::d_status::DStatus;
 use tetra_pdus::cmce::pdus::u_sds_data::USdsData;
 use tetra_pdus::cmce::pdus::u_status::UStatus;
 
+use super::home_mode_display::HomeModeDisplaySender;
 use crate::MessageQueue;
 use crate::brew;
 
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
     config: SharedConfig,
+    home_mode_display_sender: HomeModeDisplaySender,
 }
 
 impl SdsBsSubentity {
     pub fn new(config: SharedConfig) -> Self {
-        SdsBsSubentity { config }
+        SdsBsSubentity {
+            config,
+            home_mode_display_sender: HomeModeDisplaySender::new(),
+        }
+    }
+
+    pub fn tick_start(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) {
+        if let Some(home_mode_tx) = self.home_mode_display_sender.tick_start(&self.config, dltime) {
+            self.send_d_sds_data(
+                queue,
+                dltime,
+                home_mode_tx.source_issi,
+                home_mode_tx.dest_gssi,
+                SsiType::Gssi,
+                home_mode_tx.payload,
+            );
+        }
     }
 
     /// Handle incoming U-SDS-DATA from a local MS (via RF uplink)

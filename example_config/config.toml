@@ -98,6 +98,17 @@ colour_code = 1
 # Neighbor cell broadcast settings
 # neighbor_cell_broadcast = 0
 
+# Periodic Home Mode Display SDS broadcast
+# Enabled by adding this sub-config:
+#
+#[cell_info.home_mode_display]
+# source_issi = 16777215
+# interval_multiframes = 5
+# protocol_id = 220 # Default Protocol ID for Home Mode Display
+# text_coding_scheme = "LATIN" # ISO-8859-1 8-bit alphabet
+# text_coding_scheme = "UTF16" # UCS-2/UTF-16BE for Unicode text
+# text = "HOME MODE" # Base station callsign or any other identification/custom text
+
 # Cell load (Channel Allocation) - current load
 # cell_load_ca = 0
 
