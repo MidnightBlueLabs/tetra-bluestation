@@ -2,7 +2,7 @@ mod common;
 
 use tetra_config::bluestation::StackMode;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, debug};
+use tetra_core::{BitBuffer, Layer2Service, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, debug};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 use tetra_saps::tmv::{TmvUnitdataInd, enums::logical_chans::LogicalChannel};
@@ -145,7 +145,7 @@ fn test_out_fragmented_resource() {
             ssi_type: SsiType::Ssi,
             ssi: 30128,
         },
-        layer2service: 0,
+        layer2service: Layer2Service::Acknowledged,
         stealing_permission: false,
         stealing_repeats_flag: false,
         encryption_flag: false,

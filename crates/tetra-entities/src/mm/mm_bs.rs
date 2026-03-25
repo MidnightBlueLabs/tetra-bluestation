@@ -1,7 +1,7 @@
 use crate::{MessageQueue, TetraEntityTrait, brew};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
+use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
@@ -246,7 +246,7 @@ impl MmBs {
                 sdu,
                 handle: prim.handle,
                 address: addr,
-                layer2service: 0,
+                layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
                 encryption_flag: false,
@@ -313,7 +313,7 @@ impl MmBs {
                 prim.handle,
                 MmPduTypeUl::UMmStatus,
                 Some((6, pdu.status_uplink.into())),
-                prim.received_address.ssi,
+                prim.received_address,
                 message.dltime,
             );
             tracing::debug!("-> {}", debug_str);
@@ -421,7 +421,7 @@ impl MmBs {
                 sdu,
                 handle: prim.handle,
                 address: addr,
-                layer2service: 0,
+                layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
                 encryption_flag: false,
@@ -572,7 +572,7 @@ impl MmBs {
                 sdu,
                 handle,
                 address: addr,
-                layer2service: 0,
+                layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
                 encryption_flag: false,

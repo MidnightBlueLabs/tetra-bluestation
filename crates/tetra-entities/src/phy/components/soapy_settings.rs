@@ -217,7 +217,8 @@ impl SdrSettings {
                 LimeSdrModel::LimeNetMicro => "LimeNET Micro",
                 LimeSdrModel::OtherFx3 => "Unknown LimeSDR model with FX3",
                 LimeSdrModel::OtherFt601 => "Unknown LimeSDR model with FT601",
-            }.to_string(),
+            }
+            .to_string(),
 
             rx_ant: Some(match model {
                 LimeSdrModel::LimeSdrUsb => "LNAL",
@@ -286,7 +287,8 @@ impl SdrSettings {
                 UsrpModel::B200 => "USRP B200",
                 UsrpModel::B210 => "USRP B210",
                 UsrpModel::Other => "Unknown USRP model",
-            }.to_string(),
+            }
+            .to_string(),
 
             rx_ant: Some("TX/RX".to_string()),
             tx_ant: Some("TX/RX".to_string()),

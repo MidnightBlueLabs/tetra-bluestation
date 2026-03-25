@@ -504,7 +504,7 @@ impl SlotBurstFinder {
             self.train_errs = dist;
             self.burst_len = burst_len;
             self.train_type = train_type;
-            tracing::info!("Found {:?} at {} with {} errors", train_type, train_pos, dist);
+            tracing::debug!("Found {:?} at {} with {} errors", train_type, train_pos, dist);
             true
         } else {
             false

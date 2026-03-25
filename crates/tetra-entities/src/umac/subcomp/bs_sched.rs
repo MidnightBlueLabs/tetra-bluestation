@@ -72,12 +72,13 @@ pub struct BsChannelScheduler {
 
     /// When true, the given timeslot is in call hangtime: keep circuit allocated but stop
     /// sending traffic-plane TCH blocks. Instead, transmit signalling-plane idle (Null PDUs)
-    /// and signal UL usage as CommonAndAssigned so MS can request the floor.
+    /// and signal UL usage as AssignedOnly so MS can request the floor.
     hangtime: [bool; 4],
 
-    /// Guard frames after entering hangtime. While >0, we keep the slot in traffic mode to
-    /// allow any already-scheduled FACCH/stealing (e.g. D-TX CEASED) to go out reliably.
-    hangtime_guard: [u8; 4],
+    /// Per-timeslot set of SSIs whose RandomAccessAck was dropped by dl_drop_all_except_stolen.
+    /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
+    /// acknowledge the random access per ETSI 21.4.3.1.
+    pending_ra_acks: [Vec<u32>; 4],
 }
 
 #[derive(Debug)]
@@ -123,13 +124,11 @@ impl BsChannelScheduler {
             ulsched: EMPTY_SCHED,
             circuits: CircuitMgr::new(),
             hangtime: [false, false, false, false],
-            hangtime_guard: [0, 0, 0, 0],
+            pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         }
     }
 
     /// Enter/leave hangtime for a traffic timeslot (2..=4).
-    /// When entering, we keep a short guard window in traffic mode so any FACCH/stealing
-    /// already scheduled for this slot can still be transmitted.
     pub fn set_hangtime(&mut self, ts: u8, active: bool) {
         if !(1..=4).contains(&ts) {
             tracing::warn!("BsChannelScheduler::set_hangtime: invalid ts {}", ts);
@@ -138,7 +137,6 @@ impl BsChannelScheduler {
 
         let idx = ts as usize - 1;
         self.hangtime[idx] = active;
-        self.hangtime_guard[idx] = if active { 1 } else { 0 };
 
         // When leaving hangtime, drain stale signaling items that can only be consumed
         // in signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED
@@ -148,10 +146,9 @@ impl BsChannelScheduler {
         }
 
         tracing::info!(
-            "BsChannelScheduler: hangtime {} for ts {} (guard={})",
+            "BsChannelScheduler: hangtime {} for ts {}",
             if active { "ENABLED" } else { "DISABLED" },
             ts,
-            self.hangtime_guard[idx]
         );
     }
 
@@ -164,11 +161,8 @@ impl BsChannelScheduler {
         if !self.hangtime[idx] {
             return false;
         }
-        // If we're still in guard, keep traffic mode.
-        if self.hangtime_guard[idx] > 0 {
-            return false;
-        }
-        // If a stealing block is still queued for this slot, keep traffic mode.
+        // If a stealing block is still queued for this slot, keep traffic mode
+        // so it can be delivered via FACCH.
         !self.has_pending_stealing(ts)
     }
 
@@ -259,7 +253,7 @@ impl BsChannelScheduler {
                 grant_timeslots
             );
 
-            if self.cur_dltime.is_mandatory_clch() {
+            if candidate_t.is_mandatory_clch() {
                 // Not an opportunity; skip
                 continue;
             }
@@ -433,6 +427,19 @@ impl BsChannelScheduler {
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
+    /// Consumes and returns true if a pending random access ack exists for the given SSI on
+    /// this timeslot. Used when building STCH blocks so the MAC-RESOURCE can carry
+    /// random_access_flag=true per ETSI 21.4.3.1.
+    pub fn take_pending_ra_ack(&mut self, ts: u8, ssi: u32) -> bool {
+        let pending = &mut self.pending_ra_acks[ts as usize - 1];
+        if let Some(pos) = pending.iter().position(|&s| s == ssi) {
+            pending.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Enqueue a pre-built STCH block for FACCH/stealing on a traffic timeslot.
     /// The block must be 124 type1 bits containing MAC-U-SIGNAL header + TM-SDU.
     pub fn dl_enqueue_stealing(&mut self, ts: u8, block: BitBuffer, tx_reporter: Option<TxReporter>) {
@@ -466,7 +473,6 @@ impl BsChannelScheduler {
         // Clearing hangtime here is safe: if the circuit is gone, this timeslot is no longer in use.
         if (1..=4).contains(&ts) {
             self.hangtime[ts as usize - 1] = false;
-            self.hangtime_guard[ts as usize - 1] = 0;
         }
         self.circuits.close_circuit(dir, ts)
     }
@@ -475,7 +481,6 @@ impl BsChannelScheduler {
         // New/updated circuit implies traffic mode.
         if (1..=4).contains(&circuit.ts) {
             self.hangtime[circuit.ts as usize - 1] = false;
-            self.hangtime_guard[circuit.ts as usize - 1] = 0;
         }
         self.circuits.create_circuit(dir, circuit);
     }
@@ -576,9 +581,9 @@ impl BsChannelScheduler {
     }
 
     /// Removes all elements from the schedule, except stolen blocks. This function is used
-    /// before entering hangtime to clear out any stale grants, resources, etc that can only be processed in signaling mode,
-    /// while keeping stealing blocks that may still need to be transmitted during the guard window.
-    /// Discarded elements are reporetd as such via tx_reporter if available. Returns true if elements were discarded.
+    /// when leaving hangtime to clear out any stale grants, resources, etc that can only be processed in signaling mode,
+    /// while keeping stealing blocks that may still need to be transmitted via FACCH.
+    /// Discarded elements are reported as such via tx_reporter if available. Returns true if elements were discarded.
     pub fn dl_drop_all_except_stolen(&mut self, timeslot: u8) -> bool {
         let queue = &mut self.dltx_queues[timeslot as usize - 1];
         let mut i = 0;
@@ -605,7 +610,13 @@ impl BsChannelScheduler {
                         // Fragger self-marks any unsent fragments as discarded when dropped, so we don't need to do anything here.
                     }
 
-                    DlSchedElem::RandomAccessAck(_) | DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {
+                    DlSchedElem::RandomAccessAck(addr) => {
+                        // Save the SSI so the next STCH for this address can carry
+                        // random_access_flag=true (ETSI 21.4.3.1)
+                        self.pending_ra_acks[timeslot as usize - 1].push(addr.ssi);
+                    }
+
+                    DlSchedElem::Grant(..) | DlSchedElem::Broadcast(_) => {
                         // Silently dropped as internal or not equipped with a tx_reporter
                     }
                     _ => unreachable!(),
@@ -855,7 +866,7 @@ impl BsChannelScheduler {
         let ul_circuit_active = self.circuits.is_active(Direction::Ul, ts.t) && ts.f != 18;
 
         // During hangtime we stop sending traffic frames and switch to signalling mode.
-        // Keep traffic for a short guard window or while FACCH/stealing is still queued.
+        // Keep traffic mode while FACCH/stealing is still queued for delivery.
         let hang_effective = if (2..=4).contains(&ts.t) {
             self.is_hangtime_effective(ts.t)
         } else {
@@ -1036,15 +1047,6 @@ impl BsChannelScheduler {
         // self.dump_ul_schedule_full(true);
 
         // We now have our bbk, blk1 and (optional) blk2
-
-        // Decrement hangtime guard for this timeslot after we have built the slot.
-        if (2..=4).contains(&ts.t) {
-            let idx = ts.t as usize - 1;
-            if self.hangtime[idx] && self.hangtime_guard[idx] > 0 {
-                self.hangtime_guard[idx] -= 1;
-            }
-        }
-
         elem
     }
 
@@ -1068,50 +1070,33 @@ impl BsChannelScheduler {
                     assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
                     assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?"); // TODO FIXME check spec
 
-                    // STRATEGY:
-                    // - Send UL AssignedOnly if both ul1 and ul2 has been granted to an MS
-                    // - Send UL CommonAndAssigned if only ul1 has been granted
-                    // - Send UL CommonOnly if no grants have been made
+                    // Always CommonOnly on TS1 (MCCH). Per ETSI 23.5.2.2.2, the MS
+                    // with a grant transmits in granted slots without checking the AACH.
                     aach.dl_usage = AccessAssignDlUsage::CommonControl;
-                    aach.ul_usage = self.ul_get_usage(ts);
-                    match aach.ul_usage {
-                        AccessAssignUlUsage::CommonOnly => {
-                            aach.f1_af1 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                            aach.f2_af2 = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                        }
-                        AccessAssignUlUsage::CommonAndAssigned | AccessAssignUlUsage::AssignedOnly => {
-                            aach.f2_af = Some(AccessField {
-                                access_code: 0,
-                                base_frame_len: 4,
-                            });
-                        }
-                        _ => {
-                            // Traffic or unallocated; no AccessFields
-                        }
-                    }
+                    aach.ul_usage = AccessAssignUlUsage::CommonOnly;
+                    aach.f1_af1 = Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 4,
+                    });
+                    aach.f2_af2 = Some(AccessField {
+                        access_code: 0,
+                        base_frame_len: 4,
+                    });
                 }
                 2..=4 => {
                     // Additional channels (TS2..TS4).
                     // Normal operation: Traffic(usage) when a circuit is active, else Unallocated.
-                    // Hangtime: switch to signalling and allow MS to request the floor while the
-                    // channel remains allocated (UL CommonAndAssigned).
-                    let hang_effective = if (2..=4).contains(&ts.t) {
-                        self.is_hangtime_effective(ts.t)
-                    } else {
-                        false
-                    };
+                    // Hangtime: immediately switch AACH to AssignedControl so radios
+                    // detect the end of traffic in the same frame as D-TX CEASED.
+                    // The timeslot may still be in traffic mode (for STCH delivery) but
+                    // the AACH reflects the new channel state.
+                    let in_hangtime = (2..=4).contains(&ts.t) && self.hangtime[ts.t as usize - 1];
 
-                    if hang_effective && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
+                    if in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
                         aach.dl_usage = AccessAssignDlUsage::AssignedControl;
-                        aach.ul_usage = AccessAssignUlUsage::CommonAndAssigned;
-                        // ACCESS-ASSIGN header=1 requires an access field for both UL subslots.
-                        // Keep it consistent with TS1 defaults.
+                        // AssignedOnly (Header 2) allows random access for MSs on
+                        // the assigned channel while blocking common control MSs.
+                        aach.ul_usage = AccessAssignUlUsage::AssignedOnly;
                         aach.f2_af = Some(AccessField {
                             access_code: 0,
                             base_frame_len: 4,
@@ -1162,23 +1147,22 @@ impl BsChannelScheduler {
     fn generate_default_blks(&self, ts: TdmaTime) -> TmvUnitdataReq {
         match (ts.f, ts.t) {
             (1..=17, 1) => {
-                // Two options: [Blk1: Null | Blk2: SYSINFO] or [Both: Null]
-                // We'll alternate based on multiframe
-                match ts.m % 2 {
+                // Two options: [Blk1: SCH/HD Null | Blk2: BNCH SYSINFO] or [Both: SCH/F Null]
+                // Alternate every frame
+                match ts.f % 2 {
                     0 => {
-                        // Null + SYSINFO
-                        // SYSINFO gets added later, su we just make a half-slot Null pdu here
-                        let mut buf1 = BitBuffer::new(SCH_F_CAP);
+                        // Half-slot Null PDU on SCH/HD, SYSINFO gets added later as BNCH blk2
+                        let mut buf1 = BitBuffer::new(SCH_HD_CAP);
                         let blk1 = MacResource::null_pdu();
                         blk1.to_bitbuf(&mut buf1);
                         TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchF,
+                            logical_channel: LogicalChannel::SchHd,
                             mac_block: buf1,
                             scrambling_code: self.scrambling_code,
                         }
                     }
                     1 => {
-                        // Full-slot Null pdu
+                        // Full-slot Null PDU
                         let mut buf = BitBuffer::new(SCH_F_CAP);
                         let blk = MacResource::null_pdu();
                         blk.to_bitbuf(&mut buf);

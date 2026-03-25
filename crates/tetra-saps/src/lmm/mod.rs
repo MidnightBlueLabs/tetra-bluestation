@@ -1,6 +1,6 @@
 // Clause 17.3.2 Service primitives for the LMM-SAP
 #![allow(unused)]
-use tetra_core::{BitBuffer, MleHandle, TetraAddress, Todo, TxReporter};
+use tetra_core::{BitBuffer, Layer2Service, MleHandle, TetraAddress, Todo, TxReporter};
 
 /// This shall be used as a request to initiate the selection of a cell for communications. The
 /// request shall always be made after power on and may be made at any time thereafter.
@@ -113,7 +113,7 @@ pub struct LmmMleOpen {}
 pub struct LmmMlePrepareReq {
     pub sdu: Todo,
     pub handle: Todo,
-    pub layer2service: Todo,
+    pub layer2service: Layer2Service,
     pub pdu_prio: Todo,
     pub stealing_permission: bool,
     pub stealing_repeats_flag: bool,
@@ -137,7 +137,7 @@ pub struct LmmMleUnitdataReq {
     pub handle: MleHandle,
     // pub address_type: Todo,
     pub address: TetraAddress,
-    pub layer2service: Todo,
+    pub layer2service: Layer2Service,
     // pub pdu_prio: Todo, // Optional feature
     pub stealing_permission: bool,
     pub stealing_repeats_flag: bool,
