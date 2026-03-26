@@ -176,8 +176,6 @@ fn test_dsetup_late_entry_throttle() {
         "Late-entry D-SETUPs should be suppressed while receipt is Pending"
     );
 
-    return;
-
     // Now mark the previous D-SETUP as transmitted (simulating UMAC sending it over the air)
     last_reporter.mark_transmitted();
 

@@ -2,7 +2,7 @@
 # This is an example configuration file for the TETRA base station stack
 # DO NOT RUN without editing to stay within legal limits of your jurisdiction
 
-config_version = "0.5"
+config_version = "0.6"
 
 # Stack operation mode: "Bs" (Base Station), "Ms" (Mobile Station), or "Mon" (Monitor)
 stack_mode = "Bs"
@@ -28,55 +28,36 @@ backend = "SoapySdr"
 # !!! Make sure to also edit all related fields in the cell_info section to fit this frequency. 
 tx_freq = 438025000
 rx_freq = 433025000
-ppm_err = 0.0                       # Adjust if your SDR has a non-negligible tuning error
 
-# Sane defaults for LimeSDR
-# [phy_io.soapysdr.iocfg_limesdr]
-# rx_ant = "LNAL"
-# tx_ant = "BAND1"
-# rx_gain_lna = 18.0
-# rx_gain_tia = 6.0
-# rx_gain_pga = 10.0
-# tx_gain_pad = 18.0
-# tx_gain_iamp = 3.0
+# Adjust if your SDR has a non-negligible tuning error
+# ppm_err = 0.0                       
 
-# Sane defaults for LimeSDR Mini v2
-# [phy_io.soapysdr.iocfg_limesdr]
-# rx_ant = "LNAW"
-# tx_ant = "BAND2"
-# rx_gain_lna = 18.0
-# rx_gain_tia = 6.0
-# rx_gain_pga = 10.0
-# tx_gain_pad = 18.0
-# tx_gain_iamp = 3.0
+################################################################################################
+## OPTIONAL: specific device, antenna, gain selection                                         ##
+## Make sure to check your device for valid settings using SoapySDRUtil --probe               ##
+## or check: https://github.com/MidnightBlueLabs/tetra-bluestation-docs/wiki/03-Configuration ##
+################################################################################################
 
-# Sane defaults for SXceiver
-# [phy_io.soapysdr.iocfg_sxceiver]
-# rx_ant = "RX"
-# tx_ant = "TX"
-# rx_gain_lna = 42.0
-# rx_gain_pga = 16.0
-# tx_gain_dac = 9.0
-# tx_gain_mixer = 30.0
+# Optional device selection arguments.
+# If not specified, the first supported device found is selected automatically.
+# You may need to specify this if you have multiple supported device connected,
+# or if your device cannot be automatically detected by enumeration.
+# For example, to use a Pluto+ with a given IP address:
+# device = "driver=plutosdr,uri=ip:192.168.42.42"
+# To select a LimeSDR with a given serial number (check with SoapySDRUtil --find):
+# device = "driver=lime,serial=123456789"
 
-# Sane defaults for Original Adalm Pluto and Pluto+
-# !!! See Wiki for full parameter breakdown and setup requirements.
-# [phy_io.soapysdr.iocfg_pluto]
-# rx_ant = "A_BALANCED"
-# tx_ant = "A"
-# rx_gain_pga = 20.0
-# tx_gain_pga = 89.0
-# uri = "ip:192.168.42.42"  # Pluto+ only, do not set for original Pluto. Other options: "usb:1.3.5", or hostname.
-# direct = true #Advanced driver parameter. Do not change unless really needed.
-# timestamp_every = 1500 #Advanced driver parameter. Do not change unless really needed.
-# loopback = false #Advanced driver parameter. Do not change unless really needed.
+# Optional antenna selection to override device-specific defaults
+# Check antenna names with SoapySDRUtil --probe
+# rx_antenna = "LNAW"
+# tx_antenna = "BAND2"
 
-# Sane defaults for Ettus USRP B210 (and probably B200)
-[phy_io.soapysdr.iocfg_usrpb2xx]
-rx_ant = "TX/RX"
-tx_ant = "TX/RX"
-rx_gain_pga = 50.0
-tx_gain_pga = 35.0
+# Optional gain values to override device-specific defaults.
+# Check valid gain names with SoapySDRUtil --probe
+# For example, to increase transmit power on a LimeSDR:
+# tx_gain_pad = 50.0
+# To adjust LNA gain to optimize RX performance on a LimeSDR or SXceiver:
+# rx_gain_lna = 30.0
 
 ###############################################################################
 

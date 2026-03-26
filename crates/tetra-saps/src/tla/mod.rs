@@ -259,6 +259,13 @@ pub struct TlaTlUnitdataReqBl {
     // pub max_schedule_interval: Option<Todo>,
     pub data_class_info: Option<Todo>,
     pub req_handle: Todo,
+
+    // Custom fields for BS stack:
+    /// Optional Channel Allocation Request that may be included by CMCE
+    pub chan_alloc: Option<CmceChanAllocReq>,
+
+    /// Optional TxReporter that may be included to track transmission and optionally, acknowledgement
+    pub tx_reporter: Option<TxReporter>,
 }
 
 /// Clause 20.3.5.1.9

@@ -33,25 +33,9 @@ impl StackConfig {
         // Check input device settings
         match self.phy_io.backend {
             PhyBackend::SoapySdr => {
-                let Some(ref soapy_cfg) = self.phy_io.soapysdr else {
+                if self.phy_io.soapysdr.is_none() {
                     return Err("soapysdr configuration must be provided for Soapysdr backend");
                 };
-
-                // Validate that exactly one hardware configuration is present
-                let config_count = [
-                    soapy_cfg.io_cfg.iocfg_usrpb2xx.is_some(),
-                    soapy_cfg.io_cfg.iocfg_limesdr.is_some(),
-                    soapy_cfg.io_cfg.iocfg_sxceiver.is_some(),
-                    soapy_cfg.io_cfg.iocfg_pluto.is_some(),
-                ]
-                .iter()
-                .filter(|&&x| x)
-                .count();
-                if config_count != 1 {
-                    return Err(
-                        "soapysdr backend requires exactly one hardware configuration (iocfg_usrpb2xx, iocfg_limesdr, iocfg_sxceiver or iocfg_pluto)",
-                    );
-                }
             }
             PhyBackend::None => {} // For testing
             PhyBackend::Undefined => {

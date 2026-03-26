@@ -3,11 +3,11 @@ use crate::mle::components::mle_router::MleRouter;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, TdmaTime, unimplemented_log};
+use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, unimplemented_log};
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::lmm::LmmMleUnitdataInd;
 use tetra_saps::ltpd::LtpdMleUnitdataInd;
-use tetra_saps::tla::TlaTlDataReqBl;
+use tetra_saps::tla::{TlaTlDataReqBl, TlaTlUnitdataReqBl};
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use tetra_pdus::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
@@ -308,6 +308,8 @@ impl MleBs {
         pdu.copy_bits(&mut prim.sdu, sdu_len);
         pdu.seek(0);
 
+        assert!(prim.layer2service != Layer2Service::Unacknowledged, "not implemented");
+
         // let (addr, link, endpoint) = self.router.use_handle(prim.handle, message.dltime);
         // assert_eq!(addr.ssi, prim.address.ssi);
         let sapmsg = SapMsg {
@@ -374,28 +376,57 @@ impl MleBs {
         // Take Channel Allocation Request if any
         let chan_alloc = prim.chan_alloc.take();
 
-        let sapmsg = SapMsg {
-            sap: Sap::TlaSap,
-            src: TetraEntity::Mle,
-            dest: TetraEntity::Llc,
-            dltime: message.dltime,
-            msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
-                main_address: prim.main_address,
-                link_id: prim.link_id,
-                endpoint_id: prim.endpoint_id,
-                tl_sdu: pdu,
-                stealing_permission: prim.stealing_permission,
-                subscriber_class: 0, // TODO fixme
-                fcs_flag: false,
-                air_interface_encryption: None,
-                stealing_repeats_flag: None,
-                data_class_info: None,
-                req_handle: 0, // TODO FIXME
-                graceful_degradation: None,
-                chan_alloc,
-                tx_reporter: prim.tx_reporter.take(),
-            }),
+        let sapmsg = if prim.layer2service == Layer2Service::Unacknowledged {
+            // Unacknowledged service, send a TlUnitdataReqBl
+            SapMsg {
+                sap: Sap::TlaSap,
+                src: TetraEntity::Mle,
+                dest: TetraEntity::Llc,
+                dltime: message.dltime,
+                msg: SapMsgInner::TlaTlUnitdataReqBl(TlaTlUnitdataReqBl {
+                    main_address: prim.main_address,
+                    link_id: prim.link_id,
+                    endpoint_id: prim.endpoint_id,
+                    tl_sdu: pdu,
+                    stealing_permission: prim.stealing_permission,
+                    subscriber_class: 0, // TODO fixme
+                    fcs_flag: false,
+                    air_interface_encryption: None,
+                    packet_data_flag: false,
+                    n_tlsdu_repeats: 0,
+                    data_class_info: None,
+                    req_handle: 0,
+
+                    chan_alloc,
+                    tx_reporter: prim.tx_reporter.take(),
+                }),
+            }
+        } else {
+            // Acknowledged service, send a TlDataReqBl
+            SapMsg {
+                sap: Sap::TlaSap,
+                src: TetraEntity::Mle,
+                dest: TetraEntity::Llc,
+                dltime: message.dltime,
+                msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
+                    main_address: prim.main_address,
+                    link_id: prim.link_id,
+                    endpoint_id: prim.endpoint_id,
+                    tl_sdu: pdu,
+                    stealing_permission: prim.stealing_permission,
+                    subscriber_class: 0, // TODO fixme
+                    fcs_flag: false,
+                    air_interface_encryption: None,
+                    stealing_repeats_flag: None,
+                    data_class_info: None,
+                    req_handle: 0, // TODO FIXME
+                    graceful_degradation: None,
+                    chan_alloc,
+                    tx_reporter: prim.tx_reporter.take(),
+                }),
+            }
         };
+
         queue.push_back(sapmsg);
     }
 

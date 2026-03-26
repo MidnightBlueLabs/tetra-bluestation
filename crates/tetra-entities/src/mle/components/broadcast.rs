@@ -112,6 +112,8 @@ impl MleBroadcast {
                 // max_schedule_interval: todo!(),
                 data_class_info: None,
                 req_handle: 0,
+                chan_alloc: None,
+                tx_reporter: None,
             }),
         };
         queue.push_back(sapmsg);

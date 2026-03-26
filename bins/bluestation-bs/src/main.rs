@@ -94,9 +94,9 @@ fn main() {
     eprintln!("░▀█▀░█▀▀░▀█▀░█▀▄░█▀█░░░░░█▀▄░█░░░█░█░█▀▀░█▀▀░▀█▀░█▀█░▀█▀░▀█▀░█▀█░█▀█");
     eprintln!("░░█░░█▀▀░░█░░█▀▄░█▀█░▄▄▄░█▀▄░█░░░█░█░█▀▀░▀▀█░░█░░█▀█░░█░░░█░░█░█░█░█");
     eprintln!("░░▀░░▀▀▀░░▀░░▀░▀░▀░▀░░░░░▀▀░░▀▀▀░▀▀▀░▀▀▀░▀▀▀░░▀░░▀░▀░░▀░░▀▀▀░▀▀▀░▀░▀\n");
-    eprintln!("    Wouter Bokslag / Midnight Blue");
-    eprintln!(" -> https://github.com/MidnightBlueLabs/tetra-bluestation");
-    eprintln!(" -> https://midnightblue.nl\n");
+    eprintln!("  Wouter Bokslag / Midnight Blue");
+    eprintln!("  https://github.com/MidnightBlueLabs/tetra-bluestation");
+    eprintln!("  Version: {}", tetra_core::STACK_VERSION);
 
     let args = Args::parse();
     let mut cfg = load_config_from_toml(&args.config);

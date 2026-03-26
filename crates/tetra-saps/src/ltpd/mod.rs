@@ -1,7 +1,7 @@
 // Clause 17.3.5 Service state diagram for the LTPD-SAP (MLE-SNDCP)
 
 #![allow(unused)]
-use tetra_core::{BitBuffer, EndpointId, LinkId, TetraAddress, Todo};
+use tetra_core::{BitBuffer, EndpointId, Layer2Service, LinkId, TetraAddress, Todo};
 
 #[derive(Debug, Clone)]
 pub struct LtpdMleActivityReq {
@@ -199,7 +199,7 @@ pub struct LtpdMleResumeInd {
 pub struct LtpdMleUnitdataReq {
     pub sdu: Todo,
     pub handle: Todo,
-    pub layer2service: Todo,
+    pub layer2service: Layer2Service,
     pub unacked_bl_repetitions: Todo,
     pub pdu_prio: Todo,
     pub endpoint_id: EndpointId,

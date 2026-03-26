@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgLimeSdr, CfgPluto, CfgSoapySdr, CfgSxCeiver, CfgUsrpB2xx, SoapySdrDto, SoapySdrIoCfg};
+use crate::bluestation::{CfgSoapySdr, SoapySdrDto};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -46,58 +46,51 @@ pub struct PhyIoDto {
 
 pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
     let soapysdr = src.soapysdr.map(|soapy_dto| {
-        let mut soapy_cfg = CfgSoapySdr {
+        CfgSoapySdr {
             ul_freq: soapy_dto.rx_freq,
             dl_freq: soapy_dto.tx_freq,
             ppm_err: soapy_dto.ppm_err.unwrap_or(0.0),
-            io_cfg: SoapySdrIoCfg::default(),
-        };
-
-        if let Some(usrp_dto) = soapy_dto.iocfg_usrpb2xx {
-            soapy_cfg.io_cfg.iocfg_usrpb2xx = Some(CfgUsrpB2xx {
-                rx_ant: usrp_dto.rx_ant,
-                tx_ant: usrp_dto.tx_ant,
-                rx_gain_pga: usrp_dto.rx_gain_pga,
-                tx_gain_pga: usrp_dto.tx_gain_pga,
-            });
+            device: soapy_dto.device,
+            fs: soapy_dto.sample_rate,
+            rx_ch: soapy_dto.rx_channel,
+            tx_ch: soapy_dto.tx_channel,
+            rx_ant: soapy_dto.rx_antenna,
+            tx_ant: soapy_dto.tx_antenna,
+            rx_gains: soapy_dto
+                .extra
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix("rx_gain_").map(|gain_name| {
+                        (
+                            gain_name.to_string().to_lowercase(),
+                            match value {
+                                Value::Integer(v) => *v as f64,
+                                Value::Float(v) => *v,
+                                // TODO: should this error be returned somehow?
+                                _ => panic!("RX gain value must be a number"),
+                            },
+                        )
+                    })
+                })
+                .collect(),
+            tx_gains: soapy_dto
+                .extra
+                .iter()
+                .filter_map(|(key, value)| {
+                    key.strip_prefix("tx_gain_").map(|gain_name| {
+                        (
+                            gain_name.to_string().to_lowercase(),
+                            match value {
+                                Value::Integer(v) => *v as f64,
+                                Value::Float(v) => *v,
+                                // TODO: should this error be returned somehow?
+                                _ => panic!("TX gain value must be a number"),
+                            },
+                        )
+                    })
+                })
+                .collect(),
         }
-        if let Some(lime_dto) = soapy_dto.iocfg_limesdr {
-            soapy_cfg.io_cfg.iocfg_limesdr = Some(CfgLimeSdr {
-                rx_ant: lime_dto.rx_ant,
-                tx_ant: lime_dto.tx_ant,
-                rx_gain_lna: lime_dto.rx_gain_lna,
-                rx_gain_tia: lime_dto.rx_gain_tia,
-                rx_gain_pga: lime_dto.rx_gain_pga,
-                tx_gain_pad: lime_dto.tx_gain_pad,
-                tx_gain_iamp: lime_dto.tx_gain_iamp,
-            });
-        }
-        if let Some(sx_dto) = soapy_dto.iocfg_sxceiver {
-            soapy_cfg.io_cfg.iocfg_sxceiver = Some(CfgSxCeiver {
-                rx_ant: sx_dto.rx_ant,
-                tx_ant: sx_dto.tx_ant,
-                rx_gain_lna: sx_dto.rx_gain_lna,
-                rx_gain_pga: sx_dto.rx_gain_pga,
-                tx_gain_dac: sx_dto.tx_gain_dac,
-                tx_gain_mixer: sx_dto.tx_gain_mixer,
-            });
-        }
-
-        if let Some(pluto_dto) = soapy_dto.iocfg_pluto {
-            soapy_cfg.io_cfg.iocfg_pluto = Some(CfgPluto {
-                rx_ant: pluto_dto.rx_ant,
-                tx_ant: pluto_dto.tx_ant,
-                rx_gain_pga: pluto_dto.rx_gain_pga,
-                tx_gain_pga: pluto_dto.tx_gain_pga,
-                uri: pluto_dto.uri,
-                loopback: pluto_dto.loopback,
-                timestamp_every: pluto_dto.timestamp_every,
-                usb_direct: pluto_dto.usb_direct,
-                direct: pluto_dto.direct,
-            });
-        }
-
-        soapy_cfg
     });
 
     CfgPhyIo {

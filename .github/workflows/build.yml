@@ -1,0 +1,113 @@
+name: Build release binaries
+
+on:
+  push:
+    branches:
+      - main
+      - feature/cross_compile
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            bin_path: target/x86_64-unknown-linux-gnu/release/tetra-bluestation
+            build_cmd: cargo build --release --target x86_64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
+            artifact_name: tetra-bluestation-x86_64
+
+          - target: aarch64-unknown-linux-gnu
+            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
+            artifact_name: tetra-bluestation-aarch64-generic
+
+          - target: aarch64-unknown-linux-gnu
+            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
+            artifact_name: tetra-bluestation-rpi4
+            cpu_rustflags: "-C target-cpu=cortex-a72"
+
+          - target: aarch64-unknown-linux-gnu
+            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
+            artifact_name: tetra-bluestation-rpi5
+            cpu_rustflags: "-C target-cpu=cortex-a76"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo install cross --locked
+
+      - name: Apply CPU-specific RUSTFLAGS
+        if: matrix.cpu_rustflags != ''
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=${{ matrix.cpu_rustflags }}" >> "$GITHUB_ENV"
+
+      - name: Install native build dependencies (amd64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git make g++ cmake pkg-config \
+            libsoapysdr-dev \
+            soapysdr-tools \
+            libasound2-dev \
+            clang llvm-dev libclang-dev
+
+          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+          pkg-config --modversion SoapySDR
+
+      - name: Build
+        run: ${{ matrix.build_cmd }}
+
+      - name: Rename binary
+        run: cp ${{ matrix.bin_path }} ${{ matrix.artifact_name }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Publish latest release
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "tag=v$VERSION-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "name=v$VERSION-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4.2.1
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2.3.2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
+          files: artifacts/*

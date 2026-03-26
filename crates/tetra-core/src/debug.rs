@@ -1,4 +1,5 @@
 use core::fmt;
+use std::fmt::Write as FmtWrite;
 use std::fs::OpenOptions;
 use std::sync::Once;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -39,7 +40,7 @@ macro_rules! assert_warn {
 
 struct AlignedFormatter;
 
-/// Visitor to extract the ts field value
+/// Visitor to extract the ts field value (for inclusion in the line header)
 /// TODO revisit this approach
 struct TsVisitor {
     ts: Option<String>,
@@ -53,18 +54,47 @@ impl tracing::field::Visit for TsVisitor {
     }
 }
 
+/// Visitor to format event fields into a string, skipping the `ts` field
+/// (which is already shown in the line header).
+struct FieldsVisitor<'a> {
+    writer: &'a mut String,
+}
+
+impl<'a> tracing::field::Visit for FieldsVisitor<'a> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        if field.name() == "ts" {
+            return;
+        }
+        if field.name() == "message" {
+            write!(self.writer, "{:?}", value).ok();
+        } else {
+            write!(self.writer, " {}={:?}", field.name(), value).ok();
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "ts" {
+            return;
+        }
+        if field.name() == "message" {
+            self.writer.push_str(value);
+        } else {
+            write!(self.writer, " {}={}", field.name(), value).ok();
+        }
+    }
+}
+
 impl<S, N> FormatEvent<S, N> for AlignedFormatter
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
 {
-    fn format_event(&self, ctx: &FmtContext<'_, S, N>, mut writer: format::Writer<'_>, event: &tracing::Event<'_>) -> fmt::Result {
+    fn format_event(&self, _ctx: &FmtContext<'_, S, N>, mut writer: format::Writer<'_>, event: &tracing::Event<'_>) -> fmt::Result {
         let metadata = event.metadata();
 
         // Extract ts field if present
         let mut visitor = TsVisitor { ts: None };
         event.record(&mut visitor);
-        let has_ts = visitor.ts.is_some();
         let ts_str = visitor.ts.unwrap_or_else(|| "             ".to_string());
 
         // Add ANSI color codes for different log levels
@@ -114,22 +144,9 @@ where
             metadata.line().unwrap_or(0)
         );
 
-        // Capture the message to check for special prefixes
+        // Capture the message, skipping the ts field (already shown in line header)
         let mut message_buf = String::new();
-        let message_writer = format::Writer::new(&mut message_buf);
-        ctx.field_format().format_fields(message_writer, event)?;
-
-        // Remove the ts field from the message if it was included
-        if has_ts {
-            if let Some(ts_idx) = message_buf.find("ts=") {
-                // Find the end of the ts field (either space or end of string)
-                if let Some(space_idx) = message_buf[ts_idx..].find(' ') {
-                    message_buf.replace_range(ts_idx..ts_idx + space_idx + 1, "");
-                } else {
-                    message_buf.truncate(ts_idx);
-                }
-            }
-        }
+        event.record(&mut FieldsVisitor { writer: &mut message_buf });
 
         // Check if the message starts with "->" or "<-" to reduce indentation
         let mut padding = 70; // Default alignment
@@ -241,10 +258,10 @@ pub fn get_default_stdout_filter() -> EnvFilter {
         .add_directive("tetra_entities::llc=debug".parse().unwrap())
 
         // Higher layers
-        .add_directive("tetra_entities::mle=trace".parse().unwrap())
-        .add_directive("tetra_entities::cmce=trace".parse().unwrap())
-        .add_directive("tetra_entities::sndcp=trace".parse().unwrap())
-        .add_directive("tetra_entities::mm=trace".parse().unwrap())
+        .add_directive("tetra_entities::mle=debug".parse().unwrap())
+        .add_directive("tetra_entities::cmce=debug".parse().unwrap())
+        .add_directive("tetra_entities::sndcp=debug".parse().unwrap())
+        .add_directive("tetra_entities::mm=debug".parse().unwrap())
 }
 
 fn get_default_logfile_filter() -> EnvFilter {

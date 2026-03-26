@@ -1,4 +1,4 @@
-use tetra_core::{BitBuffer, EndpointId, LinkId, MleHandle, TetraAddress, Todo, TxReporter};
+use tetra_core::{BitBuffer, EndpointId, Layer2Service, LinkId, MleHandle, TetraAddress, Todo, TxReporter};
 
 use crate::{control::enums::circuit_mode_type::CircuitModeType, lcmc::fields::chan_alloc_req::CmceChanAllocReq};
 
@@ -145,7 +145,7 @@ pub struct LcmcMleReportInd {
 pub struct LcmcMleRestoreReq {
     pub sdu: Todo,
     pub handle: Todo,
-    pub layer2service: Todo,
+    pub layer2service: Layer2Service,
     pub pdu_prio: Todo,
     pub stealing_permission: bool,
     pub stealing_repeats_flag: bool,
@@ -176,7 +176,7 @@ pub struct LcmcMleUnitdataReq {
     pub handle: MleHandle,
     pub endpoint_id: EndpointId,
     pub link_id: LinkId,
-    pub layer2service: Todo,
+    pub layer2service: Layer2Service,
     pub pdu_prio: Todo,
     pub layer2_qos: Todo,
     pub stealing_permission: bool,
