@@ -10,9 +10,9 @@ use crate::mm::enums::energy_saving_mode::EnergySavingMode;
 pub struct EnergySavingInformation {
     // 3
     pub energy_saving_mode: EnergySavingMode,
-    // 2, when energy saving mode is "Stay alive" this field has no meaning and is set to 0
+    // 5, when energy saving mode is "Stay alive" this field has no meaning and is set to 0
     pub frame_number: Option<u8>,
-    // 2, when energy saving mode is "Stay alive" this field has no meaning and is set to 0
+    // 6, when energy saving mode is "Stay alive" this field has no meaning and is set to 0
     pub multiframe_number: Option<u8>,
 }
 
@@ -21,26 +21,15 @@ impl EnergySavingInformation {
         let val = buffer.read_field(3, "energy_saving_mode")? as u8;
         let energy_saving_mode = EnergySavingMode::try_from(val as u64).unwrap(); // Never fails
 
-        let fn_val = buffer.read_field(2, "frame_number")? as u8;
-        let mn_val = buffer.read_field(2, "multiframe_number")? as u8;
+        let fn_val = buffer.read_field(5, "frame_number")? as u8;
+        let mn_val = buffer.read_field(6, "multiframe_number")? as u8;
 
-        // Sanity check
+        // For StayAlive the spec says frame/multiframe fields "have no meaning";
+        // parse them to advance the buffer, then discard.
         let (f, m) = if energy_saving_mode == EnergySavingMode::StayAlive {
-            if fn_val != 0 {
-                return Err(PduParseErr::InvalidValue {
-                    field: "frame_number",
-                    value: fn_val as u64,
-                });
-            }
-            if mn_val != 0 {
-                return Err(PduParseErr::InvalidValue {
-                    field: "multiframe_number",
-                    value: mn_val as u64,
-                });
-            }
-            (Some(fn_val), Some(mn_val))
-        } else {
             (None, None)
+        } else {
+            (Some(fn_val), Some(mn_val))
         };
 
         let s = EnergySavingInformation {
@@ -69,17 +58,17 @@ impl EnergySavingInformation {
                     value: f as u64,
                 });
             }
-            buf.write_bits(0, 2 + 2);
+            buf.write_bits(0, 5 + 6);
         } else {
             if let Some(f) = self.frame_number {
-                buf.write_bits(f as u64, 2);
+                buf.write_bits(f as u64, 5);
             } else {
                 return Err(PduParseErr::FieldNotPresent {
                     field: Some("frame_number"),
                 });
             }
             if let Some(f) = self.multiframe_number {
-                buf.write_bits(f as u64, 2);
+                buf.write_bits(f as u64, 6);
             } else {
                 return Err(PduParseErr::FieldNotPresent {
                     field: Some("multiframe_number"),
