@@ -1,5 +1,8 @@
+use bitcode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+
 // Entities as used in the standard
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Encode, Decode, Serialize, Deserialize)]
 pub enum TetraEntity {
     /// Physical layer
     Phy,

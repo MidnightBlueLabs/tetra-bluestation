@@ -10,7 +10,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
+use base64::Engine as _;
+
+use tungstenite::{Connector, Message, WebSocket, stream::MaybeTlsStream};
 
 use super::{NetworkAddress, NetworkError, NetworkMessage, NetworkTransport};
 
@@ -20,6 +22,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 // ─── Configuration ────────────────────────────────────────────────
 
 /// Configuration for the WebSocket transport
+#[derive(Clone)]
 pub struct WebSocketTransportConfig {
     /// Server hostname or IP
     pub host: String,
@@ -27,10 +30,20 @@ pub struct WebSocketTransportConfig {
     pub port: u16,
     /// Use TLS (wss://)
     pub use_tls: bool,
-    /// Optional username for HTTP Digest Auth
-    pub username: Option<String>,
-    /// Optional password for HTTP Digest Auth
-    pub password: Option<String>,
+    /// Optional custom root certificates (DER-encoded) for TLS server validation.
+    /// Can be present only when use_tls is true.
+    /// When `Some`, these replace the system certificate store — useful for
+    /// self-signed certificates. When `None`, the system store is used.
+    pub custom_root_certs: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+    /// Optional credentials (username, password) for HTTP Basic Auth.
+    /// When `Some`, an `Authorization: Basic` header is added to the WebSocket
+    /// upgrade request. Used for telemetry authentication.
+    pub basic_auth_credentials: Option<(String, String)>,
+    /// Optional credentials (username, password) for HTTP Digest Auth.
+    /// When `Some`, the transport performs HTTP auth discovery before upgrading
+    /// to WebSocket. When `None`, it connects directly to `endpoint_path`.
+    pub digest_auth_credentials: Option<(String, String)>,
+
     /// HTTP path used for initial authentication request (e.g. "/brew/")
     pub endpoint_path: String,
     /// WebSocket subprotocol to negotiate (optional, e.g. "brew")
@@ -75,11 +88,26 @@ impl Write for AuthStream {
     }
 }
 
-/// Build a rustls ClientConfig with system root certificates
-fn build_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
+/// Build a rustls ClientConfig.
+///
+/// When `custom_root_certs` is `Some`, the provided DER-encoded certificates are
+/// used as root trust anchors (replacing the system store). Otherwise the
+/// platform's native certificate store is loaded.
+fn build_tls_config(
+    custom_root_certs: &Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+) -> Result<Arc<rustls::ClientConfig>, String> {
     let mut root_store = rustls::RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs().map_err(|e| format!("load certs: {}", e))? {
-        let _ = root_store.add(cert);
+    match custom_root_certs {
+        Some(certs) => {
+            for cert in certs {
+                root_store.add(cert.clone()).map_err(|e| format!("add custom cert: {}", e))?;
+            }
+        }
+        None => {
+            for cert in rustls_native_certs::load_native_certs().map_err(|e| format!("load certs: {}", e))? {
+                let _ = root_store.add(cert);
+            }
+        }
     }
     let config = rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
@@ -88,7 +116,12 @@ fn build_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
 }
 
 /// Connect a TCP stream, optionally wrapping with TLS (used for HTTP auth requests)
-fn connect_auth_stream(host: &str, port: u16, use_tls: bool) -> Result<AuthStream, String> {
+fn connect_auth_stream(
+    host: &str,
+    port: u16,
+    use_tls: bool,
+    custom_root_certs: &Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+) -> Result<AuthStream, String> {
     let addr = format!("{}:{}", host, port);
     tracing::debug!("WebSocketTransport: connecting TCP to {}", addr);
 
@@ -106,7 +139,7 @@ fn connect_auth_stream(host: &str, port: u16, use_tls: bool) -> Result<AuthStrea
         .map_err(|e| format!("set read timeout: {}", e))?;
 
     if use_tls {
-        let tls_config = build_tls_config()?;
+        let tls_config = build_tls_config(custom_root_certs)?;
         let server_name: rustls::pki_types::ServerName<'static> = host
             .to_string()
             .try_into()
@@ -218,7 +251,8 @@ impl WebSocketTransport {
         let endpoint_path = &self.config.endpoint_path;
 
         // ── First request (unauthenticated) ──
-        let mut stream = connect_auth_stream(host, port, self.config.use_tls).map_err(|e| NetworkError::ConnectionFailed(e))?;
+        let mut stream = connect_auth_stream(host, port, self.config.use_tls, &self.config.custom_root_certs)
+            .map_err(|e| NetworkError::ConnectionFailed(e))?;
 
         let request = format!(
             "GET {} HTTP/1.1\r\n\
@@ -274,11 +308,11 @@ impl WebSocketTransport {
                 return Err(NetworkError::ConnectionFailed(format!("unsupported auth scheme: {}", challenge)));
             }
 
-            let (username, password) = match (&self.config.username, &self.config.password) {
-                (Some(u), Some(p)) => (u.as_str(), p.as_str()),
-                _ => {
+            let (username, password) = match &self.config.digest_auth_credentials {
+                Some((u, p)) => (u.as_str(), p.as_str()),
+                None => {
                     return Err(NetworkError::ConnectionFailed(
-                        "server requires auth but no username/password configured".to_string(),
+                        "server requires auth but no credentials configured".to_string(),
                     ));
                 }
             };
@@ -295,7 +329,8 @@ impl WebSocketTransport {
 
             // ── Second request (authenticated) ──
             drop(stream);
-            let mut stream2 = connect_auth_stream(host, port, self.config.use_tls).map_err(|e| NetworkError::ConnectionFailed(e))?;
+            let mut stream2 = connect_auth_stream(host, port, self.config.use_tls, &self.config.custom_root_certs)
+                .map_err(|e| NetworkError::ConnectionFailed(e))?;
 
             let auth_request = format!(
                 "GET {} HTTP/1.1\r\n\
@@ -354,15 +389,19 @@ impl NetworkTransport for WebSocketTransport {
         self.ws = None;
 
         let scheme = if self.config.use_tls { "wss" } else { "ws" };
-        tracing::info!(
+        tracing::debug!(
             "WebSocketTransport: connecting to {}://{}:{}",
             scheme,
             self.config.host,
             self.config.port
         );
 
-        // Step 1: HTTP auth to get WebSocket endpoint
-        let endpoint = self.authenticate()?;
+        // Step 1: Resolve WebSocket endpoint path
+        let endpoint = if self.config.digest_auth_credentials.is_some() {
+            self.authenticate()?
+        } else {
+            self.config.endpoint_path.clone()
+        };
 
         // Step 2: Connect WebSocket to the endpoint
         let ws_url = format!("{}://{}:{}{}", scheme, self.config.host, self.config.port, endpoint);
@@ -371,25 +410,49 @@ impl NetworkTransport for WebSocketTransport {
         // Build request with User-Agent and subprotocol headers.
         // The TetraPack server sends a Sec-WebSocket-Protocol in its response,
         // so we must request one to satisfy the RFC 6455 handshake validation.
+        let websocket_key = tungstenite::handshake::client::generate_key();
         let mut builder = tungstenite::http::Request::builder()
             .uri(&ws_url)
             .header("Host", format!("{}:{}", self.config.host, self.config.port))
             .header("User-Agent", &self.config.user_agent)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .header("Sec-WebSocket-Key", websocket_key)
             .header("Sec-WebSocket-Version", "13");
 
         if let Some(ref proto) = self.config.subprotocol {
             builder = builder.header("Sec-WebSocket-Protocol", proto.as_str());
         }
 
+        if let Some((ref user, ref pass)) = self.config.basic_auth_credentials {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", user, pass));
+            builder = builder.header("Authorization", format!("Basic {}", encoded));
+        }
+
         let request = builder
             .body(())
             .map_err(|e| NetworkError::ConnectionFailed(format!("failed to build WS request: {}", e)))?;
 
-        let (ws, _response) =
-            tungstenite::connect(request).map_err(|e| NetworkError::ConnectionFailed(format!("WebSocket connect failed: {}", e)))?;
+        // Open TCP stream and perform the WebSocket handshake with an optional
+        // custom TLS connector (for self-signed certificate support).
+        let addr = format!("{}:{}", self.config.host, self.config.port);
+        let socket_addr = addr
+            .to_socket_addrs()
+            .map_err(|e| NetworkError::ConnectionFailed(format!("DNS resolve failed for '{}': {}", addr, e)))?
+            .next()
+            .ok_or_else(|| NetworkError::ConnectionFailed(format!("no addresses found for '{}'", addr)))?;
+        let tcp = TcpStream::connect_timeout(&socket_addr, DEFAULT_CONNECT_TIMEOUT)
+            .map_err(|e| NetworkError::ConnectionFailed(format!("TCP connect failed: {}", e)))?;
+
+        let connector = if self.config.custom_root_certs.is_some() {
+            let tls_config = build_tls_config(&self.config.custom_root_certs).map_err(|e| NetworkError::ConnectionFailed(e))?;
+            Some(Connector::Rustls(tls_config))
+        } else {
+            None
+        };
+
+        let (ws, _response) = tungstenite::client_tls_with_config(request, tcp, None, connector)
+            .map_err(|e| NetworkError::ConnectionFailed(format!("WebSocket connect failed: {}", e)))?;
 
         tracing::debug!("WebSocketTransport: WebSocket connected");
 

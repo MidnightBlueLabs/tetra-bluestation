@@ -5,6 +5,7 @@ use tetra_core::freqs::FreqInfo;
 use crate::bluestation::{CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
 
 use super::sec_brew::CfgBrew;
+use super::sec_telemetry::CfgTelemetry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -25,6 +26,9 @@ pub struct StackConfig {
 
     /// Brew protocol (TetraPack/BrandMeister) configuration
     pub brew: Option<CfgBrew>,
+
+    /// Telemetry endpoint configuration
+    pub telemetry: Option<CfgTelemetry>,
 }
 
 impl StackConfig {

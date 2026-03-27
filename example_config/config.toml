@@ -187,3 +187,12 @@ voice_service = true
 # SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled. 
 # If left commented, all (outside of local_ssi_ranges) calls are allowed over Brew
 # whitelisted_ssis = [91]
+
+
+###############################################################################
+
+
+[telemetry]
+host = "127.0.0.1"
+port = 9001
+

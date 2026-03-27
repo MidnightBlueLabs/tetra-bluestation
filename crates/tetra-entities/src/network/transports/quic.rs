@@ -229,10 +229,11 @@ impl QuicTransport {
         match channel {
             QuicChannelType::Reliable => {
                 if let Some(ref mut recv) = self.reliable_recv {
-                    // Try to read length prefix
+                    // Try to read length prefix with a short timeout so this
+                    // stays non-blocking when no data is available.
                     let mut len_buf = [0u8; 4];
-                    match recv.read_exact(&mut len_buf).await {
-                        Ok(()) => {
+                    match tokio::time::timeout(Duration::from_millis(10), recv.read_exact(&mut len_buf)).await {
+                        Ok(Ok(())) => {
                             let len = u32::from_be_bytes(len_buf) as usize;
 
                             if len > 1024 * 1024 {
@@ -245,7 +246,8 @@ impl QuicTransport {
                                 Err(_) => Ok(None), // Stream finished
                             }
                         }
-                        Err(_) => Ok(None), // Stream finished or error
+                        Ok(Err(_)) => Ok(None), // Stream finished or error
+                        Err(_) => Ok(None),     // Timeout — no data available
                     }
                 } else {
                     Ok(None)

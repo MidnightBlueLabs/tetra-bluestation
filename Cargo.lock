@@ -77,6 +77,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -99,6 +111,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bitcode"
@@ -131,6 +149,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -154,6 +181,7 @@ version = "0.5.6"
 dependencies = [
  "clap",
  "ctrlc",
+ "rustls",
  "tetra-config",
  "tetra-core",
  "tetra-entities",
@@ -161,6 +189,22 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bluestation-telemetry"
+version = "0.5.6"
+dependencies = [
+ "argon2",
+ "base64",
+ "clap",
+ "rustls",
+ "rustls-pemfile",
+ "tetra-core",
+ "tetra-entities",
+ "tracing",
+ "tracing-subscriber",
+ "tungstenite",
 ]
 
 [[package]]
@@ -406,6 +450,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -718,34 +763,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "net-tnmm-test"
-version = "0.5.6"
-dependencies = [
- "clap",
- "tetra-config",
- "tetra-core",
- "tetra-entities",
- "tetra-pdus",
- "tetra-saps",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "net-tnmm-test-quic"
-version = "0.5.6"
-dependencies = [
- "quinn",
- "rcgen",
- "rustls",
- "tetra-entities",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "nix"
 version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -885,27 +902,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "pdu-tool"
-version = "0.5.6"
-dependencies = [
- "clap",
- "tetra-config",
- "tetra-core",
- "tetra-pdus",
- "tetra-saps",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "pem"
-version = "3.0.6"
+name = "password-hash"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
 dependencies = [
- "base64",
- "serde_core",
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
@@ -1116,19 +1120,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
-]
-
-[[package]]
-name = "rcgen"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
-dependencies = [
- "pem",
- "ring",
- "rustls-pki-types",
- "time",
- "yasna",
 ]
 
 [[package]]
@@ -1513,7 +1504,9 @@ dependencies = [
 name = "tetra-core"
 version = "0.5.6"
 dependencies = [
+ "bitcode",
  "const_format",
+ "crossbeam-channel",
  "git-version",
  "serde",
  "tracing",
@@ -1526,6 +1519,7 @@ name = "tetra-entities"
 version = "0.5.6"
 dependencies = [
  "as-any",
+ "base64",
  "bitcode",
  "chrono",
  "chrono-tz",
@@ -1675,19 +1669,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
- "tokio-macros",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c55a2eff8b69ce66c84f85e1da1c233edc36ceb85a2058d11b0d6a3c7e7569c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2413,15 +2395,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "yasna"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
-dependencies = [
- "time",
 ]
 
 [[package]]

@@ -2,10 +2,17 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+pub mod mock;
+
+/// QUIC transport implementation
 pub mod quic;
-pub mod tcp;
-pub mod udp;
+
+/// WebSocket transport implementation
 pub mod websocket;
+
+/// Basic TCP transport implementation
+pub mod tcp;
 
 /// Network transport abstraction for Entity-to-network external communications
 ///

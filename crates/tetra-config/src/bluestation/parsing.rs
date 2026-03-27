@@ -10,6 +10,7 @@ use crate::bluestation::{CellInfoDto, NetInfoDto, cell_dto_to_cfg, net_dto_to_cf
 
 use super::config::{SharedConfig, StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
+use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
 use super::{PhyIoDto, StackState, phy_dto_to_cfg};
 
 /// Build `SharedConfig` from a TOML configuration file
@@ -56,6 +57,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
         }
     }
 
+    // Optional telemetry section
+    if let Some(ref telemetry) = root.telemetry {
+        if !telemetry.extra.is_empty() {
+            return Err(format!("Unrecognized fields in telemetry config: {:?}", sorted_keys(&telemetry.extra)).into());
+        }
+    }
+
     // Build config from required and optional values
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
@@ -64,10 +72,15 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
         net: net_dto_to_cfg(root.net_info),
         cell: cell_dto_to_cfg(root.cell_info),
         brew: None,
+        telemetry: None,
     };
 
     if let Some(brew) = root.brew {
         cfg.brew = Some(apply_brew_patch(brew));
+    }
+
+    if let Some(telemetry) = root.telemetry {
+        cfg.telemetry = Some(apply_telemetry_patch(telemetry)?);
     }
 
     // Mutable runtime state
@@ -111,6 +124,8 @@ struct TomlConfigRoot {
     cell_info: CellInfoDto,
 
     brew: Option<CfgBrewDto>,
+
+    telemetry: Option<CfgTelemetryDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

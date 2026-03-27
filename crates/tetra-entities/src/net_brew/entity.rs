@@ -12,7 +12,7 @@ use tetra_saps::control::enums::sds_user_data::SdsUserData;
 use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
 
-use crate::brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
+use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};

@@ -21,6 +21,8 @@ use std::time::Duration;
 use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
 use tetra_config::bluestation::CfgBrew;
 
+pub const BREW_PROTOCOL_VERSION: &str = "brew";
+
 /// Build a [`WebSocketTransportConfig`] from the Brew section of the stack config.
 ///
 /// This wires the Brew-specific defaults (endpoint path `/brew/`, subprotocol `"brew"`,
@@ -30,13 +32,17 @@ pub fn websocket_transport_config(cfg: &CfgBrew) -> WebSocketTransportConfig {
         host: cfg.host.clone(),
         port: cfg.port,
         use_tls: cfg.tls,
-        username: cfg.username.clone(),
-        password: cfg.password.clone(),
+        digest_auth_credentials: match (&cfg.username, &cfg.password) {
+            (Some(u), Some(p)) => Some((u.clone(), p.clone())),
+            _ => None,
+        },
         endpoint_path: "/brew/".to_string(),
-        subprotocol: Some("brew".to_string()),
+        subprotocol: Some(BREW_PROTOCOL_VERSION.to_string()),
         user_agent: format!("BlueStation/{}", tetra_core::STACK_VERSION),
-        heartbeat_interval: Duration::from_secs(30),
-        heartbeat_timeout: Duration::from_secs(10),
+        heartbeat_interval: Duration::from_secs(10),
+        heartbeat_timeout: Duration::from_secs(30),
+        custom_root_certs: None,
+        basic_auth_credentials: None,
     }
 }
 

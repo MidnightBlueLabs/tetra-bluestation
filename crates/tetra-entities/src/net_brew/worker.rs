@@ -12,7 +12,7 @@ use tetra_config::bluestation::CfgBrew;
 use tetra_config::bluestation::SharedConfig;
 use uuid::Uuid;
 
-use crate::brew;
+use crate::net_brew;
 use crate::network::transports::NetworkTransport;
 
 use super::protocol::*;
@@ -240,7 +240,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
             }
 
             // Check if transport is still connected (may have been dropped during receive)
-            if !self.transport.is_connected() {
+            if self.transport.is_connected() {
                 return Err("transport disconnected".to_string());
             }
 
@@ -344,7 +344,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         data,
                         length_bits,
                     } => {
-                        if !brew::feature_sds_enabled(&self.config) {
+                        if !net_brew::feature_sds_enabled(&self.config) {
                             tracing::warn!("BrewWorker: ignoring SendSds command because SDS over Brew is disabled in config");
                             continue;
                         }
@@ -365,7 +365,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         }
                     }
                     BrewCommand::SendSdsReport { uuid, status } => {
-                        if !brew::feature_sds_enabled(&self.config) {
+                        if !net_brew::feature_sds_enabled(&self.config) {
                             tracing::warn!("BrewWorker: ignoring SendSdsReport command because SDS over Brew is disabled in config");
                             continue;
                         }
@@ -432,7 +432,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                         gt.priority,
                         gt.service
                     );
-                    if !brew::is_brew_gssi_routable(&self.config, gt.destination) {
+                    if !net_brew::is_brew_gssi_routable(&self.config, gt.destination) {
                         tracing::warn!("BrewWorker: dropping GROUP_TX to non-routable GSSI {}", gt.destination);
                         return;
                     };
@@ -501,7 +501,7 @@ impl<T: NetworkTransport> BrewWorker<T> {
                 });
             }
             FRAME_TYPE_SDS_TRANSFER => {
-                if !brew::feature_sds_enabled(&self.config) {
+                if !net_brew::feature_sds_enabled(&self.config) {
                     tracing::warn!("BrewWorker: ignoring incoming SDS_TRANSFER because SDS over Brew is disabled in config");
                     return;
                 }
