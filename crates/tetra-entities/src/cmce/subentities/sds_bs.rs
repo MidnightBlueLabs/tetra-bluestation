@@ -74,10 +74,8 @@ impl SdsBsSubentity {
         } else if is_local_group {
             tracing::info!("SDS: group delivery: {} -> GSSI {}", source_ssi, dest_ssi);
             self.send_d_sds_data(queue, message.dltime, source_ssi, dest_ssi, SsiType::Gssi, pdu.user_defined_data);
-        } else if brew::feature_sds_enabled(&self.config)
-            && (brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
-        {
-            tracing::info!("SDS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+        } else if brew::feature_sds_enabled(&self.config) {
+            tracing::info!("SDS: queueing Brew presence check: {} -> {}", source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -90,7 +88,7 @@ impl SdsBsSubentity {
                 }),
             });
         } else {
-            tracing::warn!("SDS: dest SSI {} not local and not Brew-routable, dropping", dest_ssi);
+            tracing::warn!("SDS: dest SSI {} not local and Brew SDS is unavailable, dropping", dest_ssi);
         }
     }
 
@@ -165,9 +163,7 @@ impl SdsBsSubentity {
         if self.config.state_read().subscribers.is_registered(dest_ssi) {
             tracing::info!("SDS-STATUS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_status(queue, message.dltime, source_ssi, dest_ssi, pdu.pre_coded_status);
-        } else if brew::is_active(&self.config)
-            && (brew::is_brew_issi_routable(&self.config, dest_ssi) || brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
-        {
+        } else if brew::feature_sds_enabled(&self.config) {
             // Brew forwarding only: when the pre-coded status carries an SDS-TL short report
             // (ETSI 29.4.2.3), convert it to a full SDS-TL REPORT PDU (Type4) so the
             // remote end recognizes it as a delivery confirmation. ETSI 29.3.3.4.4
@@ -195,7 +191,7 @@ impl SdsBsSubentity {
                 SdsUserData::Type1(pdu.pre_coded_status.into_raw())
             };
 
-            tracing::info!("SDS-STATUS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
+            tracing::info!("SDS-STATUS: queueing Brew presence check: {} -> {}", source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -209,7 +205,7 @@ impl SdsBsSubentity {
             });
         } else {
             tracing::warn!(
-                "SDS-STATUS: dest ISSI {} not locally registered and not Brew-routable, dropping",
+                "SDS-STATUS: dest ISSI {} not locally registered and Brew SDS is unavailable, dropping",
                 dest_ssi
             );
         }

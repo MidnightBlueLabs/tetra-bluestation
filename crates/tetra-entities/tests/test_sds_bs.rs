@@ -145,6 +145,46 @@ fn test_sds_brew_forward() {
 }
 
 #[test]
+fn test_sds_nonlocal_service_issi_still_forwarded_for_brew_presence_check() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "core.tetrapack.online".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        whitelisted_ssis: None,
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    let msg = build_u_sds_data_msg(dltime, 1_000_001, 200_999, 0x1234);
+    test.submit_message(msg);
+    test.run_stack(Some(1));
+
+    let sink_msgs = test.dump_sinks();
+    assert_eq!(
+        count_brew_sds(&sink_msgs),
+        1,
+        "Expected Brew routing check for non-local service ISSI"
+    );
+    assert_eq!(
+        count_d_sds_data(&sink_msgs),
+        0,
+        "Should not deliver locally when service ISSI is not registered"
+    );
+}
+
+#[test]
 fn test_sds_from_brew_to_local() {
     debug::setup_logging_verbose();
 
@@ -391,6 +431,77 @@ fn test_u_status_brew_forward() {
     // Should NOT deliver locally
     let d_sds_count = count_d_sds_data(&sink_msgs);
     assert_eq!(d_sds_count, 0, "Should not deliver locally when dest is not registered");
+}
+
+#[test]
+fn test_u_status_nonlocal_service_issi_still_forwarded_for_brew_presence_check() {
+    debug::setup_logging_verbose();
+
+    let dltime = TdmaTime { h: 0, m: 1, f: 1, t: 1 };
+    let mut config = ComponentTest::get_default_test_config(StackMode::Bs);
+    config.brew = Some(CfgBrew {
+        host: "core.tetrapack.online".into(),
+        port: 3000,
+        tls: false,
+        username: None,
+        password: None,
+        reconnect_delay: Duration::from_secs(1),
+        jitter_initial_latency_frames: 0,
+        feature_sds_enabled: true,
+        whitelisted_ssis: None,
+    });
+    let mut test = ComponentTest::from_config(config, Some(dltime));
+
+    let components = vec![TetraEntity::Cmce];
+    let sinks = vec![TetraEntity::Mle, TetraEntity::Brew];
+    test.populate_entities(components, sinks);
+
+    register_subscriber(&mut test, 1_000_001);
+
+    let u_status = UStatus {
+        area_selection: 0,
+        called_party_type_identifier: PartyTypeIdentifier::Ssi,
+        called_party_short_number_address: None,
+        called_party_ssi: Some(200_999),
+        called_party_extension: None,
+        pre_coded_status: PreCodedStatus::from(0x8210),
+        external_subscriber_number: None,
+        dm_ms_address: None,
+    };
+
+    let mut sdu = BitBuffer::new_autoexpand(80);
+    u_status.to_bitbuf(&mut sdu).expect("Failed to serialize U-STATUS");
+    sdu.seek(0);
+
+    let msg = SapMsg {
+        sap: Sap::LcmcSap,
+        src: TetraEntity::Mle,
+        dest: TetraEntity::Cmce,
+        dltime,
+        msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
+            sdu,
+            handle: 1,
+            endpoint_id: 1,
+            link_id: 1,
+            received_tetra_address: TetraAddress::new(1_000_001, SsiType::Issi),
+            chan_change_resp_req: false,
+            chan_change_handle: None,
+        }),
+    };
+    test.submit_message(msg);
+    test.run_stack(Some(1));
+
+    let sink_msgs = test.dump_sinks();
+    assert_eq!(
+        count_brew_sds(&sink_msgs),
+        1,
+        "Expected Brew routing check for non-local service U-STATUS"
+    );
+    assert_eq!(
+        count_d_sds_data(&sink_msgs),
+        0,
+        "Should not deliver locally when service ISSI is not registered"
+    );
 }
 
 #[test]
