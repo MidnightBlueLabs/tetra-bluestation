@@ -12,6 +12,7 @@ use crate::mm::components::client_state::{MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
+use tetra_pdus::mm::enums::reject_cause::RejectCause;
 use tetra_pdus::mm::enums::status_uplink::StatusUplink;
 use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
 use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
@@ -20,6 +21,7 @@ use tetra_pdus::mm::fields::group_identity_uplink::GroupIdentityUplink;
 use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttachDetachGroupIdentityAcknowledgement;
 use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
 use tetra_pdus::mm::pdus::d_location_update_command::DLocationUpdateCommand;
+use tetra_pdus::mm::pdus::d_location_update_reject::DLocationUpdateReject;
 use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
@@ -150,6 +152,28 @@ impl MmBs {
             }
         };
 
+        // Migration not supported: ETSI 16.4.1.1 case b) requires identity exchange via
+        // D-LOCATION-UPDATE-PROCEEDING which we don't implement. Reject with cause
+        // "Migration not supported" (12, Table 16.81) so the MS can act on it.
+        if pdu.location_update_type == LocationUpdateType::MigratingLocationUpdating
+            || pdu.location_update_type == LocationUpdateType::ServiceRestorationMigratingLocationUpdating
+        {
+            tracing::warn!(
+                "Rejecting migration request from SSI {}: {}",
+                prim.received_address.ssi,
+                pdu.location_update_type
+            );
+            Self::send_d_location_update_reject(
+                queue,
+                message.dltime,
+                prim.received_address.ssi,
+                prim.handle,
+                pdu.location_update_type.into_raw() as u8,
+                pdu.address_extension,
+            );
+            return;
+        }
+
         // Check if we can satisfy this request, print unsupported stuff
         if !Self::feature_check_u_location_update_demand(&pdu) {
             tracing::error!("Unsupported critical features in ULocationUpdateDemand");
@@ -215,7 +239,7 @@ impl MmBs {
 
         // Build D-LOCATION UPDATE ACCEPT pdu
         let pdu_response = DLocationUpdateAccept {
-            location_update_accept_type: pdu.location_update_type, // Practically identical besides minor migration-related difference
+            location_update_accept_type: pdu.location_update_type,
             ssi: Some(issi as u64),
             address_extension: None,
             subscriber_class: None,
@@ -564,6 +588,56 @@ impl MmBs {
         pdu.to_bitbuf(&mut sdu).unwrap();
         sdu.seek(0);
         tracing::debug!("-> DLocationUpdateCommand sdu {}", sdu.dump_bin());
+
+        let addr = TetraAddress {
+            encrypted: false,
+            ssi_type: SsiType::Ssi,
+            ssi: issi,
+        };
+        let msg = SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            dltime,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle,
+                address: addr,
+                layer2service: Layer2Service::Todo,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(msg);
+    }
+
+    /// Sends a D-LOCATION UPDATE REJECT PDU (ETSI clause 16.9.2.9)
+    fn send_d_location_update_reject(
+        queue: &mut MessageQueue,
+        dltime: TdmaTime,
+        issi: u32,
+        handle: u32,
+        location_update_type: u8,
+        address_extension: Option<u64>,
+    ) {
+        let pdu = DLocationUpdateReject {
+            location_update_type,
+            reject_cause: RejectCause::MigrationNotSupported as u8,
+            cipher_control: false,
+            ciphering_parameters: None,
+            // Echo back MNI if present, required for case b) per ETSI 16.4.1.1
+            address_extension,
+            cell_type_control: None,
+            proprietary: None,
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(16);
+        pdu.to_bitbuf(&mut sdu).unwrap();
+        sdu.seek(0);
+        tracing::debug!("-> {} sdu {}", pdu, sdu.dump_bin());
 
         let addr = TetraAddress {
             encrypted: false,

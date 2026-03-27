@@ -8,5 +8,7 @@ pub mod location_update_type;
 pub mod status_downlink;
 pub mod status_uplink;
 
+pub mod reject_cause;
+
 pub mod type34_elem_id_dl;
 pub mod type34_elem_id_ul;
