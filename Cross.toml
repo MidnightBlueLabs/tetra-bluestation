@@ -1,2 +1,5 @@
 [target.aarch64-unknown-linux-gnu]
 dockerfile = "contrib/cross-compile/Dockerfile.aarch64"
+
+[target.aarch64-unknown-linux-gnu.env]
+passthrough = ["CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
