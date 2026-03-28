@@ -23,9 +23,9 @@ Requires=network.target
 [Service]
 User=pi
 Group=pi
+Type=simple
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=73
-Type=simple
 WorkingDirectory=/home/pi/tetra-bluestation/
 ExecStart=/home/pi/tetra-bluestation/target/release/tetra-bluestation /home/pi/bluestation-config.toml
 KillSignal=SIGINT
