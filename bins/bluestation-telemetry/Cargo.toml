@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bluestation-telemetry"
+name = "bluestation-telemetry-service"
 path = "src/main.rs"
 
 [dependencies]
