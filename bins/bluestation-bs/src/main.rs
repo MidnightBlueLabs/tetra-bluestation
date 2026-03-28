@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use tetra_config::bluestation::{PhyBackend, SharedConfig, StackMode, parsing};
+use tetra_config::bluestation::{PhyBackend, SharedConfig, StackConfig, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;
@@ -24,7 +24,7 @@ use tetra_entities::{
 };
 
 /// Load configuration file
-fn load_config_from_toml(cfg_path: &str) -> SharedConfig {
+fn load_config_from_toml(cfg_path: &str) -> StackConfig {
     match parsing::from_file(cfg_path) {
         Ok(c) => c,
         Err(e) => {
@@ -34,8 +34,8 @@ fn load_config_from_toml(cfg_path: &str) -> SharedConfig {
     }
 }
 
-fn build_telemetry_worker(cfg: &mut SharedConfig) -> (Option<thread::JoinHandle<()>>, Option<channel::TelemetrySink>) {
-    let telemetry_cfg = match cfg.config().telemetry {
+fn build_telemetry_worker(cfg: &mut StackConfig) -> (Option<thread::JoinHandle<()>>, Option<channel::TelemetrySink>) {
+    let telemetry_cfg = match cfg.telemetry {
         Some(ref t) => t.clone(),
         None => {
             return (None, None);
@@ -96,7 +96,7 @@ fn build_bs_stack(cfg: &mut SharedConfig, telemetry_sink: Option<TelemetrySink>)
     let umac = UmacBs::new(cfg.clone());
     let llc = Llc::new(cfg.clone());
     let mle = MleBs::new(cfg.clone());
-    let mm = MmBs::new(cfg.clone(), telemetry_sink);
+    let mm = MmBs::new(cfg.clone(), telemetry_sink.clone());
     let sndcp = Sndcp::new(cfg.clone());
     let cmce = CmceBs::new(cfg.clone());
     router.register_entity(Box::new(lmac));
@@ -125,8 +125,8 @@ fn build_bs_stack(cfg: &mut SharedConfig, telemetry_sink: Option<TelemetrySink>)
 #[command(
     author,
     version,
-    about = "TETRA BlueStation Stack",
-    long_about = "Runs the TETRA BlueStation stack using the provided TOML configuration files"
+    about = "TETRA BlueStation base station stack",
+    long_about = "Runs the TETRA BlueStation base station stack using the provided TOML configuration files"
 )]
 
 struct Args {
@@ -143,30 +143,28 @@ fn main() {
     eprintln!("  https://github.com/MidnightBlueLabs/tetra-bluestation");
     eprintln!("  Version: {}", tetra_core::STACK_VERSION);
 
+    // Parse command-line arguments and load still-mutable config
     let args = Args::parse();
     let mut cfg = load_config_from_toml(&args.config);
-    let _log_guard = debug::setup_logging_default(cfg.config().debug_log.clone());
 
-    let (_, telemetry_sink) = build_telemetry_worker(&mut cfg);
+    // Build telemetry worker
+    let (_telemetry_join, telemetry_sink) = build_telemetry_worker(&mut cfg);
 
-    let mut router = match cfg.config().stack_mode {
-        StackMode::Mon => {
-            unimplemented!("Monitor mode is not implemented");
-        }
-        StackMode::Ms => {
-            unimplemented!("MS mode is not implemented");
-        }
-        StackMode::Bs => build_bs_stack(&mut cfg, telemetry_sink),
-    };
+    // Build immutable, cheaply clonable SharedConfig and build the base station stack
+    let mut shared_cfg = SharedConfig::from_parts(cfg, None);
+    let _log_guard = debug::setup_logging_default(shared_cfg.config().debug_log.clone());
+    let mut router = build_bs_stack(&mut shared_cfg, telemetry_sink);
 
     // Set up Ctrl+C handler for graceful shutdown
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    let is_running = Arc::new(AtomicBool::new(true));
+    let is_running_clone = is_running.clone();
     ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
+        is_running_clone.store(false, Ordering::SeqCst);
     })
     .expect("failed to set Ctrl+C handler");
 
-    router.run_stack(None, Some(running));
-    // router drops here → entities are dropped → BrewEntity::Drop fires teardown
+    // Start the stack
+    router.run_stack(None, Some(is_running));
+
+    // router drops here → entities are dropped, networked entities disconnect.
 }

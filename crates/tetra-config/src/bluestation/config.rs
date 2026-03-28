@@ -100,11 +100,7 @@ pub struct SharedConfig {
 }
 
 impl SharedConfig {
-    pub fn from_config(cfg: StackConfig) -> Self {
-        Self::from_parts(cfg, StackState::default())
-    }
-
-    pub fn from_parts(cfg: StackConfig, state: StackState) -> Self {
+    pub fn from_parts(cfg: StackConfig, state: Option<StackState>) -> Self {
         // Check config for validity before returning the SharedConfig object
         match cfg.validate() {
             Ok(_) => {}
@@ -113,7 +109,7 @@ impl SharedConfig {
 
         Self {
             cfg: Arc::new(cfg),
-            state: Arc::new(RwLock::new(state)),
+            state: Arc::new(RwLock::new(state.unwrap_or_default())),
         }
     }
 
