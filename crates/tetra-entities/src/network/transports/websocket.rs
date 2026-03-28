@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
+use tetra_config::bluestation::SecretField;
 use tungstenite::{Connector, Message, WebSocket, stream::MaybeTlsStream};
 
 use super::{NetworkAddress, NetworkError, NetworkMessage, NetworkTransport};
@@ -42,7 +43,7 @@ pub struct WebSocketTransportConfig {
     /// Optional credentials (username, password) for HTTP Digest Auth.
     /// When `Some`, the transport performs HTTP auth discovery before upgrading
     /// to WebSocket. When `None`, it connects directly to `endpoint_path`.
-    pub digest_auth_credentials: Option<(String, String)>,
+    pub digest_auth_credentials: Option<(String, SecretField)>,
 
     /// HTTP path used for initial authentication request (e.g. "/brew/")
     pub endpoint_path: String,
@@ -309,7 +310,7 @@ impl WebSocketTransport {
             }
 
             let (username, password) = match &self.config.digest_auth_credentials {
-                Some((u, p)) => (u.as_str(), p.as_str()),
+                Some((u, p)) => (u.as_str(), p.as_ref()),
                 None => {
                     return Err(NetworkError::ConnectionFailed(
                         "server requires auth but no credentials configured".to_string(),

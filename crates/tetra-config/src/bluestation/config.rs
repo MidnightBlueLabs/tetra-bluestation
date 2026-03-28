@@ -7,6 +7,43 @@ use crate::bluestation::{CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, StackSta
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;
 
+/// Wrapper for a string that should be treated as a secret. Display and Debug will redact the actual value,
+/// to prevent accidental logging of secrets.
+#[derive(Clone)]
+pub struct SecretField {
+    pub val: String,
+}
+
+impl From<String> for SecretField {
+    fn from(val: String) -> Self {
+        Self { val }
+    }
+}
+
+impl From<SecretField> for String {
+    fn from(secret: SecretField) -> Self {
+        secret.val
+    }
+}
+
+impl AsRef<str> for SecretField {
+    fn as_ref(&self) -> &str {
+        &self.val
+    }
+}
+
+impl std::fmt::Display for SecretField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "********")
+    }
+}
+
+impl std::fmt::Debug for SecretField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretField").field("val", &"********").finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum StackMode {
