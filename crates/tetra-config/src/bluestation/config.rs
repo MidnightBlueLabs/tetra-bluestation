@@ -75,6 +75,10 @@ impl StackConfig {
             };
         }
 
+        if self.cell.ms_txpwr_max_cell > 7 {
+            return Err("ms_txpwr_max_cell must be 0-7 (3 bits)");
+        }
+
         // Validate timezone if configured
         if let Some(ref tz) = self.cell.timezone {
             if tz.parse::<chrono_tz::Tz>().is_err() {
