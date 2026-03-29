@@ -1,4 +1,6 @@
-use crate::{MessageQueue, TetraEntityTrait, brew};
+use crate::net_control::ControlEndpoint;
+use crate::net_telemetry::channel::TelemetrySink;
+use crate::{MessageQueue, TetraEntityTrait, net_brew};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
@@ -25,14 +27,19 @@ use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
 
 pub struct MmBs {
     config: SharedConfig,
-    pub client_mgr: MmClientMgr,
+    telemetry: Option<TelemetrySink>,
+    control: Option<ControlEndpoint>,
+    client_mgr: MmClientMgr,
 }
 
 impl MmBs {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
+        let client_mgr = MmClientMgr::new(telemetry.clone());
         Self {
             config,
-            client_mgr: MmClientMgr::new(),
+            telemetry,
+            control,
+            client_mgr,
         }
     }
 
@@ -49,14 +56,14 @@ impl MmBs {
         // even when there are no group affiliations yet. The Brew worker
         // decides whether to send REGISTER or REREGISTER based on its own state.
         // Affiliate/Deaffiliate only sent when there are brew-routable groups.
-        if brew::is_active(&self.config) {
+        if net_brew::is_active(&self.config) {
             let brew_groups = groups
                 .iter()
-                .filter(|gssi| brew::is_brew_gssi_routable(&self.config, **gssi))
+                .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
                 .copied()
                 .collect::<Vec<u32>>();
             let should_send = match action {
-                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => brew::is_brew_issi_routable(&self.config, issi),
+                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => net_brew::is_brew_issi_routable(&self.config, issi),
                 BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
             };
             if should_send {
@@ -674,6 +681,21 @@ impl TetraEntityTrait for MmBs {
 
     fn set_config(&mut self, config: SharedConfig) {
         self.config = config;
+    }
+
+    fn tick_start(&mut self, _queue: &mut MessageQueue, _ts: TdmaTime) {
+        if let Some(cep) = &self.control {
+            while let Some(cmd) = cep.try_recv() {
+                match cmd {
+                    // ControlCommand::CommandA { handle, parameter } => {
+                    //     cep.respond(ControlResponse::CommandAResponse { handle, result: parameter * 2 });
+                    // }
+                    _ => {
+                        panic!("Unsupported command {:?}", cmd);
+                    }
+                }
+            }
+        }
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {

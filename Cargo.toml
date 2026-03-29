@@ -11,13 +11,13 @@ members = [
     
     # Binaries
     "bins/bluestation-bs",
-    "bins/pdu-tool",
-    "bins/net-tnmm-test",
-    "bins/net-tnmm-test-quic"
+    #"bins/bluestation-telemetry",
+    #"bins/bluestation-control",
+    #"bins/pdu-tool",
 ]
 
 [workspace.package]
-version = "0.5.6"
+version = "0.5.8"
 edition = "2024"
 authors = ["Wouter Bokslag / Midnight Blue"]
 license = "MIT"
@@ -44,6 +44,7 @@ tracing = { version = "0.1.41", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-appender = "0.2.4"
 crossbeam-channel = "0.5"
+bitcode = "0.6.9"
 tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 uuid = { version = "1", features = ["v4"] }
 ctrlc = "3"

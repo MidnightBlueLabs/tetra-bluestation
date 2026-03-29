@@ -6,14 +6,15 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CellInfoDto, NetInfoDto, cell_dto_to_cfg, net_dto_to_cfg};
+use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 
-use super::config::{SharedConfig, StackConfig, StackMode};
+use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
-use super::{PhyIoDto, StackState, phy_dto_to_cfg};
+use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
+use super::{PhyIoDto, phy_dto_to_cfg};
 
-/// Build `SharedConfig` from a TOML configuration file
-pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error::Error>> {
+/// Build `StackConfig` from a TOML configuration file
+pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::Error>> {
     let root: TomlConfigRoot = toml::from_str(toml_str)?;
 
     // Various sanity checks
@@ -56,6 +57,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
         }
     }
 
+    // Optional telemetry section
+    if let Some(ref telemetry) = root.telemetry {
+        if !telemetry.extra.is_empty() {
+            return Err(format!("Unrecognized fields in telemetry config: {:?}", sorted_keys(&telemetry.extra)).into());
+        }
+    }
+
     // Build config from required and optional values
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
@@ -64,20 +72,27 @@ pub fn from_toml_str(toml_str: &str) -> Result<SharedConfig, Box<dyn std::error:
         net: net_dto_to_cfg(root.net_info),
         cell: cell_dto_to_cfg(root.cell_info),
         brew: None,
+        telemetry: None,
+        control: None,
     };
 
     if let Some(brew) = root.brew {
         cfg.brew = Some(apply_brew_patch(brew));
     }
 
-    // Mutable runtime state
-    let state = StackState::default();
+    if let Some(telemetry) = root.telemetry {
+        cfg.telemetry = Some(apply_telemetry_patch(telemetry)?);
+    }
 
-    Ok(SharedConfig::from_parts(cfg, state))
+    if let Some(command) = root.command {
+        cfg.control = Some(apply_control_patch(command)?);
+    }
+
+    Ok(cfg)
 }
 
 /// Build `SharedConfig` from any reader.
-pub fn from_reader<R: Read>(reader: R) -> Result<SharedConfig, Box<dyn std::error::Error>> {
+pub fn from_reader<R: Read>(reader: R) -> Result<StackConfig, Box<dyn std::error::Error>> {
     let mut contents = String::new();
     let mut reader = BufReader::new(reader);
     reader.read_to_string(&mut contents)?;
@@ -85,7 +100,7 @@ pub fn from_reader<R: Read>(reader: R) -> Result<SharedConfig, Box<dyn std::erro
 }
 
 /// Build `SharedConfig` from a file path.
-pub fn from_file<P: AsRef<Path>>(path: P) -> Result<SharedConfig, Box<dyn std::error::Error>> {
+pub fn from_file<P: AsRef<Path>>(path: P) -> Result<StackConfig, Box<dyn std::error::Error>> {
     let f = File::open(path)?;
     let r = BufReader::new(f);
     let cfg = from_reader(r)?;
@@ -111,6 +126,8 @@ struct TomlConfigRoot {
     cell_info: CellInfoDto,
 
     brew: Option<CfgBrewDto>,
+    telemetry: Option<CfgTelemetryDto>,
+    command: Option<CfgControlDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

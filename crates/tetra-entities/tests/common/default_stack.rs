@@ -17,6 +17,8 @@ pub fn default_test_config_bs() -> StackConfig {
         net: net_info,
         cell: cell_info,
         brew: None,
+        telemetry: None,
+        control: None,
     }
 }
 

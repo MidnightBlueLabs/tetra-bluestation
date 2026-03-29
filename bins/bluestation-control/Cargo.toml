@@ -1,21 +1,22 @@
 [package]
-name = "bluestation-bs"
+name = "bluestation-control"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bluestation-bs"
+name = "bluestation-control-service"
 path = "src/main.rs"
 
 [dependencies]
 tetra-core = { workspace = true }
-tetra-config = { workspace = true }
-tetra-saps = { workspace = true }
 tetra-entities = { workspace = true }
+crossbeam-channel = { workspace = true }
 
 clap = { workspace = true }
-ctrlc = { workspace = true }
-rustls = { version = "0.23", default-features = false }
+tungstenite = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+base64 = "0.22"
+argon2 = "0.5"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-appender = { workspace = true }

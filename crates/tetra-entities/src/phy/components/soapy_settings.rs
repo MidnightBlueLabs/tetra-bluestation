@@ -270,7 +270,7 @@ impl SdrSettings {
             tx_ant: Some("TX/RX".to_string()),
 
             rx_gain: vec![("PGA".to_string(), 50.0)],
-            tx_gain: vec![("PGA".to_string(), 35.0)],
+            tx_gain: vec![("PGA".to_string(), 45.0)],
 
             ..Self::default(mode)
         }

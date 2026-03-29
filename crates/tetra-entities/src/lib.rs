@@ -12,9 +12,10 @@ pub mod sndcp;
 pub mod umac;
 
 pub mod network;
-pub mod tnmm_net;
 
-pub mod brew;
+pub mod net_brew;
+pub mod net_control;
+pub mod net_telemetry;
 
 // Re-export commonly used items from router
 pub use entity_trait::TetraEntityTrait;

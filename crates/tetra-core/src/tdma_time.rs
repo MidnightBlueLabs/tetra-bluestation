@@ -1,5 +1,8 @@
 use core::fmt;
 
+use bitcode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+
 /// Convert a number of hyperframes to timeslots.  
 #[macro_export]
 macro_rules! hyperframes {
@@ -24,7 +27,7 @@ macro_rules! frames {
     };
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Encode, Decode, Serialize, Deserialize)]
 pub struct TdmaTime {
     /// Timeslot, from 1 to 4
     pub t: u8,
