@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CellInfoDto, NetInfoDto, cell_dto_to_cfg, net_dto_to_cfg};
+use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
@@ -73,6 +73,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         cell: cell_dto_to_cfg(root.cell_info),
         brew: None,
         telemetry: None,
+        control: None,
     };
 
     if let Some(brew) = root.brew {
@@ -81,6 +82,10 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
 
     if let Some(telemetry) = root.telemetry {
         cfg.telemetry = Some(apply_telemetry_patch(telemetry)?);
+    }
+
+    if let Some(command) = root.command {
+        cfg.control = Some(apply_control_patch(command)?);
     }
 
     Ok(cfg)
@@ -121,8 +126,8 @@ struct TomlConfigRoot {
     cell_info: CellInfoDto,
 
     brew: Option<CfgBrewDto>,
-
     telemetry: Option<CfgTelemetryDto>,
+    command: Option<CfgControlDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

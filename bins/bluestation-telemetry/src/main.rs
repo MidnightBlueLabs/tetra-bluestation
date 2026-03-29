@@ -9,24 +9,26 @@
 //!
 //! Generate credential lines with `contrib/generate_credential.sh`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use tetra_entities::net_telemetry::TELEMETRY_PROTOCOL_VERSION;
-use tracing::{error, info, warn};
+use tracing;
+
 use tungstenite::Message;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
 use tetra_entities::net_telemetry::codec::TelemetryCodecJson;
 
 #[derive(Parser)]
-#[command(name = "bluestation-telemetry", about = "TETRA telemetry receiver")]
+#[command(name = "bluestation-telemetry", about = "TETRA telemetry service")]
 struct Args {
     /// Listen address (host:port)
-    #[arg(short, long, default_value = "0.0.0.0:9001")]
+    #[arg(short, long, default_value = "127.0.0.1:9001")]
     listen: String,
 
     /// Path to PEM-encoded server certificate chain for TLS
@@ -95,7 +97,7 @@ fn load_auth_db(path: &str) -> AuthDb {
         eprintln!("Auth file '{}' contains no credentials", path);
         std::process::exit(1);
     }
-    info!("Loaded {} credential(s) from {}", db.len(), path);
+    tracing::info!("Loaded {} credential(s) from {}", db.len(), path);
     db
 }
 
@@ -156,21 +158,26 @@ fn main() {
 
     let auth_db: Option<Arc<AuthDb>> = args.auth_file.as_deref().map(|path| Arc::new(load_auth_db(path)));
 
+    let state = Arc::new(SharedState {
+        connected: Mutex::new(HashSet::new()),
+        anon_counter: AtomicU64::new(0),
+    });
+
     let tls_config = match (&args.cert, &args.key) {
         (Some(cert_path), Some(key_path)) => Some(build_tls_config(cert_path, key_path)),
         (None, None) => None,
         _ => {
-            error!("Both --cert and --key must be provided for TLS");
+            tracing::error!("Both --cert and --key must be provided for TLS");
             std::process::exit(1);
         }
     };
 
     let listener = TcpListener::bind(&args.listen).unwrap_or_else(|e| {
-        error!("Failed to bind to {}: {}", args.listen, e);
+        tracing::error!("Failed to bind to {}: {}", args.listen, e);
         std::process::exit(1);
     });
 
-    info!(
+    tracing::info!(
         "Telemetry receiver listening on {}{}{}",
         args.listen,
         if tls_config.is_some() { " (TLS)" } else { "" },
@@ -181,28 +188,29 @@ fn main() {
         match stream {
             Ok(tcp) => {
                 let peer = tcp.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".into());
-                info!("Connection from {}", peer);
+                tracing::info!("Connection from {}", peer);
 
                 let tls_cfg = tls_config.clone();
                 let auth = auth_db.clone();
+                let st = Arc::clone(&state);
                 std::thread::spawn(move || {
                     if let Some(cfg) = tls_cfg {
                         let tls_conn = match rustls::ServerConnection::new(cfg) {
                             Ok(c) => c,
                             Err(e) => {
-                                error!("[{}] TLS session init failed: {}", peer, e);
+                                tracing::error!("[{}] TLS session init failed: {}", peer, e);
                                 return;
                             }
                         };
                         let tls_stream = rustls::StreamOwned::new(tls_conn, tcp);
-                        handle_connection(tls_stream, &peer, auth.as_deref());
+                        handle_connection(tls_stream, &peer, auth.as_deref(), &st);
                     } else {
-                        handle_connection(tcp, &peer, auth.as_deref());
+                        handle_connection(tcp, &peer, auth.as_deref(), &st);
                     }
                 });
             }
             Err(e) => {
-                error!("Accept failed: {}", e);
+                tracing::error!("Accept failed: {}", e);
             }
         }
     }
@@ -249,64 +257,74 @@ fn build_tls_config(cert_path: &str, key_path: &str) -> Arc<rustls::ServerConfig
 /// Validate HTTP Basic Auth credentials from the `Authorization` header.
 /// Decodes the Basic Auth value, looks up the username in the auth DB, and
 /// verifies the password against the stored Argon2 PHC hash.
-fn check_basic_auth(req: &Request, auth_db: Option<&AuthDb>) -> bool {
+/// Returns the authenticated username on success, or `None` on failure.
+fn check_basic_auth(req: &Request, auth_db: &AuthDb) -> Option<String> {
     use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
-    let db = match auth_db {
-        Some(db) => db,
-        None => return true, // No auth required
-    };
-
-    let header = match req.headers().get("Authorization").and_then(|v| v.to_str().ok()) {
-        Some(h) => h,
-        None => return false,
-    };
-
-    let encoded = match header.strip_prefix("Basic ") {
-        Some(e) => e,
-        None => return false,
-    };
+    let header = req.headers().get("Authorization").and_then(|v| v.to_str().ok())?;
+    let encoded = header.strip_prefix("Basic ")?;
 
     use base64::Engine;
-    let decoded = match base64::engine::general_purpose::STANDARD.decode(encoded) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
+    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    let credentials = String::from_utf8(decoded).ok()?;
+    let (username, password) = credentials.split_once(':')?;
 
-    let credentials = match String::from_utf8(decoded) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
+    let phc_hash = auth_db.get(username)?;
+    let parsed_hash = PasswordHash::new(phc_hash).ok()?;
 
-    let (username, password) = match credentials.split_once(':') {
-        Some(pair) => pair,
-        None => return false,
-    };
-
-    let phc_hash = match db.get(username) {
-        Some(h) => h,
-        None => return false,
-    };
-
-    let parsed_hash = match PasswordHash::new(phc_hash) {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
-
-    Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok()
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .ok()
+        .map(|_| username.to_string())
 }
 
-fn handle_connection<S: Read + Write>(stream: S, peer: &str, auth_db: Option<&AuthDb>) {
+/// State shared across all connection threads.
+struct SharedState {
+    /// usernames of currently connected base stations — enforces one-connection-per-user.
+    connected: Mutex<HashSet<String>>,
+    /// monotonic counter for anonymous client identifiers.
+    anon_counter: AtomicU64,
+}
+
+fn handle_connection<S: Read + Write>(stream: S, peer: &str, auth_db: Option<&AuthDb>, state: &SharedState) {
+    // We need to communicate the resolved display-name out of the handshake
+    // callback.  `tungstenite::accept_hdr` takes an `FnMut`, so we use a
+    // shared cell that the callback writes into.
+    let display_name: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let dn_inner = Arc::clone(&display_name);
+
     let callback = |req: &Request, mut response: Response| -> Result<Response, ErrorResponse> {
-        // Verify HTTP Basic Auth if enabled
-        if !check_basic_auth(req, auth_db) {
-            warn!("[{}] Rejected: invalid or missing Basic Auth credentials", peer);
-            let mut err = ErrorResponse::new(Some("401 Unauthorized".to_string()));
-            err.headers_mut()
-                .insert("WWW-Authenticate", "Basic realm=\"bluestation-telemetry\"".parse().unwrap());
-            return Err(err);
+        // --- authenticate & resolve display name ---
+        let name = if let Some(db) = auth_db {
+            match check_basic_auth(req, db) {
+                Some(username) => username,
+                None => {
+                    tracing::warn!("[{}] rejected: invalid or missing credentials", peer);
+                    let mut err = ErrorResponse::new(Some("401 Unauthorized".to_string()));
+                    err.headers_mut()
+                        .insert("WWW-Authenticate", "Basic realm=\"bluestation-telemetry\"".parse().unwrap());
+                    return Err(err);
+                }
+            }
+        } else {
+            // No auth configured — assign an anonymous identifier
+            let id = state.anon_counter.fetch_add(1, Ordering::Relaxed);
+            format!("anonymous{}", id)
+        };
+
+        // --- enforce one-connection-per-username ---
+        {
+            let mut connected = state.connected.lock().unwrap();
+            if connected.contains(&name) {
+                tracing::warn!("[{}] rejected: '{}' is already connected", peer, name);
+                return Err(ErrorResponse::new(Some(format!("user '{}' is already connected", name))));
+            }
+            connected.insert(name.clone());
         }
 
+        *dn_inner.lock().unwrap() = Some(name);
+
+        // --- subprotocol check ---
         let proto = req
             .headers()
             .get("Sec-WebSocket-Protocol")
@@ -319,9 +337,15 @@ fn handle_connection<S: Read + Write>(stream: S, peer: &str, auth_db: Option<&Au
                 .insert("Sec-WebSocket-Protocol", TELEMETRY_PROTOCOL_VERSION.parse().unwrap());
             Ok(response)
         } else {
-            warn!(
-                "[{}] Rejected: expected subprotocol '{}', got '{}'",
-                peer, TELEMETRY_PROTOCOL_VERSION, proto
+            // Clean up the connected set since handshake is failing
+            if let Some(ref name) = *dn_inner.lock().unwrap() {
+                state.connected.lock().unwrap().remove(name);
+            }
+            tracing::warn!(
+                "[{}] rejected: expected subprotocol '{}', got '{}'",
+                peer,
+                TELEMETRY_PROTOCOL_VERSION,
+                proto
             );
             Err(ErrorResponse::new(Some(format!(
                 "unsupported subprotocol; expected {}",
@@ -333,52 +357,62 @@ fn handle_connection<S: Read + Write>(stream: S, peer: &str, auth_db: Option<&Au
     let mut ws = match tungstenite::accept_hdr(stream, callback) {
         Ok(ws) => ws,
         Err(e) => {
-            error!("[{}] WebSocket handshake failed: {}", peer, e);
+            // Clean up connected set if the name was already inserted
+            if let Some(ref name) = *display_name.lock().unwrap() {
+                state.connected.lock().unwrap().remove(name);
+            }
+            tracing::error!("[{}] WebSocket handshake failed: {}", peer, e);
             return;
         }
     };
 
+    let name = display_name.lock().unwrap().clone().unwrap_or_else(|| "unknown".to_string());
+
     let codec = TelemetryCodecJson;
-    info!("[{}] WebSocket connected", peer);
+    tracing::info!("[{}] connected (peer {})", name, peer);
 
     loop {
         match ws.read() {
             Ok(Message::Binary(data)) => match codec.decode(&data) {
                 Ok(event) => {
-                    println!("{:?}", event);
+                    tracing::info!("[{}] {:?}", name, event);
                 }
                 Err(e) => {
-                    error!("[{}] Deserialize error: {}", peer, e);
+                    tracing::error!("[{}] deserialize error: {}", name, e);
                 }
             },
             Ok(Message::Text(text)) => {
-                error!("[{}] Unexpected text message ({} bytes), expected binary", peer, text.len());
+                tracing::error!("[{}] unexpected text message ({} bytes), expected binary", name, text.len());
             }
             Ok(Message::Ping(_)) => {
                 // tungstenite auto-queues a Pong reply; just flush it out.
                 if ws.flush().is_err() {
-                    info!("[{}] Failed to flush pong, disconnecting", peer);
+                    tracing::info!("[{}] failed to flush pong, disconnecting", name);
                     break;
                 }
             }
             Ok(Message::Pong(_)) => {}
             Ok(Message::Close(_)) => {
-                info!("[{}] Client disconnected", peer);
+                tracing::info!("[{}] disconnected", name);
                 break;
             }
             Ok(_) => {}
             Err(tungstenite::Error::ConnectionClosed) => {
-                info!("[{}] Connection closed", peer);
+                tracing::info!("[{}] connection closed", name);
                 break;
             }
             Err(tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)) => {
-                info!("[{}] Connection reset", peer);
+                tracing::info!("[{}] connection reset", name);
                 break;
             }
             Err(e) => {
-                error!("[{}] Read error: {}", peer, e);
+                tracing::error!("[{}] read error: {}", name, e);
                 break;
             }
         }
     }
+
+    // Release the slot so the same user can reconnect
+    state.connected.lock().unwrap().remove(&name);
+    tracing::info!("[{}] slot released", name);
 }

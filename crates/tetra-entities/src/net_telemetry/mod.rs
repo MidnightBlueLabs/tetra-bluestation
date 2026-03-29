@@ -7,7 +7,6 @@
 pub mod channel;
 pub mod codec;
 pub mod events;
-pub mod protocol;
 pub mod worker;
 
 use std::time::Duration;

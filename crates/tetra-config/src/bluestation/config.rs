@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
-use crate::bluestation::{CfgCellInfo, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
+use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
 
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;
@@ -66,6 +66,9 @@ pub struct StackConfig {
 
     /// Telemetry endpoint configuration
     pub telemetry: Option<CfgTelemetry>,
+
+    /// Control endpoint configuration
+    pub control: Option<CfgControl>,
 }
 
 impl StackConfig {

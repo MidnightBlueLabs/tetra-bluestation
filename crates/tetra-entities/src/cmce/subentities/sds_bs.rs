@@ -1,6 +1,6 @@
 use tetra_config::bluestation::SharedConfig;
-use tetra_core::Layer2Service;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
+use tetra_core::{Layer2Service, TdmaTime};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
 use tetra_pdus::cmce::enums::short_report_type::ShortReportType;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
@@ -16,6 +16,7 @@ use tetra_pdus::cmce::pdus::u_status::UStatus;
 
 use crate::MessageQueue;
 use crate::net_brew;
+use crate::net_control::ControlCommand;
 
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
@@ -54,7 +55,6 @@ impl SdsBsSubentity {
 
         // Extract destination SSI (guaranteed present after feature check)
         let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
-
         let source_ssi = calling_party.ssi;
 
         tracing::info!(
@@ -122,6 +122,47 @@ impl SdsBsSubentity {
             SsiType::Issi,
             sds.user_defined_data,
         );
+    }
+
+    /// Handle incoming SDS data from Control entity (network-originated SDS)
+    pub fn rx_sds_from_control(&mut self, queue: &mut MessageQueue, message: ControlCommand) -> bool {
+        let ControlCommand::SendSds {
+            handle,
+            source_ssi,
+            dest_ssi,
+            dest_is_group,
+            len_bits,
+            payload,
+        } = message
+        else {
+            panic!("Expected SendSds command");
+        };
+
+        tracing::info!(
+            "SDS: received from Control {}: {} -> {}, type={}, {} bits",
+            handle,
+            source_ssi,
+            dest_ssi,
+            dest_is_group.then(|| "GSSI").unwrap_or("ISSI"),
+            len_bits
+        );
+
+        if !self.config.state_read().subscribers.is_registered(dest_ssi) {
+            tracing::warn!("SDS: dest ISSI {} from Control is not locally registered, dropping", dest_ssi);
+            return false;
+        }
+
+        // Send D-SDS-DATA downlink to the local MS. Schedule on next ts1 to ensure it gets sent on the MCCH
+        self.send_d_sds_data(
+            queue,
+            TdmaTime::default().forward_to_timeslot(1),
+            source_ssi,
+            dest_ssi,
+            if dest_is_group { SsiType::Gssi } else { SsiType::Issi },
+            SdsUserData::Type4(len_bits, payload),
+        );
+
+        true
     }
 
     /// Handle incoming U-STATUS from a local MS (via RF uplink)

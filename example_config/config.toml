@@ -187,28 +187,3 @@ voice_service = true
 # SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled. 
 # If left commented, all (outside of local_ssi_ranges) calls are allowed over Brew
 # whitelisted_ssis = [91]
-
-
-###############################################################################
-
-# Telemetry service endpoint configuration. If configured, the stack will attempt to connect to 
-# this endpoint to send telemetry data. One-way communication only. An example telemetry service 
-# is also part of the project, compiled as bluestation-telemetry-service.
-
-[telemetry]
-host = "127.0.0.1"
-port = 9001
-
-
-###############################################################################
-
-# Control service endpoint configuration. If configured, the stack will attempt to connect to
-# this endpoint to accept status queries and control commands. The base station acts as a client
-# and initiates a connection to the control service, which is also part of the project, compiled 
-# as bluestation-control-service.
-
-# THIS GRANTS CONTROL OVER YOUR BASE STATION TO WHOEVER OPERATES THE CONTROL SERVICE
-
-[control]
-host = "127.0.0.1"
-port = 9002

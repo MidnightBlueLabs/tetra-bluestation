@@ -1,3 +1,4 @@
+use crate::net_control::ControlEndpoint;
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
 use tetra_config::bluestation::SharedConfig;
@@ -26,16 +27,18 @@ use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
 
 pub struct MmBs {
     config: SharedConfig,
-    telemetry_sink: Option<TelemetrySink>,
-    pub client_mgr: MmClientMgr,
+    telemetry: Option<TelemetrySink>,
+    control: Option<ControlEndpoint>,
+    client_mgr: MmClientMgr,
 }
 
 impl MmBs {
-    pub fn new(config: SharedConfig, telemetry_sink: Option<TelemetrySink>) -> Self {
-        let client_mgr = MmClientMgr::new(telemetry_sink.clone());
+    pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
+        let client_mgr = MmClientMgr::new(telemetry.clone());
         Self {
             config,
-            telemetry_sink,
+            telemetry,
+            control,
             client_mgr,
         }
     }
@@ -678,6 +681,21 @@ impl TetraEntityTrait for MmBs {
 
     fn set_config(&mut self, config: SharedConfig) {
         self.config = config;
+    }
+
+    fn tick_start(&mut self, _queue: &mut MessageQueue, _ts: TdmaTime) {
+        if let Some(cep) = &self.control {
+            while let Some(cmd) = cep.try_recv() {
+                match cmd {
+                    // ControlCommand::CommandA { handle, parameter } => {
+                    //     cep.respond(ControlResponse::CommandAResponse { handle, result: parameter * 2 });
+                    // }
+                    _ => {
+                        panic!("Unsupported command {:?}", cmd);
+                    }
+                }
+            }
+        }
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {

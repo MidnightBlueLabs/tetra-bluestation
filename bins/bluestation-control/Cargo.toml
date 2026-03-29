@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 tetra-core = { workspace = true }
 tetra-entities = { workspace = true }
+crossbeam-channel = { workspace = true }
 
 clap = { workspace = true }
 tungstenite = { workspace = true }
