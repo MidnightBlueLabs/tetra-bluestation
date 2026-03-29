@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tetra_core::TetraAddress;
 use tetra_pdus::umac::fields::EventLabel;
 
@@ -8,14 +10,14 @@ pub struct EventLabelMapping {
 }
 
 pub struct EventLabelStore {
-    labels: std::collections::HashMap<EventLabel, EventLabelMapping>,
+    labels: HashMap<EventLabel, EventLabelMapping>,
     next_label: EventLabel,
 }
 
 impl EventLabelStore {
     pub fn new() -> Self {
         Self {
-            labels: std::collections::HashMap::new(),
+            labels: HashMap::new(),
             next_label: 1,
         }
     }

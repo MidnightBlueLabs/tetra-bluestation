@@ -18,25 +18,25 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            bin_path: target/x86_64-unknown-linux-gnu/release/tetra-bluestation
-            build_cmd: cargo build --release --target x86_64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
-            artifact_name: tetra-bluestation-x86_64
+            bin_path: target/x86_64-unknown-linux-gnu/release/bluestation-bs
+            build_cmd: cargo build --release --target x86_64-unknown-linux-gnu -p bluestation-bs --bin bluestation-bs
+            artifact_name: bluestation-bs-x86_64
 
           - target: aarch64-unknown-linux-gnu
-            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
-            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
-            artifact_name: tetra-bluestation-aarch64-generic
+            bin_path: target/aarch64-unknown-linux-gnu/release/bluestation-bs
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin bluestation-bs
+            artifact_name: bluestation-bs-aarch64-generic
 
           - target: aarch64-unknown-linux-gnu
-            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
-            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
-            artifact_name: tetra-bluestation-rpi4
+            bin_path: target/aarch64-unknown-linux-gnu/release/bluestation-bs
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin bluestation-bs
+            artifact_name: bluestation-bs-rpi4
             cpu_rustflags: "-C target-cpu=cortex-a72"
 
           - target: aarch64-unknown-linux-gnu
-            bin_path: target/aarch64-unknown-linux-gnu/release/tetra-bluestation
-            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin tetra-bluestation
-            artifact_name: tetra-bluestation-rpi5
+            bin_path: target/aarch64-unknown-linux-gnu/release/bluestation-bs
+            build_cmd: cross build --release --target aarch64-unknown-linux-gnu -p bluestation-bs --bin bluestation-bs
+            artifact_name: bluestation-bs-rpi5
             cpu_rustflags: "-C target-cpu=cortex-a76"
 
     steps:

@@ -3,6 +3,8 @@ use std::{collections::HashMap, time::Duration};
 use serde::Deserialize;
 use toml::Value;
 
+use crate::bluestation::SecretField;
+
 /// Brew protocol (TetraPack/BrandMeister) configuration
 #[derive(Debug, Clone)]
 pub struct CfgBrew {
@@ -15,7 +17,7 @@ pub struct CfgBrew {
     /// Optional username for HTTP Digest auth
     pub username: Option<String>,
     /// Optional password for HTTP Digest auth
-    pub password: Option<String>,
+    pub password: Option<SecretField>,
     /// Reconnection delay
     pub reconnect_delay: Duration,
     /// Extra initial jitter playout delay in frames (added on top of adaptive baseline)
@@ -77,7 +79,7 @@ pub fn apply_brew_patch(src: CfgBrewDto) -> CfgBrew {
         port: src.port,
         tls: src.tls,
         username: Some(src.username.to_string()),
-        password: Some(src.password),
+        password: Some(SecretField::from(src.password)),
         reconnect_delay: Duration::from_secs(src.reconnect_delay_secs),
         jitter_initial_latency_frames: src.jitter_initial_latency_frames,
         feature_sds_enabled: src.feature_sds_enabled,

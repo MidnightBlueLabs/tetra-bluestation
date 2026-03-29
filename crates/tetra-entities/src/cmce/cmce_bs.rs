@@ -1,3 +1,5 @@
+use crate::net_control::{ControlCommand, ControlEndpoint, ControlResponse};
+use crate::net_telemetry::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
@@ -12,6 +14,8 @@ use super::subentities::ss_bs::SsBsSubentity;
 
 pub struct CmceBs {
     config: SharedConfig,
+    telemetry: Option<TelemetrySink>,
+    control: Option<ControlEndpoint>,
 
     cc: CcBsSubentity,
     sds: SdsBsSubentity,
@@ -19,9 +23,11 @@ pub struct CmceBs {
 }
 
 impl CmceBs {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
         Self {
             config: config.clone(),
+            telemetry,
+            control,
             sds: SdsBsSubentity::new(config.clone()),
             cc: CcBsSubentity::new(config.clone()),
             ss: SsBsSubentity::new(),
@@ -85,6 +91,22 @@ impl TetraEntityTrait for CmceBs {
     fn tick_start(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
         // Propagate tick to subentities
         self.cc.tick_start(queue, ts);
+
+        // Process incoming control commands, if control link is enabled
+        if let Some(cep) = &self.control {
+            while let Some(cmd) = cep.try_recv() {
+                match cmd {
+                    ControlCommand::SendSds { handle, .. } => {
+                        let success = self.sds.rx_sds_from_control(queue, cmd);
+                        let response = ControlResponse::SendSdsResponse { handle, success };
+                        cep.respond(response);
+                    }
+                    _ => {
+                        panic!("Unsupported command {:?}", cmd);
+                    }
+                }
+            }
+        }
     }
 
     fn rx_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {

@@ -1,4 +1,4 @@
-use tetra_config::bluestation::{SharedConfig, StackConfig, StackMode, StackState};
+use tetra_config::bluestation::{SharedConfig, StackConfig, StackMode};
 use tetra_core::TdmaTime;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_entities::{MessageRouter, TetraEntityTrait};
@@ -46,7 +46,7 @@ impl ComponentTest {
 
     /// Create a new ComponentTest instance with the given config and optional start downlink time.
     pub fn from_config(config: StackConfig, start_dl_time: Option<TdmaTime>) -> Self {
-        let shared_config = SharedConfig::from_parts(config, StackState::default());
+        let shared_config = SharedConfig::from_parts(config, None);
         let config_clone = shared_config.clone();
         let mut mr = MessageRouter::new(config_clone);
 
@@ -115,7 +115,7 @@ impl ComponentTest {
                     self.router.register_entity(Box::new(mle));
                 }
                 TetraEntity::Mm => {
-                    let mm = MmBs::new(self.config.clone());
+                    let mm = MmBs::new(self.config.clone(), None, None);
                     self.router.register_entity(Box::new(mm));
                 }
                 TetraEntity::Sndcp => {
@@ -123,7 +123,7 @@ impl ComponentTest {
                     self.router.register_entity(Box::new(sndcp));
                 }
                 TetraEntity::Cmce => {
-                    let cmce = CmceBs::new(self.config.clone());
+                    let cmce = CmceBs::new(self.config.clone(), None, None);
                     self.router.register_entity(Box::new(cmce));
                 }
                 _ => {

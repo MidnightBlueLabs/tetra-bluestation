@@ -1,0 +1,34 @@
+# Sample systemd service file for bluestation-bs
+#
+# Installation: (as root or with sudo)
+# - adapt your user/group and paths, sample assumes:
+#   - user/group are both "user",
+#   - installation in /home/user/tetra-bluestation
+#   - configuration in /home/user/bluestation-bs-config.toml
+# - copy file to "/etc/systemd/system"
+# - execute "systemctl daemon-reload"
+#
+# Usage:
+# - start service with "systemctl start bluestation-bs"
+# - show state with "systemctl status bluestation-bs"
+# - stop service with "systemctl stop bluestation-bs"
+# - to enable start at boot, execute: "systemctl enable bluestation-bs"
+# - to disable start at boot, execute: "systemctl disable bluestation-bs"
+# - see log with "journalctl -u bluestation-bs --output=cat -f"
+
+[Unit]
+Description=TETRA BlueStation base station service
+Requires=network.target
+
+[Service]
+User=user
+Group=user
+Type=simple
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=73
+WorkingDirectory=/home/user/tetra-bluestation/
+ExecStart=/home/user/tetra-bluestation/target/release/bluestation-bs /home/user/bluestation-bs-config.toml
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
