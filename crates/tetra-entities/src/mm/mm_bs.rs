@@ -196,6 +196,28 @@ impl MmBs {
 
         // Process optional GroupIdentityLocationDemand field
         let gila = if let Some(gild) = pdu.group_identity_location_demand {
+            // ETSI Table 16.49 (clause 16.10.17): mode=1 means "detach all currently
+            // attached group identities and attach group identities defined in the
+            // group identity uplink element."
+            if gild.group_identity_attach_detach_mode == 1 {
+                let prior_groups: Vec<u32> = self
+                    .client_mgr
+                    .get_client_by_issi(issi)
+                    .map(|client| client.groups.iter().copied().collect())
+                    .unwrap_or_default();
+                if let Err(e) = self.client_mgr.client_detach_all_groups(issi) {
+                    tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
+                } else if !prior_groups.is_empty() {
+                    {
+                        let mut state = self.config.state_write();
+                        for &gssi in &prior_groups {
+                            state.subscribers.deaffiliate(issi, gssi);
+                        }
+                    }
+                    self.emit_subscriber_update(queue, message.dltime, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                }
+            }
+
             // Try to attach to requested groups, then build GroupIdentityLocationAccept element
             let accepted_groups = if let Some(giu) = &gild.group_identity_uplink {
                 Some(self.try_attach_detach_groups(queue, message.dltime, issi, &giu))
