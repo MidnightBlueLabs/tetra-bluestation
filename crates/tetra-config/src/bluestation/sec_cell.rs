@@ -52,6 +52,8 @@ pub struct CfgCellInfo {
     pub u_plane_dtx: bool,
     pub frame_18_ext: bool,
 
+    pub ms_txpwr_max_cell: u8,
+
     pub local_ssi_ranges: SortedDisjointSsiRanges,
 
     /// IANA timezone name (e.g. "Europe/Amsterdam"). When set, enables D-NWRK-BROADCAST
@@ -92,6 +94,8 @@ pub struct CellInfoDto {
     pub u_plane_dtx: Option<bool>,
     pub frame_18_ext: Option<bool>,
 
+    pub ms_txpwr_max_cell: Option<u8>,
+
     pub local_ssi_ranges: Option<Vec<(u32, u32)>>,
 
     pub timezone: Option<String>,
@@ -129,6 +133,7 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         ts_reserved_frames: ci.ts_reserved_frames.unwrap_or(0),
         u_plane_dtx: ci.u_plane_dtx.unwrap_or(false),
         frame_18_ext: ci.frame_18_ext.unwrap_or(false),
+        ms_txpwr_max_cell: ci.ms_txpwr_max_cell.unwrap_or(4), // 30 dBm (1W), Table 18.57
         local_ssi_ranges: ci
             .local_ssi_ranges
             .map(SortedDisjointSsiRanges::from_vec_tuple)

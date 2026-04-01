@@ -19,18 +19,18 @@ stack_mode = "Bs"
 # Input type: set to SoapySdr. May allow for future non-soapy RF backends.
 backend = "SoapySdr"
 
-# DEBUG/TESTING code. Capture files get large quickly. 
+# DEBUG/TESTING code. Capture files get large quickly.
 # dl_tx_file = "./dl_output.bin"    # Debugging; uncomment to save generated DL RF samples to file
 # ul_rx_file = "./ul_output.bin"    # Debugging; uncomment to save received UL RF samples to file
 
 [phy_io.soapysdr]
 # Transmit tx(dl) and rx(ul) frequencies in Hz
-# !!! Make sure to also edit all related fields in the cell_info section to fit this frequency. 
+# !!! Make sure to also edit all related fields in the cell_info section to fit this frequency.
 tx_freq = 438025000
 rx_freq = 433025000
 
 # Adjust if your SDR has a non-negligible tuning error
-# ppm_err = 0.0                       
+# ppm_err = 0.0
 
 ################################################################################################
 ## OPTIONAL: specific device, antenna, gain selection                                         ##
@@ -68,7 +68,7 @@ mcc = 204  # Netherlands
 
 # Mobile Network Code (MNC) - identifies the TETRA network
 # MAKE SURE MNC MAY BE USED, CONSULT RELEVANT AUTHORITIES IF NEEDED
-mnc = 1337  
+mnc = 1337
 
 # Cell Information
 [cell_info]
@@ -80,8 +80,8 @@ freq_band = 4                       # 400MHz band
 main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
 duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
 # custom_duplex_spacing = 7600000   # Don't uncomment unless you have programmed a custom duplex spacing entry in your radios
-freq_offset = 0                     # Offset from carrier. Usually 0. Options: 0, 6250, -6250, 12500. 
-reverse_operation = false           # False: UL below DL. True: UL above DL. 
+freq_offset = 0                     # Offset from carrier. Usually 0. Options: 0, 6250, -6250, 12500.
+reverse_operation = false           # False: UL below DL. True: UL above DL.
 
 # Location Area identifier
 location_area = 2
@@ -92,7 +92,7 @@ colour_code = 1
 ###############################################################################
 
 # OPTIONAL: Additional cell parameters
-# WIP; uncomment and configure as needed, many are not currently implemented, 
+# WIP; uncomment and configure as needed, many are not currently implemented,
 # defaults should be fine
 
 # Neighbor cell broadcast settings
@@ -137,19 +137,21 @@ voice_service = true
 # Frame 18 extension support
 # frame_18_ext = false
 
+# Max MS TX power in cell: 0=Rsvd 1=15 2=20 3=25 4=30 5=35 6=40 7=45 dBm
+# ms_txpwr_max_cell = 4
+
 # IANA timezone for D-NWRK-BROADCAST time broadcasting. When set, the BS will
 # broadcast UTC time and local time offset once per hyperframe (~61s) so MSs
 # can synchronize their clocks. Handles DST automatically.
 # timezone = "Europe/Amsterdam"
 
 # Local SSI ranges for this cell. Traffic for these ranges will not leave the cell
-# This overrides any settings in brew section, if enabled. 
+# This overrides any settings in brew section, if enabled.
 # Also, incoming brew traffic on those rangges will be dropped
 # Range end is exclusive, so the range end number is NOT inside the ranges
 # local_ssi_ranges = [
 #     [0, 91],
 # ]
-
 
 ###############################################################################
 
@@ -180,10 +182,10 @@ voice_service = true
 # Adaptive jitter buffering is always enabled; this adds fixed startup delay if needed.
 # jitter_initial_latency_frames = 0
 
-# Enable SDS forwarding between local and Brew clients. Enabled by default. 
+# Enable SDS forwarding between local and Brew clients. Enabled by default.
 # feature_sds_enabled = true
 
 # Uncomment to allow only calls for select SSIs to be transmitted over Brew
-# SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled. 
+# SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled.
 # If left commented, all (outside of local_ssi_ranges) calls are allowed over Brew
 # whitelisted_ssis = [91]
