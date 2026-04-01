@@ -161,25 +161,22 @@ impl MmBs {
         }
 
         // Handle Energy Saving Mode request (clause 23.7.6)
-        // Accept the mode requested by the MS.
+        // Always override to StayAlive. DL scheduler does not track per-MS monitoring
+        // patterns, so non-StayAlive modes would cause missed downlink messages.
+        // Per clause 16.7.1 NOTE 1: "The BS may allocate a different energy saving mode
+        // than requested and the BS assumes that the allocated value will be used."
         let esi = if let Some(esm) = pdu.energy_saving_mode {
-            let (frame_number, multiframe_number) = if esm == EnergySavingMode::StayAlive {
-                (None, None)
-            } else {
-                // Start point: current frame/multiframe (0-indexed per spec)
-                (Some((message.dltime.f - 1) as u8), Some((message.dltime.m - 1) as u8))
-            };
-            tracing::info!(
-                "MS {} energy saving mode: {:?} (start f={:?} m={:?})",
-                prim.received_address.ssi,
-                esm,
-                frame_number,
-                multiframe_number
-            );
+            if esm != EnergySavingMode::StayAlive {
+                tracing::info!(
+                    "MS {} requested energy saving mode {:?}, overriding to StayAlive",
+                    prim.received_address.ssi,
+                    esm,
+                );
+            }
             Some(EnergySavingInformation {
-                energy_saving_mode: esm,
-                frame_number,
-                multiframe_number,
+                energy_saving_mode: EnergySavingMode::StayAlive,
+                frame_number: None,
+                multiframe_number: None,
             })
         } else {
             None
@@ -207,7 +204,7 @@ impl MmBs {
         }
 
         // Store energy saving mode in client state
-        let esm = pdu.energy_saving_mode.unwrap_or(EnergySavingMode::StayAlive);
+        let esm = esi.as_ref().map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
         let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
 
         // Store and log class_of_ms
@@ -330,21 +327,24 @@ impl MmBs {
                     EnergySavingMode::StayAlive
                 };
 
-                tracing::info!("MS {} energy saving mode change request: {:?}", issi, esm);
-
-                // Store the new mode
-                let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
-
-                // Compute start point and send D-MM-STATUS response
-                let (frame_number, multiframe_number) = if esm == EnergySavingMode::StayAlive {
-                    (None, None)
+                if esm != EnergySavingMode::StayAlive {
+                    tracing::info!(
+                        "MS {} requested energy saving mode change to {:?}, overriding to StayAlive",
+                        issi,
+                        esm
+                    );
                 } else {
-                    (Some((message.dltime.f - 1) as u8), Some((message.dltime.m - 1) as u8))
-                };
+                    tracing::info!("MS {} energy saving mode change request: StayAlive", issi);
+                }
+
+                // Store StayAlive (see clause 16.7.1 NOTE 1)
+                let _ = self.client_mgr.set_client_energy_saving_mode(issi, EnergySavingMode::StayAlive);
+
+                // Respond with StayAlive
                 let esi = EnergySavingInformation {
-                    energy_saving_mode: esm,
-                    frame_number,
-                    multiframe_number,
+                    energy_saving_mode: EnergySavingMode::StayAlive,
+                    frame_number: None,
+                    multiframe_number: None,
                 };
                 Self::send_d_mm_status_energy_saving(queue, message.dltime, issi, handle, esi);
                 handled = true;
