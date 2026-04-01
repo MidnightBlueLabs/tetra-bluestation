@@ -195,6 +195,7 @@ impl MmBs {
         }
 
         // Process optional GroupIdentityLocationDemand field
+        let has_groups = pdu.group_identity_location_demand.is_some();
         let gila = if let Some(gild) = pdu.group_identity_location_demand {
             // ETSI Table 16.49 (clause 16.10.17): mode=1 means "detach all currently
             // attached group identities and attach group identities defined in the
@@ -285,9 +286,11 @@ impl MmBs {
         };
         queue.push_back(msg);
 
-        // If this is an unknown returning radio (not ITSI attach), force it to
-        // re-register with full group report via D-LOCATION UPDATE COMMAND
-        if is_new && pdu.location_update_type != LocationUpdateType::ItsiAttach {
+        // If this is an unknown returning radio (not ITSI attach) that didn't
+        // include groups in the registration, force a full group report via
+        // D-LOCATION UPDATE COMMAND. Skip if groups were already provided to
+        // avoid a redundant clear-and-reattach cycle.
+        if is_new && pdu.location_update_type != LocationUpdateType::ItsiAttach && !has_groups {
             tracing::info!("Sending D-LOCATION UPDATE COMMAND to returning MS {} to request group report", issi);
             Self::send_d_location_update_command(queue, message.dltime, issi, handle);
         }
