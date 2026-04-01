@@ -778,9 +778,19 @@ impl CcBsSubentity {
         };
         let dest_addr = *dest_addr;
 
-        // Send D-RELEASE to group
+        // Send D-RELEASE via FACCH/stealing on the traffic channel so MSs still
+        // monitoring during hangtime receive it (ETSI 14.5.2.3.2). MSs that silently
+        // left have already cleared their call state (ETSI 14.5.2.3.1).
         let sdu = Self::build_d_release_from_d_setup(pdu, disconnect_cause);
-        let prim = Self::build_sapmsg(sdu, None, self.dltime, dest_addr, Layer2Service::Unacknowledged, None);
+        let prim = if let Some(ts) = self.active_calls.get(&call_id).map(|c| c.ts) {
+            Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts)
+        } else {
+            tracing::warn!(
+                "release_call: no active call state for call_id={}, sending D-RELEASE on MCCH",
+                call_id
+            );
+            Self::build_sapmsg(sdu, None, self.dltime, dest_addr, Layer2Service::Unacknowledged, None)
+        };
         queue.push_back(prim);
 
         // Close the circuit in CircuitMgr and notify Brew
