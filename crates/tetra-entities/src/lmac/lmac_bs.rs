@@ -1,12 +1,13 @@
 use tetra_config::bluestation::{SharedConfig, StackMode};
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BurstType, PhyBlockNum, PhysicalChannel, Sap, TdmaTime, TrainingSequence};
+use tetra_core::{BitBuffer, BurstType, PhyBlockNum, PhysicalChannel, Sap, TdmaTime, TrainingSequence};
 use tetra_saps::tmv::TmvUnitdataInd;
 use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
 use tetra_saps::tp::{TpUnitdataInd, TpUnitdataReqSlot};
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::lmac::components::{errorcontrol, scrambler};
+use crate::net_wireshark::{Type1Capture, Type1Direction, WiresharkSink};
 use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
 
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +36,7 @@ impl Default for LmacTrafficChan {
 
 pub struct LmacBs {
     config: SharedConfig,
+    wireshark: Option<WiresharkSink>,
 
     /// Cached from global config
     stack_mode: StackMode,
@@ -59,7 +61,7 @@ pub struct LmacBs {
 }
 
 impl LmacBs {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, wireshark: Option<WiresharkSink>) -> Self {
         // Retrieve initial basic network params from config
         let (stack_mode, sc) = {
             let c = config.config();
@@ -78,12 +80,36 @@ impl LmacBs {
 
         Self {
             config,
+            wireshark,
             stack_mode,
             scrambling_code: sc,
 
             dltime: TdmaTime::default(),
             uplink_phy_chan: [PhysicalChannel::Unallocated; 4],
             blk2_stolen: false,
+        }
+    }
+
+    fn emit_type1_capture(
+        &self,
+        direction: Type1Direction,
+        logical_channel: LogicalChannel,
+        block_num: PhyBlockNum,
+        crc_pass: bool,
+        time: TdmaTime,
+        scrambling_code: u32,
+        bits: &BitBuffer,
+    ) {
+        if let Some(sink) = &self.wireshark {
+            sink.send(Type1Capture {
+                direction,
+                logical_channel,
+                block_num,
+                crc_pass,
+                time,
+                scrambling_code,
+                bits: BitBuffer::from_bitbuffer(bits),
+            });
         }
     }
 
@@ -186,11 +212,22 @@ impl LmacBs {
             return;
         }
 
+        let block_num = blk.block_num;
         let (decoded, crc_ok) = errorcontrol::decode_tp(lchan, blk.block, self.scrambling_code);
-        let Some(acelp_bits) = decoded else {
+        let Some(mut acelp_bits) = decoded else {
             tracing::warn!("rx_blk_traffic: decode_tp returned None");
             return;
         };
+
+        self.emit_type1_capture(
+            Type1Direction::Uplink,
+            lchan,
+            block_num,
+            crc_ok,
+            ul_time,
+            self.scrambling_code,
+            &acelp_bits,
+        );
 
         if !crc_ok {
             tracing::trace!("rx_blk_traffic: CRC fail (BFI), still forwarding for concealment");
@@ -198,9 +235,8 @@ impl LmacBs {
 
         // Convert ACELP BitBuffer to Vec<u8> (one bit per byte, 274 bytes)
         let mut data = vec![0u8; acelp_bits.get_len()];
-        let mut bb = acelp_bits;
-        bb.seek(0);
-        bb.to_bitarr(&mut data);
+        acelp_bits.seek(0);
+        acelp_bits.to_bitarr(&mut data);
 
         let msg = SapMsg {
             sap: Sap::TmdSap,
@@ -229,6 +265,16 @@ impl LmacBs {
         //     type1bits
         // );
         tracing::debug!("rx_blk_cp {:?} CRC: {}", lchan, if crc_pass { "ok" } else { "WRONG" });
+
+        self.emit_type1_capture(
+            Type1Direction::Uplink,
+            lchan,
+            block_num,
+            crc_pass,
+            ul_time,
+            self.scrambling_code,
+            &type1bits,
+        );
 
         // TODO FIXME, for now, we're not passing broken CRC msgs up to Lmac
         // If we see purpose, we may pass it up in the future
@@ -311,6 +357,44 @@ impl LmacBs {
         // Update per-timeslot UL physical channel indicator
         let ts_idx = prim.ts.t as usize - 1;
         self.uplink_phy_chan[ts_idx] = prim.ul_phy_chan;
+
+        if let Some(ref bbk) = prim.bbk {
+            self.emit_type1_capture(
+                Type1Direction::Downlink,
+                LogicalChannel::Aach,
+                PhyBlockNum::Both,
+                true,
+                prim.ts,
+                bbk.scrambling_code,
+                &bbk.mac_block,
+            );
+        }
+        if let Some(ref blk1) = prim.blk1 {
+            self.emit_type1_capture(
+                Type1Direction::Downlink,
+                blk1.logical_channel,
+                if prim.blk2.is_some() {
+                    PhyBlockNum::Block1
+                } else {
+                    PhyBlockNum::Both
+                },
+                true,
+                prim.ts,
+                blk1.scrambling_code,
+                &blk1.mac_block,
+            );
+        }
+        if let Some(ref blk2) = prim.blk2 {
+            self.emit_type1_capture(
+                Type1Direction::Downlink,
+                blk2.logical_channel,
+                PhyBlockNum::Block2,
+                true,
+                prim.ts,
+                blk2.scrambling_code,
+                &blk2.mac_block,
+            );
+        }
 
         assert!(prim.bbk.is_some(), "rx_tmv_unitdata_req_slot: bbk must be present");
         assert!(prim.blk1.is_some(), "rx_tmv_unitdata_req_slot: blk1 must be present");

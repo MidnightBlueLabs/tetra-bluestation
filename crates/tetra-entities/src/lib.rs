@@ -16,6 +16,7 @@ pub mod network;
 pub mod net_brew;
 pub mod net_control;
 pub mod net_telemetry;
+pub mod net_wireshark;
 
 // Re-export commonly used items from router
 pub use entity_trait::TetraEntityTrait;

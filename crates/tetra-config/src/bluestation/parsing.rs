@@ -6,7 +6,9 @@ use std::path::Path;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_patch, cell_dto_to_cfg, net_dto_to_cfg};
+use crate::bluestation::{
+    CellInfoDto, CfgControlDto, CfgWiresharkDto, NetInfoDto, apply_control_patch, apply_wireshark_patch, cell_dto_to_cfg, net_dto_to_cfg,
+};
 
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
@@ -64,6 +66,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         }
     }
 
+    // Optional wireshark section
+    if let Some(ref wireshark) = root.wireshark {
+        if !wireshark.extra.is_empty() {
+            return Err(format!("Unrecognized fields in wireshark config: {:?}", sorted_keys(&wireshark.extra)).into());
+        }
+    }
+
     // Build config from required and optional values
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
@@ -74,6 +83,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         brew: None,
         telemetry: None,
         control: None,
+        wireshark: None,
     };
 
     if let Some(brew) = root.brew {
@@ -86,6 +96,10 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
 
     if let Some(command) = root.command {
         cfg.control = Some(apply_control_patch(command)?);
+    }
+
+    if let Some(wireshark) = root.wireshark {
+        cfg.wireshark = Some(apply_wireshark_patch(wireshark)?);
     }
 
     Ok(cfg)
@@ -128,6 +142,7 @@ struct TomlConfigRoot {
     brew: Option<CfgBrewDto>,
     telemetry: Option<CfgTelemetryDto>,
     command: Option<CfgControlDto>,
+    wireshark: Option<CfgWiresharkDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,

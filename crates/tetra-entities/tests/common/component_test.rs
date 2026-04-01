@@ -97,7 +97,7 @@ impl ComponentTest {
         for component in components.iter() {
             match component {
                 TetraEntity::Lmac => {
-                    let lmac = LmacBs::new(self.config.clone());
+                    let lmac = LmacBs::new(self.config.clone(), None);
                     self.register_entity(lmac);
                 }
                 TetraEntity::Umac => {
