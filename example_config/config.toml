@@ -198,3 +198,5 @@ voice_service = true
 # [wireshark]
 # host = "127.0.0.1"
 # port = 42069
+# pcap_file = "./bluestation-type1-debug.pcap"
+# When pcap_file is set, BlueStation will require an interactive startup acknowledgement.

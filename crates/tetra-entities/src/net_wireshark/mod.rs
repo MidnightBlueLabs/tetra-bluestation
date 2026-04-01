@@ -5,6 +5,7 @@
 
 pub mod channel;
 pub mod events;
+pub mod pcap;
 pub mod protocol;
 pub mod worker;
 

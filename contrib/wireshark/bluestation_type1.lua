@@ -78,6 +78,307 @@ local RES_REQ_NAMES = {
     [15] = "ReqOver68",
 }
 
+local LLC_PDU_NAMES = {
+    [0] = "BL-ADATA",
+    [1] = "BL-DATA",
+    [2] = "BL-UDATA",
+    [3] = "BL-ACK",
+    [4] = "BL-ADATA+FCS",
+    [5] = "BL-DATA+FCS",
+    [6] = "BL-UDATA+FCS",
+    [7] = "BL-ACK+FCS",
+}
+
+local MLE_PROTOCOL_NAMES = {
+    [1] = "MM",
+    [2] = "CMCE",
+    [4] = "SNDCP",
+    [5] = "MLE",
+    [6] = "TME",
+}
+
+local MM_PDU_NAMES = {
+    [0] = "D-OTAR",
+    [1] = "D-AUTHENTICATION",
+    [2] = "D-CK CHANGE DEMAND",
+    [3] = "D-DISABLE",
+    [4] = "D-ENABLE",
+    [5] = "D-LOCATION UPDATE ACCEPT",
+    [6] = "D-LOCATION UPDATE COMMAND",
+    [7] = "D-LOCATION UPDATE REJECT",
+    [9] = "D-LOCATION UPDATE PROCEEDING",
+    [10] = "D-ATTACH/DETACH GROUP IDENTITY",
+    [11] = "D-ATTACH/DETACH GROUP IDENTITY ACK",
+    [12] = "D-MM STATUS",
+    [15] = "MM FUNCTION NOT SUPPORTED",
+}
+
+local CMCE_PDU_NAMES = {
+    [0] = "D-ALERT",
+    [1] = "D-CALL PROCEEDING",
+    [2] = "D-CONNECT",
+    [3] = "D-CONNECT ACKNOWLEDGE",
+    [4] = "D-DISCONNECT",
+    [5] = "D-INFO",
+    [6] = "D-RELEASE",
+    [7] = "D-SETUP",
+    [8] = "D-STATUS",
+    [9] = "D-TX CEASED",
+    [10] = "D-TX CONTINUE",
+    [11] = "D-TX GRANTED",
+    [12] = "D-TX WAIT",
+    [13] = "D-TX INTERRUPT",
+    [14] = "D-CALL RESTORE",
+    [15] = "D-SDS-DATA",
+    [16] = "D-FACILITY",
+    [31] = "CMCE FUNCTION NOT SUPPORTED",
+}
+
+local LOCATION_UPDATE_TYPE_NAMES = {
+    [0] = "RoamingLocationUpdating",
+    [1] = "MigratingLocationUpdating",
+    [2] = "PeriodicLocationUpdating",
+    [3] = "ItsiAttach",
+    [4] = "ServiceRestorationRoamingLocationUpdating",
+    [5] = "ServiceRestorationMigratingLocationUpdating",
+    [6] = "DemandLocationUpdating",
+    [7] = "DisabledMsUpdating",
+}
+
+local LOCATION_UPDATE_ACCEPT_NAMES = {
+    [0] = "RoamingLocationUpdating",
+    [1] = "TemporaryRegistration",
+    [2] = "PeriodicLocationUpdating",
+    [3] = "ItsiAttach",
+    [4] = "ServiceRestorationRoamingLocationUpdating",
+    [5] = "MigratingOrServiceRestorationMigratingLocationUpdating",
+    [6] = "DemandLocationUpdating",
+    [7] = "DisabledMsUpdating",
+}
+
+local PARTY_TYPE_NAMES = {
+    [0] = "SNA",
+    [1] = "SSI",
+    [2] = "TSI",
+    [3] = "Reserved",
+}
+
+local CALL_TIMEOUT_NAMES = {
+    [0] = "Infinite",
+    [1] = "T30s",
+    [2] = "T45s",
+    [3] = "T60s",
+    [4] = "T2m",
+    [5] = "T3m",
+    [6] = "T4m",
+    [7] = "T5m",
+    [8] = "T6m",
+    [9] = "T8m",
+    [10] = "T10m",
+    [11] = "T12m",
+    [12] = "T15m",
+    [13] = "T20m",
+    [14] = "T30m",
+    [15] = "Reserved",
+}
+
+local CALL_TIMEOUT_SETUP_NAMES = {
+    [0] = "Predefined",
+    [1] = "T1s",
+    [2] = "T2s",
+    [3] = "T5s",
+    [4] = "T10s",
+    [5] = "T20s",
+    [6] = "T30s",
+    [7] = "T60s",
+}
+
+local CALL_STATUS_NAMES = {
+    [0] = "CallProceeding",
+    [1] = "CallQueued",
+    [2] = "RequestedSubscriberPaged",
+    [3] = "CallContinue",
+    [4] = "HangtimeExpired",
+}
+
+local TRANSMISSION_GRANT_NAMES = {
+    [0] = "Granted",
+    [1] = "NotGranted",
+    [2] = "RequestQueued",
+    [3] = "GrantedToOtherUser",
+}
+
+local DISCONNECT_CAUSE_NAMES = {
+    [0] = "CauseNotDefinedOrUnknown",
+    [1] = "UserRequestedDisconnection",
+    [2] = "CalledPartyBusy",
+    [3] = "CalledPartyNotReachable",
+    [4] = "CalledPartyDoesNotSupportEncryption",
+    [5] = "CongestionInInfrastructure",
+    [6] = "NotAllowedTrafficCase",
+    [7] = "IncompatibleTrafficCase",
+    [8] = "RequestedServiceNotAvailable",
+    [9] = "PreEmptiveUseOfResource",
+    [10] = "InvalidCallIdentifier",
+    [11] = "CallRejectedByTheCalledParty",
+    [12] = "NoIdleCcEntity",
+    [13] = "ExpiryOfTimer",
+    [14] = "SwmiRequestedDisconnection",
+    [15] = "AcknowledgedServiceNotComplete",
+    [16] = "UnknownTetraIdentity",
+    [17] = "SsSpecificDisconnection",
+    [18] = "UnknownExternalSubscriberIdentity",
+    [19] = "CallRestorationOfTheOtherUserFailed",
+    [20] = "CalledPartyRequiresEncryption",
+    [21] = "ConcurrentSetUpNotSupported",
+    [22] = "CalledPartyIsUnderTheSameDmGateOfTheCallingParty",
+    [23] = "NonCallOwnerRequestedDisconnection",
+}
+
+local CMCE_TYPE3_NAMES = {
+    [1] = "Dtmf",
+    [2] = "ExternalSubscriberNumber",
+    [3] = "Facility",
+    [4] = "PollResponseAddr",
+    [5] = "TempAddr",
+    [6] = "DmMsAddr",
+    [15] = "Proprietary",
+}
+
+local MM_TYPE34_NAMES = {
+    [1] = "DefaultGroupAttachLifetime",
+    [2] = "NewRegisteredArea",
+    [3] = "SecurityDownlink",
+    [4] = "GroupReportResponse",
+    [5] = "GroupIdentityLocationAccept",
+    [6] = "DmMsAddress",
+    [7] = "GroupIdentityDownlink",
+    [10] = "AuthenticationDownlink",
+    [12] = "GroupIdentitySecurityRelatedInformation",
+    [13] = "CellTypeControl",
+    [15] = "Proprietary",
+}
+
+local STATUS_DOWNLINK_NAMES = {
+    [1] = "ChangeOfEnergySavingModeRequest",
+    [2] = "ChangeOfEnergySavingModeResponse",
+    [3] = "DualWatchModeResponse",
+    [4] = "TerminatingDualWatchModeResponse",
+    [5] = "ChangeOfDualWatchModeRequest",
+    [7] = "MsFrequencyBandsRequest",
+    [8] = "PeriodicDistanceReporting",
+    [16] = "AcceptanceToStartDmGatewayOperation",
+    [17] = "RejectionToStartDmGatewayOperation",
+    [18] = "AcceptanceToContinueDmGatewayOperation",
+    [19] = "RejectionToContinueDmGatewayOperation",
+    [20] = "AcceptanceToStopDmGatewayOperation",
+    [21] = "AcceptanceOfDmMsAddresses",
+    [22] = "CommandToRemoveDmMsAddresses",
+    [23] = "CommandToChangeRegistrationLabel",
+    [24] = "CommandToStopDmGatewayOperation",
+}
+
+local CIRCUIT_MODE_NAMES = {
+    [0] = "Tch/S",
+    [1] = "Tch/7.2",
+    [2] = "Tch/4.8 N=1",
+    [3] = "Tch/4.8 N=4",
+    [4] = "Tch/4.8 N=8",
+    [5] = "Tch/2.4 N=1",
+    [6] = "Tch/2.4 N=4",
+    [7] = "Tch/2.4 N=8",
+}
+
+local COMMUNICATION_TYPE_NAMES = {
+    [0] = "P2p",
+    [1] = "P2mp",
+    [2] = "P2mpAcked",
+    [3] = "Broadcast",
+}
+
+local ENERGY_SAVING_MODE_NAMES = {
+    [0] = "StayAlive",
+    [1] = "Eg1",
+    [2] = "Eg2",
+    [3] = "Eg3",
+    [4] = "Eg4",
+    [5] = "Eg5",
+    [6] = "Eg6",
+    [7] = "Eg7",
+}
+
+local SHORT_DATA_TYPE_NAMES = {
+    [0] = "UserDefinedData-1",
+    [1] = "UserDefinedData-2",
+    [2] = "UserDefinedData-3",
+    [3] = "UserDefinedData-4",
+}
+
+local SDS_PROTOCOL_ID_NAMES = {
+    [1] = "Otak",
+    [2] = "SimpleTextMessaging",
+    [3] = "SimpleLocationSystem",
+    [4] = "WirelessDatagramProtocol",
+    [5] = "WirelessControlMessageProtocol",
+    [6] = "MDmo",
+    [7] = "PinAuth",
+    [8] = "EteeMessage",
+    [9] = "SimpleImmediateTextMessaging",
+    [10] = "LocationInformationProtocol",
+    [11] = "NetAssistProtocol2",
+    [12] = "ConcatenatedSdsMessage",
+    [13] = "Dotam",
+    [14] = "SimpleAgnssService",
+    [130] = "TextMessagingSdsTl",
+    [131] = "LocationSystemSdsTl",
+    [132] = "WirelessDatagramProtocolSdsTl",
+    [133] = "WirelessControlMessageProtocolSdsTl",
+    [134] = "MDmoSdsTl",
+    [136] = "EteeMessageSdsTl",
+    [137] = "ImmediateTextMessagingSdsTl",
+    [138] = "MessageWithUserDataHeader",
+    [140] = "ConcatenatedSdsMessageSdsTl",
+    [141] = "AgnssServiceSdsTl",
+}
+
+local SHORT_REPORT_TYPE_NAMES = {
+    [0] = "ProtOrEncodingNotSupported",
+    [1] = "DestMemFull",
+    [2] = "MessageReceived",
+    [3] = "MessageConsumed",
+}
+
+local GROUP_IDENTITY_MODE_NAMES = {
+    [0] = "Attach",
+    [1] = "Detach",
+}
+
+local GROUP_IDENTITY_ACCEPT_REJECT_NAMES = {
+    [0] = "Accept",
+    [1] = "Reject",
+}
+
+local GROUP_IDENTITY_ATTACHMENT_LIFETIME_NAMES = {
+    [0] = "AttachmentNotNeeded",
+    [1] = "AttachmentForNextItsiAttachRequired",
+    [2] = "AttachmentNotAllowedForNextItsiAttach",
+    [3] = "AttachmentForNextLocationUpdateRequired",
+}
+
+local GROUP_IDENTITY_ADDRESS_TYPE_NAMES = {
+    [0] = "GSSI",
+    [1] = "GSSI+Ext",
+    [2] = "VGSSI",
+    [3] = "GSSI+Ext+VGSSI",
+}
+
+local SPEECH_SERVICE_NAMES = {
+    [0] = "TetraEncodedSpeech",
+    [1] = "Reserved",
+    [2] = "Reserved",
+    [3] = "Proprietary",
+}
+
 local f = bluestation_type1.fields
 f.magic = ProtoField.string("bluestation.type1.magic", "Magic")
 f.version = ProtoField.uint8("bluestation.type1.version", "Version", base.DEC)
@@ -99,6 +400,10 @@ local function lookup(tbl, value, fallback)
         return tbl[value]
     end
     return fallback or tostring(value)
+end
+
+local function bool_text(value)
+    return value == 1 and "true" or "false"
 end
 
 local function bits_to_uint(bits, start_bit, bit_len)
@@ -132,6 +437,57 @@ local function bits_slice(bits, start_bit, bit_len)
     return bits:sub(start_bit + 1, stop)
 end
 
+local function preview_bits(bits, max_len)
+    if bits == nil then
+        return "<truncated>"
+    end
+    if #bits <= max_len then
+        return bits
+    end
+    return bits:sub(1, max_len) .. "..."
+end
+
+local function bit_string_to_hex(bits)
+    if bits == nil or bits == "" then
+        return ""
+    end
+    local padded = bits
+    local rem = #bits % 4
+    if rem ~= 0 then
+        padded = bits .. string.rep("0", 4 - rem)
+    end
+
+    local out = {}
+    for idx = 1, #padded, 4 do
+        local nibble = bits_to_uint(padded, idx - 1, 4) or 0
+        out[#out + 1] = string.format("%X", nibble)
+    end
+
+    local suffix = rem ~= 0 and " (right-padded)" or ""
+    return table.concat(out) .. suffix
+end
+
+local function format_uint_with_hex(value, bit_len)
+    local width = math.max(1, math.floor((bit_len + 3) / 4))
+    return string.format("%u (0x%0" .. tostring(width) .. "X)", value, value)
+end
+
+local function format_bits_value(bits)
+    if bits == nil then
+        return "<truncated>"
+    end
+    if bits == "" then
+        return "<empty>"
+    end
+    if #bits <= 52 then
+        local value = bits_to_uint(bits, 0, #bits)
+        if value ~= nil then
+            return format_uint_with_hex(value, #bits)
+        end
+    end
+    return string.format("0x%s / bits=%s", bit_string_to_hex(bits), preview_bits(bits, 160))
+end
+
 local function add_text(tree, range, text)
     tree:add(range, text)
 end
@@ -148,6 +504,1034 @@ local function add_flag_summary(tree, range, label, flags)
     else
         add_text(tree, range, label .. ": " .. table.concat(enabled, ", "))
     end
+end
+
+local function add_named_value(tree, range, label, value, names, bit_len)
+    add_text(tree, range, string.format("%s: %s [%s]", label, lookup(names, value, tostring(value)), format_uint_with_hex(value, bit_len)))
+end
+
+local function new_cursor(bits)
+    return {
+        bits = bits or "",
+        pos = 0,
+    }
+end
+
+local function cursor_remaining(cur)
+    return #cur.bits - cur.pos
+end
+
+local function cursor_peek_uint(cur, offset, bit_len)
+    return bits_to_uint(cur.bits, cur.pos + offset, bit_len)
+end
+
+local function cursor_read_uint(cur, bit_len)
+    local value = bits_to_uint(cur.bits, cur.pos, bit_len)
+    if value == nil then
+        return nil
+    end
+    cur.pos = cur.pos + bit_len
+    return value
+end
+
+local function cursor_read_bits(cur, bit_len)
+    local value = bits_slice(cur.bits, cur.pos, bit_len)
+    if value == nil then
+        return nil
+    end
+    cur.pos = cur.pos + bit_len
+    return value
+end
+
+local function read_obit(cur, tree, range, context)
+    local obit = cursor_read_uint(cur, 1)
+    if obit == nil then
+        add_text(tree, range, context .. ": missing o-bit")
+        return nil
+    end
+    return obit == 1
+end
+
+local function finalize_optional_tail(cur, tree, range, context)
+    local trailing = cursor_read_uint(cur, 1)
+    if trailing == nil then
+        add_text(tree, range, context .. ": missing trailing m-bit")
+        return
+    end
+    if trailing ~= 0 then
+        add_text(tree, range, context .. ": unexpected trailing m-bit=" .. trailing)
+    end
+    if cursor_remaining(cur) > 0 then
+        local tail = cursor_read_bits(cur, cursor_remaining(cur))
+        add_text(tree, range, string.format("%s trailing bits (%u): %s", context, #tail, preview_bits(tail, 160)))
+    end
+end
+
+local function parse_type2_uint(cur, tree, range, label, bit_len, names)
+    local pbit = cursor_read_uint(cur, 1)
+    if pbit == nil then
+        add_text(tree, range, label .. ": missing p-bit")
+        return nil
+    end
+    if pbit == 0 then
+        return nil
+    end
+    local value = cursor_read_uint(cur, bit_len)
+    if value == nil then
+        add_text(tree, range, label .. ": truncated")
+        return nil
+    end
+    if names ~= nil then
+        add_named_value(tree, range, label, value, names, bit_len)
+    else
+        add_text(tree, range, label .. ": " .. format_uint_with_hex(value, bit_len))
+    end
+    return value
+end
+
+local function parse_type2_struct(cur, tree, range, label, parser)
+    local pbit = cursor_read_uint(cur, 1)
+    if pbit == nil then
+        add_text(tree, range, label .. ": missing p-bit")
+        return false
+    end
+    if pbit == 0 then
+        return false
+    end
+    local sub = tree:add(range, label)
+    parser(cur, sub, range)
+    return true
+end
+
+local function peek_type34(cur, expected_id)
+    local mbit = cursor_peek_uint(cur, 0, 1)
+    if mbit == nil then
+        return nil
+    end
+    if mbit == 0 then
+        return false
+    end
+    local field_id = cursor_peek_uint(cur, 1, 4)
+    if field_id == nil then
+        return nil
+    end
+    return field_id == expected_id
+end
+
+local function parse_type3_generic(cur, tree, range, expected_id, label, id_names)
+    local present = peek_type34(cur, expected_id)
+    if present == nil then
+        add_text(tree, range, label .. ": missing type-3 header")
+        return nil
+    end
+    if not present then
+        return nil
+    end
+
+    cursor_read_uint(cur, 1)
+    local field_id = cursor_read_uint(cur, 4)
+    local len_bits = cursor_read_uint(cur, 11)
+    if len_bits == nil then
+        add_text(tree, range, label .. ": missing length")
+        return nil
+    end
+    local data_bits = cursor_read_bits(cur, len_bits)
+    if data_bits == nil then
+        add_text(tree, range, label .. ": truncated payload")
+        return nil
+    end
+
+    local field_name = lookup(id_names or {}, field_id, "Field " .. tostring(field_id))
+    local sub = tree:add(range, string.format("%s (%u bits)", label or field_name, len_bits))
+    add_text(sub, range, "Element ID: " .. field_name)
+    add_text(sub, range, "Value: " .. format_bits_value(data_bits))
+    return {
+        field_id = field_id,
+        len_bits = len_bits,
+        data_bits = data_bits,
+    }
+end
+
+local function parse_type3_struct(cur, tree, range, expected_id, label, parser)
+    local present = peek_type34(cur, expected_id)
+    if present == nil then
+        add_text(tree, range, label .. ": missing type-3 header")
+        return false
+    end
+    if not present then
+        return false
+    end
+
+    cursor_read_uint(cur, 1)
+    local field_id = cursor_read_uint(cur, 4)
+    local len_bits = cursor_read_uint(cur, 11)
+    if len_bits == nil then
+        add_text(tree, range, label .. ": missing length")
+        return false
+    end
+    local data_bits = cursor_read_bits(cur, len_bits)
+    if data_bits == nil then
+        add_text(tree, range, label .. ": truncated payload")
+        return false
+    end
+
+    local sub = tree:add(range, string.format("%s (%u bits)", label, len_bits))
+    add_text(sub, range, "Element ID: " .. lookup(MM_TYPE34_NAMES, field_id, lookup(CMCE_TYPE3_NAMES, field_id, tostring(field_id))))
+
+    local subcur = new_cursor(data_bits)
+    parser(subcur, sub, range)
+    if cursor_remaining(subcur) > 0 then
+        local tail = cursor_read_bits(subcur, cursor_remaining(subcur))
+        add_text(sub, range, string.format("Struct trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+    end
+    return true
+end
+
+local function parse_type4_generic(cur, tree, range, expected_id, label, id_names)
+    local present = peek_type34(cur, expected_id)
+    if present == nil then
+        add_text(tree, range, label .. ": missing type-4 header")
+        return nil
+    end
+    if not present then
+        return nil
+    end
+
+    cursor_read_uint(cur, 1)
+    local field_id = cursor_read_uint(cur, 4)
+    local len_bits = cursor_read_uint(cur, 11)
+    local elem_count = cursor_read_uint(cur, 6)
+    if len_bits == nil or elem_count == nil then
+        add_text(tree, range, label .. ": truncated type-4 header")
+        return nil
+    end
+    if len_bits < 6 then
+        add_text(tree, range, label .. ": invalid type-4 length=" .. len_bits)
+        return nil
+    end
+    local payload_len = len_bits - 6
+    local data_bits = cursor_read_bits(cur, payload_len)
+    if data_bits == nil then
+        add_text(tree, range, label .. ": truncated payload")
+        return nil
+    end
+
+    local field_name = lookup(id_names or {}, field_id, "Field " .. tostring(field_id))
+    local sub = tree:add(range, string.format("%s (%u elems, %u bits)", label or field_name, elem_count, payload_len))
+    add_text(sub, range, "Element ID: " .. field_name)
+    add_text(sub, range, "Value: " .. format_bits_value(data_bits))
+    return {
+        field_id = field_id,
+        len_bits = payload_len,
+        elems = elem_count,
+        data_bits = data_bits,
+    }
+end
+
+local function parse_type4_struct(cur, tree, range, expected_id, label, parser)
+    local present = peek_type34(cur, expected_id)
+    if present == nil then
+        add_text(tree, range, label .. ": missing type-4 header")
+        return false
+    end
+    if not present then
+        return false
+    end
+
+    cursor_read_uint(cur, 1)
+    local field_id = cursor_read_uint(cur, 4)
+    local len_bits = cursor_read_uint(cur, 11)
+    local elem_count = cursor_read_uint(cur, 6)
+    if len_bits == nil or elem_count == nil then
+        add_text(tree, range, label .. ": truncated type-4 header")
+        return false
+    end
+    if len_bits < 6 then
+        add_text(tree, range, label .. ": invalid type-4 length=" .. len_bits)
+        return false
+    end
+
+    local payload_len = len_bits - 6
+    local payload_bits = cursor_read_bits(cur, payload_len)
+    if payload_bits == nil then
+        add_text(tree, range, label .. ": truncated payload")
+        return false
+    end
+
+    local sub = tree:add(range, string.format("%s (%u elems, %u bits)", label, elem_count, payload_len))
+    add_text(sub, range, "Element ID: " .. lookup(MM_TYPE34_NAMES, field_id, tostring(field_id)))
+
+    local payload_cur = new_cursor(payload_bits)
+    for idx = 1, elem_count do
+        local elem_tree = sub:add(range, "Element " .. idx)
+        parser(payload_cur, elem_tree, range)
+    end
+
+    if cursor_remaining(payload_cur) > 0 then
+        local tail = cursor_read_bits(payload_cur, cursor_remaining(payload_cur))
+        add_text(sub, range, string.format("Type-4 trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+    end
+    return true
+end
+
+local function parse_basic_service_information(cur, tree, range)
+    local circuit_mode = cursor_read_uint(cur, 3)
+    local encryption_flag = cursor_read_uint(cur, 1)
+    local communication_type = cursor_read_uint(cur, 2)
+    if circuit_mode == nil or encryption_flag == nil or communication_type == nil then
+        add_text(tree, range, "Basic service information: truncated")
+        return
+    end
+
+    add_named_value(tree, range, "Circuit mode", circuit_mode, CIRCUIT_MODE_NAMES, 3)
+    add_text(tree, range, "Encryption flag: " .. bool_text(encryption_flag))
+    add_named_value(tree, range, "Communication type", communication_type, COMMUNICATION_TYPE_NAMES, 2)
+
+    if circuit_mode == 0 then
+        local speech_service = cursor_read_uint(cur, 2)
+        if speech_service == nil then
+            add_text(tree, range, "Speech service: truncated")
+            return
+        end
+        add_named_value(tree, range, "Speech service", speech_service, SPEECH_SERVICE_NAMES, 2)
+    else
+        local slots_per_frame = cursor_read_uint(cur, 2)
+        if slots_per_frame == nil then
+            add_text(tree, range, "Slots per frame: truncated")
+            return
+        end
+        add_text(tree, range, string.format("Slots per frame: %u", slots_per_frame + 1))
+    end
+end
+
+local function parse_energy_saving_information(cur, tree, range)
+    local mode = cursor_read_uint(cur, 3)
+    local frame_number = cursor_read_uint(cur, 2)
+    local multiframe_number = cursor_read_uint(cur, 2)
+    if mode == nil or frame_number == nil or multiframe_number == nil then
+        add_text(tree, range, "Energy saving information: truncated")
+        return
+    end
+
+    add_named_value(tree, range, "Energy saving mode", mode, ENERGY_SAVING_MODE_NAMES, 3)
+    add_text(tree, range, "Frame number: " .. frame_number)
+    add_text(tree, range, "Multiframe number: " .. multiframe_number)
+end
+
+local function parse_group_identity_attachment(cur, tree, range)
+    local lifetime = cursor_read_uint(cur, 2)
+    local class_of_usage = cursor_read_uint(cur, 3)
+    if lifetime == nil or class_of_usage == nil then
+        add_text(tree, range, "Group identity attachment: truncated")
+        return
+    end
+
+    add_named_value(tree, range, "Attachment lifetime", lifetime, GROUP_IDENTITY_ATTACHMENT_LIFETIME_NAMES, 2)
+    add_text(tree, range, "Class of usage: " .. class_of_usage)
+end
+
+local function parse_group_identity_downlink(cur, tree, range)
+    local attach_detach_type = cursor_read_uint(cur, 1)
+    if attach_detach_type == nil then
+        add_text(tree, range, "Group identity downlink: truncated")
+        return
+    end
+
+    if attach_detach_type == 0 then
+        local attachment_tree = tree:add(range, "Group identity attachment")
+        parse_group_identity_attachment(cur, attachment_tree, range)
+    else
+        local detachment_uplink = cursor_read_uint(cur, 2)
+        if detachment_uplink == nil then
+            add_text(tree, range, "Group identity detachment uplink: truncated")
+            return
+        end
+        add_text(tree, range, "Group identity detachment uplink: " .. detachment_uplink)
+    end
+
+    local address_type = cursor_read_uint(cur, 2)
+    if address_type == nil then
+        add_text(tree, range, "Group identity address type: truncated")
+        return
+    end
+    add_named_value(tree, range, "Group identity address type", address_type, GROUP_IDENTITY_ADDRESS_TYPE_NAMES, 2)
+
+    if address_type == 0 or address_type == 1 or address_type == 3 then
+        local gssi = cursor_read_uint(cur, 24)
+        if gssi == nil then
+            add_text(tree, range, "GSSI: truncated")
+            return
+        end
+        add_text(tree, range, "GSSI: " .. format_uint_with_hex(gssi, 24))
+    end
+    if address_type == 1 or address_type == 3 then
+        local address_extension = cursor_read_uint(cur, 24)
+        if address_extension == nil then
+            add_text(tree, range, "Address extension: truncated")
+            return
+        end
+        add_text(tree, range, "Address extension: " .. format_uint_with_hex(address_extension, 24))
+    end
+    if address_type == 2 or address_type == 3 then
+        local vgssi = cursor_read_uint(cur, 24)
+        if vgssi == nil then
+            add_text(tree, range, "VGSSI: truncated")
+            return
+        end
+        add_text(tree, range, "VGSSI: " .. format_uint_with_hex(vgssi, 24))
+    end
+end
+
+local function parse_group_identity_location_accept(cur, tree, range)
+    local accept_reject = cursor_read_uint(cur, 1)
+    local reserved = cursor_read_uint(cur, 1)
+    if accept_reject == nil or reserved == nil then
+        add_text(tree, range, "Group identity location accept: truncated")
+        return
+    end
+
+    add_named_value(tree, range, "Accept/reject", accept_reject, GROUP_IDENTITY_ACCEPT_REJECT_NAMES, 1)
+    add_text(tree, range, "Reserved: " .. reserved)
+
+    local obit = read_obit(cur, tree, range, "Group identity location accept")
+    if obit == nil then
+        return
+    end
+
+    if obit then
+        parse_type4_struct(cur, tree, range, 7, "Group identity downlink", parse_group_identity_downlink)
+        finalize_optional_tail(cur, tree, range, "Group identity location accept")
+    end
+end
+
+local function describe_pre_coded_status(value)
+    if value == 0 then
+        return "Emergency"
+    end
+    if value >= 1 and value <= 31742 then
+        return "Reserved(" .. value .. ")"
+    end
+    if value >= 31743 and value <= 32767 then
+        local short_report_type = math.floor(value / 256) % 4
+        local message_reference = value % 256
+        return string.format("SdsTl(%s, message_reference=%u)", lookup(SHORT_REPORT_TYPE_NAMES, short_report_type, tostring(short_report_type)), message_reference)
+    end
+    return "NetworkUserSpecific(" .. value .. ")"
+end
+
+local function parse_sds_payload(bits, tree, range)
+    if bits == nil or bits == "" then
+        add_text(tree, range, "SDS payload: <empty>")
+        return
+    end
+
+    add_text(tree, range, string.format("Payload bits (%u): %s", #bits, preview_bits(bits, 160)))
+    add_text(tree, range, "Payload hex: 0x" .. bit_string_to_hex(bits))
+
+    if #bits >= 8 then
+        local protocol_id = bits_to_uint(bits, 0, 8)
+        if protocol_id ~= nil then
+            add_named_value(tree, range, "SDS protocol id", protocol_id, SDS_PROTOCOL_ID_NAMES, 8)
+        end
+    end
+end
+
+local function parse_type34_tail_only(cur, tree, range, label)
+    if cursor_remaining(cur) > 0 then
+        local tail = cursor_read_bits(cur, cursor_remaining(cur))
+        add_text(tree, range, string.format("%s raw tail (%u bits): %s", label, #tail, preview_bits(tail, 160)))
+    end
+end
+
+local function parse_mle_mm_downlink(bits, tree, range)
+    local cur = new_cursor(bits)
+    local pdu_type = cursor_read_uint(cur, 4)
+    if pdu_type == nil then
+        add_text(tree, range, "MM PDU: truncated")
+        return
+    end
+
+    local mm_tree = tree:add(range, "MM: " .. lookup(MM_PDU_NAMES, pdu_type, "Unknown"))
+    add_named_value(mm_tree, range, "PDU type", pdu_type, MM_PDU_NAMES, 4)
+
+    if pdu_type == 5 then
+        local location_update_accept_type = cursor_read_uint(cur, 3)
+        if location_update_accept_type == nil then
+            add_text(mm_tree, range, "Location update accept type: truncated")
+            return
+        end
+        add_named_value(mm_tree, range, "Location update accept type", location_update_accept_type, LOCATION_UPDATE_ACCEPT_NAMES, 3)
+
+        local obit = read_obit(cur, mm_tree, range, "D-LOCATION UPDATE ACCEPT")
+        if obit == nil then
+            return
+        end
+
+        if obit then
+            parse_type2_uint(cur, mm_tree, range, "SSI", 24)
+            parse_type2_uint(cur, mm_tree, range, "Address extension", 24)
+            parse_type2_uint(cur, mm_tree, range, "Subscriber class", 16)
+            parse_type2_struct(cur, mm_tree, range, "Energy saving information", parse_energy_saving_information)
+            parse_type2_uint(cur, mm_tree, range, "SCCH information and distribution on 18th frame", 6)
+            parse_type4_generic(cur, mm_tree, range, 2, "New registered area", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 3, "Security downlink", MM_TYPE34_NAMES)
+            parse_type3_struct(cur, mm_tree, range, 5, "Group identity location accept", parse_group_identity_location_accept)
+            parse_type3_generic(cur, mm_tree, range, 1, "Default group attachment lifetime", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 10, "Authentication downlink", MM_TYPE34_NAMES)
+            parse_type4_generic(cur, mm_tree, range, 12, "Group identity security related information", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 13, "Cell type control", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "D-LOCATION UPDATE ACCEPT")
+        end
+    elseif pdu_type == 6 then
+        local group_identity_report = cursor_read_uint(cur, 1)
+        local cipher_control = cursor_read_uint(cur, 1)
+        if group_identity_report == nil or cipher_control == nil then
+            add_text(mm_tree, range, "D-LOCATION UPDATE COMMAND: truncated")
+            return
+        end
+        add_text(mm_tree, range, "Group identity report: " .. bool_text(group_identity_report))
+        add_text(mm_tree, range, "Cipher control: " .. bool_text(cipher_control))
+        if cipher_control == 1 then
+            local ciphering_parameters = cursor_read_uint(cur, 10)
+            if ciphering_parameters == nil then
+                add_text(mm_tree, range, "Ciphering parameters: truncated")
+                return
+            end
+            add_text(mm_tree, range, "Ciphering parameters: " .. format_uint_with_hex(ciphering_parameters, 10))
+        end
+
+        local obit = read_obit(cur, mm_tree, range, "D-LOCATION UPDATE COMMAND")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, mm_tree, range, "Address extension", 24)
+            parse_type34_tail_only(cur, mm_tree, range, "D-LOCATION UPDATE COMMAND optional tail")
+        end
+    elseif pdu_type == 7 then
+        local location_update_type = cursor_read_uint(cur, 3)
+        local reject_cause = cursor_read_uint(cur, 5)
+        local cipher_control = cursor_read_uint(cur, 1)
+        if location_update_type == nil or reject_cause == nil or cipher_control == nil then
+            add_text(mm_tree, range, "D-LOCATION UPDATE REJECT: truncated")
+            return
+        end
+        add_named_value(mm_tree, range, "Location update type", location_update_type, LOCATION_UPDATE_TYPE_NAMES, 3)
+        add_text(mm_tree, range, "Reject cause: " .. format_uint_with_hex(reject_cause, 5))
+        add_text(mm_tree, range, "Cipher control: " .. bool_text(cipher_control))
+        if cipher_control == 1 then
+            local ciphering_parameters = cursor_read_uint(cur, 10)
+            if ciphering_parameters == nil then
+                add_text(mm_tree, range, "Ciphering parameters: truncated")
+                return
+            end
+            add_text(mm_tree, range, "Ciphering parameters: " .. format_uint_with_hex(ciphering_parameters, 10))
+        end
+
+        local obit = read_obit(cur, mm_tree, range, "D-LOCATION UPDATE REJECT")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, mm_tree, range, "Address extension", 24)
+            parse_type3_generic(cur, mm_tree, range, 13, "Cell type control", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "D-LOCATION UPDATE REJECT")
+        end
+    elseif pdu_type == 9 then
+        local ssi = cursor_read_uint(cur, 24)
+        local address_extension = cursor_read_uint(cur, 24)
+        if ssi == nil or address_extension == nil then
+            add_text(mm_tree, range, "D-LOCATION UPDATE PROCEEDING: truncated")
+            return
+        end
+        add_text(mm_tree, range, "SSI: " .. format_uint_with_hex(ssi, 24))
+        add_text(mm_tree, range, "Address extension: " .. format_uint_with_hex(address_extension, 24))
+
+        local obit = read_obit(cur, mm_tree, range, "D-LOCATION UPDATE PROCEEDING")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "D-LOCATION UPDATE PROCEEDING")
+        end
+    elseif pdu_type == 10 then
+        local report = cursor_read_uint(cur, 1)
+        local ack_req = cursor_read_uint(cur, 1)
+        local mode = cursor_read_uint(cur, 1)
+        if report == nil or ack_req == nil or mode == nil then
+            add_text(mm_tree, range, "D-ATTACH/DETACH GROUP IDENTITY: truncated")
+            return
+        end
+        add_text(mm_tree, range, "Group identity report: " .. bool_text(report))
+        add_text(mm_tree, range, "Group identity acknowledgement request: " .. bool_text(ack_req))
+        add_named_value(mm_tree, range, "Attach/detach mode", mode, GROUP_IDENTITY_MODE_NAMES, 1)
+
+        local obit = read_obit(cur, mm_tree, range, "D-ATTACH/DETACH GROUP IDENTITY")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 4, "Group report response", MM_TYPE34_NAMES)
+            parse_type4_struct(cur, mm_tree, range, 7, "Group identity downlink", parse_group_identity_downlink)
+            parse_type4_generic(cur, mm_tree, range, 12, "Group identity security related information", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "D-ATTACH/DETACH GROUP IDENTITY")
+        end
+    elseif pdu_type == 12 then
+        local status_downlink = cursor_read_uint(cur, 6)
+        if status_downlink == nil then
+            add_text(mm_tree, range, "D-MM STATUS: truncated")
+            return
+        end
+        if STATUS_DOWNLINK_NAMES[status_downlink] ~= nil then
+            add_named_value(mm_tree, range, "Status downlink", status_downlink, STATUS_DOWNLINK_NAMES, 6)
+        else
+            add_text(mm_tree, range, "Status downlink: " .. format_uint_with_hex(status_downlink, 6))
+        end
+        parse_type34_tail_only(cur, mm_tree, range, "D-MM STATUS dependent information")
+    else
+        parse_type34_tail_only(cur, mm_tree, range, "MM payload")
+    end
+end
+
+local function parse_cmce_setup_optional_calling_party(cur, tree, range)
+    local pbit = cursor_read_uint(cur, 1)
+    if pbit == nil then
+        add_text(tree, range, "Calling party type identifier: missing p-bit")
+        return
+    end
+    if pbit == 0 then
+        return
+    end
+
+    local cpti = cursor_read_uint(cur, 2)
+    if cpti == nil then
+        add_text(tree, range, "Calling party type identifier: truncated")
+        return
+    end
+    add_named_value(tree, range, "Calling party type identifier", cpti, PARTY_TYPE_NAMES, 2)
+
+    if cpti == 1 or cpti == 2 then
+        local ssi = cursor_read_uint(cur, 24)
+        if ssi == nil then
+            add_text(tree, range, "Calling party SSI: truncated")
+            return
+        end
+        add_text(tree, range, "Calling party SSI: " .. format_uint_with_hex(ssi, 24))
+    end
+    if cpti == 2 then
+        local ext = cursor_read_uint(cur, 24)
+        if ext == nil then
+            add_text(tree, range, "Calling party extension: truncated")
+            return
+        end
+        add_text(tree, range, "Calling party extension: " .. format_uint_with_hex(ext, 24))
+    end
+end
+
+local function parse_cmce_party_address(cur, tree, range, label_prefix)
+    local cpti = cursor_read_uint(cur, 2)
+    if cpti == nil then
+        add_text(tree, range, label_prefix .. ": truncated")
+        return nil
+    end
+    add_named_value(tree, range, label_prefix, cpti, PARTY_TYPE_NAMES, 2)
+
+    if cpti == 1 or cpti == 2 then
+        local ssi = cursor_read_uint(cur, 24)
+        if ssi == nil then
+            add_text(tree, range, "Calling party SSI: truncated")
+            return cpti
+        end
+        add_text(tree, range, "Calling party SSI: " .. format_uint_with_hex(ssi, 24))
+    end
+    if cpti == 2 then
+        local ext = cursor_read_uint(cur, 24)
+        if ext == nil then
+            add_text(tree, range, "Calling party extension: truncated")
+            return cpti
+        end
+        add_text(tree, range, "Calling party extension: " .. format_uint_with_hex(ext, 24))
+    end
+    return cpti
+end
+
+local function parse_mle_cmce_downlink(bits, tree, range)
+    local cur = new_cursor(bits)
+    local pdu_type = cursor_read_uint(cur, 5)
+    if pdu_type == nil then
+        add_text(tree, range, "CMCE PDU: truncated")
+        return
+    end
+
+    local cmce_tree = tree:add(range, "CMCE: " .. lookup(CMCE_PDU_NAMES, pdu_type, "Unknown"))
+    add_named_value(cmce_tree, range, "PDU type", pdu_type, CMCE_PDU_NAMES, 5)
+
+    if pdu_type == 0 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local call_timeout_setup = cursor_read_uint(cur, 3)
+        local reserved = cursor_read_uint(cur, 1)
+        local simplex_duplex = cursor_read_uint(cur, 1)
+        local call_queued = cursor_read_uint(cur, 1)
+        if call_identifier == nil or call_timeout_setup == nil or reserved == nil or simplex_duplex == nil or call_queued == nil then
+            add_text(cmce_tree, range, "D-ALERT: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Call time-out set-up phase", call_timeout_setup, CALL_TIMEOUT_SETUP_NAMES, 3)
+        add_text(cmce_tree, range, "Reserved: " .. bool_text(reserved))
+        add_text(cmce_tree, range, "Simplex/duplex selection: " .. bool_text(simplex_duplex))
+        add_text(cmce_tree, range, "Call queued: " .. bool_text(call_queued))
+
+        local obit = read_obit(cur, cmce_tree, range, "D-ALERT")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_struct(cur, cmce_tree, range, "Basic service information", parse_basic_service_information)
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-ALERT")
+        end
+    elseif pdu_type == 1 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local call_timeout_setup = cursor_read_uint(cur, 3)
+        local hook_method_selection = cursor_read_uint(cur, 1)
+        local simplex_duplex = cursor_read_uint(cur, 1)
+        if call_identifier == nil or call_timeout_setup == nil or hook_method_selection == nil or simplex_duplex == nil then
+            add_text(cmce_tree, range, "D-CALL PROCEEDING: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Call time-out set-up phase", call_timeout_setup, CALL_TIMEOUT_SETUP_NAMES, 3)
+        add_text(cmce_tree, range, "Hook method selection: " .. bool_text(hook_method_selection))
+        add_text(cmce_tree, range, "Simplex/duplex selection: " .. bool_text(simplex_duplex))
+
+        local obit = read_obit(cur, cmce_tree, range, "D-CALL PROCEEDING")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_struct(cur, cmce_tree, range, "Basic service information", parse_basic_service_information)
+            parse_type2_uint(cur, cmce_tree, range, "Call status", 3, CALL_STATUS_NAMES)
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-CALL PROCEEDING")
+        end
+    elseif pdu_type == 2 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local call_timeout = cursor_read_uint(cur, 4)
+        local hook_method_selection = cursor_read_uint(cur, 1)
+        local simplex_duplex = cursor_read_uint(cur, 1)
+        local transmission_grant = cursor_read_uint(cur, 2)
+        local transmission_request_permission = cursor_read_uint(cur, 1)
+        local call_ownership = cursor_read_uint(cur, 1)
+        if call_identifier == nil or call_timeout == nil or hook_method_selection == nil or simplex_duplex == nil or transmission_grant == nil or transmission_request_permission == nil or call_ownership == nil then
+            add_text(cmce_tree, range, "D-CONNECT: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Call time-out", call_timeout, CALL_TIMEOUT_NAMES, 4)
+        add_text(cmce_tree, range, "Hook method selection: " .. bool_text(hook_method_selection))
+        add_text(cmce_tree, range, "Simplex/duplex selection: " .. bool_text(simplex_duplex))
+        add_named_value(cmce_tree, range, "Transmission grant", transmission_grant, TRANSMISSION_GRANT_NAMES, 2)
+        add_text(cmce_tree, range, "Transmission request permission: " .. bool_text(transmission_request_permission))
+        add_text(cmce_tree, range, "Call ownership: " .. bool_text(call_ownership))
+
+        local obit = read_obit(cur, cmce_tree, range, "D-CONNECT")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, cmce_tree, range, "Call priority", 4)
+            parse_type2_struct(cur, cmce_tree, range, "Basic service information", parse_basic_service_information)
+            parse_type2_uint(cur, cmce_tree, range, "Temporary address", 24)
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-CONNECT")
+        end
+    elseif pdu_type == 3 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local call_timeout = cursor_read_uint(cur, 4)
+        local transmission_grant = cursor_read_uint(cur, 2)
+        local transmission_request_permission = cursor_read_uint(cur, 1)
+        if call_identifier == nil or call_timeout == nil or transmission_grant == nil or transmission_request_permission == nil then
+            add_text(cmce_tree, range, "D-CONNECT ACKNOWLEDGE: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Call time-out", call_timeout, CALL_TIMEOUT_NAMES, 4)
+        add_named_value(cmce_tree, range, "Transmission grant", transmission_grant, TRANSMISSION_GRANT_NAMES, 2)
+        add_text(cmce_tree, range, "Transmission request permission: " .. bool_text(transmission_request_permission))
+
+        local obit = read_obit(cur, cmce_tree, range, "D-CONNECT ACKNOWLEDGE")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-CONNECT ACKNOWLEDGE")
+        end
+    elseif pdu_type == 4 or pdu_type == 6 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local disconnect_cause = cursor_read_uint(cur, 5)
+        if call_identifier == nil or disconnect_cause == nil then
+            add_text(cmce_tree, range, (pdu_type == 4 and "D-DISCONNECT" or "D-RELEASE") .. ": truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Disconnect cause", disconnect_cause, DISCONNECT_CAUSE_NAMES, 5)
+
+        local obit = read_obit(cur, cmce_tree, range, pdu_type == 4 and "D-DISCONNECT" or "D-RELEASE")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, pdu_type == 4 and "D-DISCONNECT" or "D-RELEASE")
+        end
+    elseif pdu_type == 7 then
+        local call_identifier = cursor_read_uint(cur, 14)
+        local call_timeout = cursor_read_uint(cur, 4)
+        local hook_method_selection = cursor_read_uint(cur, 1)
+        local simplex_duplex = cursor_read_uint(cur, 1)
+        local basic_service_tree = cmce_tree:add(range, "Basic service information")
+        if call_identifier == nil or call_timeout == nil or hook_method_selection == nil or simplex_duplex == nil then
+            add_text(cmce_tree, range, "D-SETUP: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Call identifier: " .. format_uint_with_hex(call_identifier, 14))
+        add_named_value(cmce_tree, range, "Call time-out", call_timeout, CALL_TIMEOUT_NAMES, 4)
+        add_text(cmce_tree, range, "Hook method selection: " .. bool_text(hook_method_selection))
+        add_text(cmce_tree, range, "Simplex/duplex selection: " .. bool_text(simplex_duplex))
+        parse_basic_service_information(cur, basic_service_tree, range)
+
+        local transmission_grant = cursor_read_uint(cur, 2)
+        local transmission_request_permission = cursor_read_uint(cur, 1)
+        local call_priority = cursor_read_uint(cur, 4)
+        if transmission_grant == nil or transmission_request_permission == nil or call_priority == nil then
+            add_text(cmce_tree, range, "D-SETUP fixed fields: truncated")
+            return
+        end
+        add_named_value(cmce_tree, range, "Transmission grant", transmission_grant, TRANSMISSION_GRANT_NAMES, 2)
+        add_text(cmce_tree, range, "Transmission request permission: " .. bool_text(transmission_request_permission))
+        add_text(cmce_tree, range, "Call priority: " .. call_priority)
+
+        local obit = read_obit(cur, cmce_tree, range, "D-SETUP")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, cmce_tree, range, "Notification indicator", 6)
+            parse_type2_uint(cur, cmce_tree, range, "Temporary address", 24)
+            parse_cmce_setup_optional_calling_party(cur, cmce_tree, range)
+            parse_type3_generic(cur, cmce_tree, range, 2, "External subscriber number", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 3, "Facility", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 6, "DM-MS address", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 15, "Proprietary", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-SETUP")
+        end
+    elseif pdu_type == 8 then
+        parse_cmce_party_address(cur, cmce_tree, range, "Calling party type identifier")
+        local pre_coded_status = cursor_read_uint(cur, 16)
+        if pre_coded_status == nil then
+            add_text(cmce_tree, range, "Pre-coded status: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Pre-coded status: " .. describe_pre_coded_status(pre_coded_status) .. " [" .. format_uint_with_hex(pre_coded_status, 16) .. "]")
+
+        local obit = read_obit(cur, cmce_tree, range, "D-STATUS")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type3_generic(cur, cmce_tree, range, 2, "External subscriber number", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 6, "DM-MS address", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-STATUS")
+        end
+    elseif pdu_type == 15 then
+        parse_cmce_party_address(cur, cmce_tree, range, "Calling party type identifier")
+        local short_data_type = cursor_read_uint(cur, 2)
+        if short_data_type == nil then
+            add_text(cmce_tree, range, "Short data type identifier: truncated")
+            return
+        end
+        add_named_value(cmce_tree, range, "Short data type identifier", short_data_type, SHORT_DATA_TYPE_NAMES, 2)
+
+        local sds_tree = cmce_tree:add(range, "SDS user data")
+        if short_data_type == 0 then
+            local bits = cursor_read_bits(cur, 16)
+            if bits == nil then
+                add_text(sds_tree, range, "User defined data-1: truncated")
+                return
+            end
+            parse_sds_payload(bits, sds_tree, range)
+        elseif short_data_type == 1 then
+            local bits = cursor_read_bits(cur, 32)
+            if bits == nil then
+                add_text(sds_tree, range, "User defined data-2: truncated")
+                return
+            end
+            parse_sds_payload(bits, sds_tree, range)
+        elseif short_data_type == 2 then
+            local bits = cursor_read_bits(cur, 64)
+            if bits == nil then
+                add_text(sds_tree, range, "User defined data-3: truncated")
+                return
+            end
+            parse_sds_payload(bits, sds_tree, range)
+        else
+            local length_indicator = cursor_read_uint(cur, 11)
+            if length_indicator == nil then
+                add_text(sds_tree, range, "Length indicator: truncated")
+                return
+            end
+            add_text(sds_tree, range, "Length indicator: " .. length_indicator .. " bits")
+            local bits = cursor_read_bits(cur, length_indicator)
+            if bits == nil then
+                add_text(sds_tree, range, "User defined data-4: truncated")
+                return
+            end
+            parse_sds_payload(bits, sds_tree, range)
+        end
+
+        local obit = read_obit(cur, cmce_tree, range, "D-SDS-DATA")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type3_generic(cur, cmce_tree, range, 2, "External subscriber number", CMCE_TYPE3_NAMES)
+            parse_type3_generic(cur, cmce_tree, range, 6, "DM-MS address", CMCE_TYPE3_NAMES)
+            finalize_optional_tail(cur, cmce_tree, range, "D-SDS-DATA")
+        end
+    else
+        parse_type34_tail_only(cur, cmce_tree, range, "CMCE payload")
+    end
+end
+
+local function parse_tl_sdu(bits, tree, range, direction)
+    if bits == nil or bits == "" then
+        add_text(tree, range, "TL-SDU: <empty>")
+        return
+    end
+
+    local cur = new_cursor(bits)
+    local protocol = cursor_read_uint(cur, 3)
+    if protocol == nil then
+        add_text(tree, range, "TL-SDU: truncated")
+        return
+    end
+
+    local tl_tree = tree:add(range, "TL-SDU")
+    add_named_value(tl_tree, range, "MLE protocol discriminator", protocol, MLE_PROTOCOL_NAMES, 3)
+
+    local payload_bits = cursor_read_bits(cur, cursor_remaining(cur)) or ""
+    if direction ~= 0 then
+        add_text(tl_tree, range, string.format("Uplink %s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
+        return
+    end
+
+    if protocol == 1 then
+        parse_mle_mm_downlink(payload_bits, tl_tree, range)
+    elseif protocol == 2 then
+        parse_mle_cmce_downlink(payload_bits, tl_tree, range)
+    else
+        add_text(tl_tree, range, string.format("%s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
+    end
+end
+
+local function parse_llc(bits, tree, range, direction)
+    if bits == nil or bits == "" then
+        add_text(tree, range, "TM-SDU: <empty>")
+        return
+    end
+
+    local cur = new_cursor(bits)
+    local llc_link_type = cursor_read_uint(cur, 1)
+    local has_fcs = cursor_read_uint(cur, 1)
+    local basic_type = cursor_read_uint(cur, 2)
+    if llc_link_type == nil or has_fcs == nil or basic_type == nil then
+        add_text(tree, range, "LLC: truncated")
+        return
+    end
+
+    local llc_tree = tree:add(range, "LLC")
+    add_text(llc_tree, range, "Link type: " .. llc_link_type)
+    local pdu_type = basic_type + (has_fcs * 4)
+    add_named_value(llc_tree, range, "PDU type", pdu_type, LLC_PDU_NAMES, 4)
+
+    if llc_link_type ~= 0 then
+        parse_type34_tail_only(cur, llc_tree, range, "Non-basic LLC")
+        return
+    end
+
+    if basic_type == 0 then
+        local nr = cursor_read_uint(cur, 1)
+        local ns = cursor_read_uint(cur, 1)
+        if nr == nil or ns == nil then
+            add_text(llc_tree, range, "BL-ADATA header: truncated")
+            return
+        end
+        add_text(llc_tree, range, "N(R): " .. nr)
+        add_text(llc_tree, range, "N(S): " .. ns)
+    elseif basic_type == 1 then
+        local ns = cursor_read_uint(cur, 1)
+        if ns == nil then
+            add_text(llc_tree, range, "BL-DATA header: truncated")
+            return
+        end
+        add_text(llc_tree, range, "N(S): " .. ns)
+    elseif basic_type == 3 then
+        local nr = cursor_read_uint(cur, 1)
+        if nr == nil then
+            add_text(llc_tree, range, "BL-ACK header: truncated")
+            return
+        end
+        add_text(llc_tree, range, "N(R): " .. nr)
+    end
+
+    local remaining = cursor_remaining(cur)
+    if remaining < 0 then
+        add_text(llc_tree, range, "LLC: invalid remaining length")
+        return
+    end
+
+    local payload_bits = nil
+    local fcs_bits = nil
+    if has_fcs == 1 then
+        if remaining < 32 then
+            add_text(llc_tree, range, "FCS flagged but fewer than 32 bits remain")
+            payload_bits = cursor_read_bits(cur, remaining)
+        else
+            payload_bits = cursor_read_bits(cur, remaining - 32)
+            fcs_bits = cursor_read_bits(cur, 32)
+        end
+    else
+        payload_bits = cursor_read_bits(cur, remaining)
+    end
+
+    if fcs_bits ~= nil then
+        add_text(llc_tree, range, "FCS: 0x" .. bit_string_to_hex(fcs_bits))
+    end
+
+    if basic_type == 3 then
+        if payload_bits ~= nil and payload_bits ~= "" then
+            add_text(llc_tree, range, "BL-ACK trailing bits: " .. preview_bits(payload_bits, 160))
+        end
+        return
+    end
+
+    parse_tl_sdu(payload_bits or "", llc_tree, range, direction)
 end
 
 local function parse_access_assign(bits, tree, range, is_frame18)
@@ -371,7 +1755,16 @@ local function parse_bnch(bits, tree, range)
     end
 end
 
-local function parse_mac_resource(bits, tree, range)
+local function parse_tm_sdu(bits, tree, range, direction, label)
+    if bits == nil or bits == "" then
+        return
+    end
+    local tm_tree = tree:add(range, string.format("%s (%u bits)", label, #bits))
+    add_text(tm_tree, range, "Raw bits: " .. preview_bits(bits, 160))
+    parse_llc(bits, tm_tree, range, direction)
+end
+
+local function parse_mac_resource(bits, tree, range, direction)
     local fill_bits = bits_to_uint(bits, 2, 1)
     local pos_of_grant = bits_to_uint(bits, 3, 1)
     local encryption_mode = bits_to_uint(bits, 4, 2)
@@ -444,12 +1837,16 @@ local function parse_mac_resource(bits, tree, range)
     if pos < #bits then
         local tm_sdu = bits_slice(bits, pos, #bits - pos)
         if tm_sdu ~= nil and tm_sdu ~= "" then
-            add_text(mr_tree, range, "TM-SDU bits: " .. tm_sdu)
+            if encryption_mode == 0 then
+                parse_tm_sdu(tm_sdu, mr_tree, range, direction, "TM-SDU")
+            else
+                add_text(mr_tree, range, "Encrypted TM-SDU bits: " .. preview_bits(tm_sdu, 160))
+            end
         end
     end
 end
 
-local function parse_mac_data(bits, tree, range)
+local function parse_mac_data(bits, tree, range, direction)
     local fill_bits = bits_to_uint(bits, 2, 1)
     local encrypted = bits_to_uint(bits, 3, 1)
     local addr_type = bits_to_uint(bits, 4, 2)
@@ -495,7 +1892,11 @@ local function parse_mac_data(bits, tree, range)
     if pos < #bits then
         local sdu_bits = bits_slice(bits, pos, #bits - pos)
         if sdu_bits ~= nil and sdu_bits ~= "" then
-            add_text(md_tree, range, "TM-SDU bits: " .. sdu_bits)
+            if encrypted == 0 then
+                parse_tm_sdu(sdu_bits, md_tree, range, direction, "TM-SDU")
+            else
+                add_text(md_tree, range, "Encrypted TM-SDU bits: " .. preview_bits(sdu_bits, 160))
+            end
         end
     end
 end
@@ -540,7 +1941,7 @@ local function parse_mac_end_or_frag(bits, tree, range, direction, logical_chann
         if #bits > 4 then
             local sdu_bits = bits_slice(bits, 4, #bits - 4)
             if sdu_bits ~= nil and sdu_bits ~= "" then
-                add_text(tree, range, "TM-SDU bits: " .. sdu_bits)
+                add_text(tree, range, "TM-SDU fragment bits: " .. preview_bits(sdu_bits, 160))
             end
         end
         return
@@ -593,9 +1994,9 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
     local mac_tree = tree:add(range, "MAC PDU: " .. lookup(MAC_PDU_NAMES, mac_pdu_type, "Unknown"))
     if mac_pdu_type == 0 then
         if direction == 0 then
-            parse_mac_resource(bits, mac_tree, range)
+            parse_mac_resource(bits, mac_tree, range, direction)
         else
-            parse_mac_data(bits, mac_tree, range)
+            parse_mac_data(bits, mac_tree, range, direction)
         end
     elseif mac_pdu_type == 1 then
         parse_mac_end_or_frag(bits, mac_tree, range, direction, logical_channel)

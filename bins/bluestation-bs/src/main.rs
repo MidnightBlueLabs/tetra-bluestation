@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::collections::HashMap;
+use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -8,6 +9,7 @@ use tetra_entities::net_control::channel::build_all_control_links;
 use tetra_entities::net_control::{
     CONTROL_HEARTBEAT_INTERVAL, CONTROL_HEARTBEAT_TIMEOUT, CONTROL_PROTOCOL_VERSION, CommandDispatcher, ControlWorker,
 };
+use tetra_entities::net_wireshark::pcap::PcapWriter;
 use tetra_entities::net_wireshark::worker::WiresharkWorker;
 use tetra_entities::net_wireshark::{WiresharkSource, wireshark_channel};
 
@@ -119,12 +121,58 @@ fn start_wireshark_worker(cfg: SharedConfig, wireshark_source: WiresharkSource) 
         host: wcfg.host.clone(),
         port: wcfg.port,
     });
+    let pcap_file = wcfg.pcap_file.clone();
+    let pcap_host = wcfg.host.clone();
+    let pcap_port = wcfg.port;
 
     thread::spawn(move || {
         let transport = UdpTransport::new(udp_config);
         let mut worker = WiresharkWorker::new(wireshark_source, transport);
+        if let Some(path) = pcap_file {
+            let pcap = PcapWriter::create(&path, &pcap_host, pcap_port).unwrap_or_else(|e| {
+                eprintln!("Failed to create Wireshark PCAP file '{}': {}", path, e);
+                std::process::exit(1);
+            });
+            worker = worker.with_pcap(pcap);
+        }
         worker.run();
     })
+}
+
+fn confirm_pcap_output(config: &StackConfig) {
+    let Some(wcfg) = config.wireshark.as_ref() else {
+        return;
+    };
+    let Some(pcap_file) = wcfg.pcap_file.as_ref() else {
+        return;
+    };
+
+    eprintln!("\nWARNING: Wireshark PCAP output is enabled.");
+    eprintln!("  PCAP file: {}", pcap_file);
+    eprintln!("  Synthetic UDP destination: {}:{}", wcfg.host, wcfg.port);
+    eprintln!("  This is intended for debugging and writes capture traffic to disk.");
+
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        eprintln!("Refusing to continue without an interactive acknowledgement while PCAP output is enabled.");
+        std::process::exit(1);
+    }
+
+    print!("Type 'yes' to continue: ");
+    std::io::stdout().flush().unwrap_or_else(|e| {
+        eprintln!("Failed to flush stdout for PCAP acknowledgement prompt: {}", e);
+        std::process::exit(1);
+    });
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap_or_else(|e| {
+        eprintln!("Failed to read PCAP acknowledgement response: {}", e);
+        std::process::exit(1);
+    });
+
+    if !input.trim().eq_ignore_ascii_case("yes") {
+        eprintln!("Aborting startup because PCAP output was not acknowledged.");
+        std::process::exit(1);
+    }
 }
 
 /// Start base station stack
@@ -235,6 +283,7 @@ fn main() {
 
     // Build immutable, cheaply clonable SharedConfig and build the base station stack
     let stack_cfg = load_config_from_toml(&args.config);
+    confirm_pcap_output(&stack_cfg);
     let mut cfg = SharedConfig::from_parts(stack_cfg, None);
 
     let _log_guard = debug::setup_logging_default(cfg.config().debug_log.clone());

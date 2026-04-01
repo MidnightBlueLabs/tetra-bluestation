@@ -4,6 +4,7 @@ use crate::{
     net_wireshark::{
         channel::{RecvFrame, WiresharkSource},
         events::Type1Capture,
+        pcap::PcapWriter,
         protocol::encode_datagram,
     },
     network::transports::NetworkTransport,
@@ -15,6 +16,7 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 pub struct WiresharkWorker<T: NetworkTransport> {
     source: WiresharkSource,
     transport: T,
+    pcap: Option<PcapWriter<std::io::BufWriter<std::fs::File>>>,
     connected: bool,
     last_connect_attempt: Option<Instant>,
 }
@@ -24,9 +26,15 @@ impl<T: NetworkTransport> WiresharkWorker<T> {
         Self {
             source,
             transport,
+            pcap: None,
             connected: false,
             last_connect_attempt: None,
         }
+    }
+
+    pub fn with_pcap(mut self, pcap: PcapWriter<std::io::BufWriter<std::fs::File>>) -> Self {
+        self.pcap = Some(pcap);
+        self
     }
 
     pub fn run(&mut self) {
@@ -76,13 +84,6 @@ impl<T: NetworkTransport> WiresharkWorker<T> {
     }
 
     fn forward_frame(&mut self, frame: &Type1Capture) {
-        if !self.connected {
-            self.try_connect();
-            if !self.connected {
-                return;
-            }
-        }
-
         let payload = match encode_datagram(frame) {
             Ok(payload) => payload,
             Err(e) => {
@@ -90,6 +91,20 @@ impl<T: NetworkTransport> WiresharkWorker<T> {
                 return;
             }
         };
+
+        if let Some(pcap) = &mut self.pcap
+            && let Err(e) = pcap.write_datagram(&payload)
+        {
+            tracing::warn!("Wireshark PCAP write failed: {}, disabling PCAP output", e);
+            self.pcap = None;
+        }
+
+        if !self.connected {
+            self.try_connect();
+            if !self.connected {
+                return;
+            }
+        }
 
         if let Err(e) = self.transport.send_unreliable(&payload) {
             tracing::warn!("Wireshark transport send failed: {}, will reconnect", e);

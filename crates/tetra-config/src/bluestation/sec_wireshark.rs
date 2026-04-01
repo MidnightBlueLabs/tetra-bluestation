@@ -10,6 +10,8 @@ pub struct CfgWireshark {
     pub host: String,
     /// UDP destination port
     pub port: u16,
+    /// Optional PCAP file path for saving synthetic UDP capture packets
+    pub pcap_file: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +20,8 @@ pub struct CfgWiresharkDto {
     pub host: String,
     /// UDP destination port
     pub port: u16,
+    /// Optional PCAP file path for saving synthetic UDP capture packets
+    pub pcap_file: Option<String>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -31,9 +35,15 @@ pub fn apply_wireshark_patch(src: CfgWiresharkDto) -> Result<CfgWireshark, Strin
     if src.port == 0 {
         return Err("wireshark: port must be non-zero".to_string());
     }
+    if let Some(ref pcap_file) = src.pcap_file
+        && pcap_file.trim().is_empty()
+    {
+        return Err("wireshark: pcap_file must not be empty".to_string());
+    }
 
     Ok(CfgWireshark {
         host: src.host,
         port: src.port,
+        pcap_file: src.pcap_file,
     })
 }
