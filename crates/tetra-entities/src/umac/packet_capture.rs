@@ -210,24 +210,20 @@ mod tests {
 
     #[test]
     fn test_time_packs_correctly() {
-        let time = TdmaTime { t: 1, f: 1, m: 1, h: 1 };
-        let packed = pack_time(time);
-        let bitbuffer = BitBuffer::from_bytes(&packed);
-        println!("{:?}", bitbuffer);
+        let packed = pack_time( TdmaTime { t: 1, f: 1, m: 1, h: 1 });
+        assert_eq!(packed, [0x41, 0x08, 0x00, 0x00]);
     }
 
     #[test]
     fn test_txreg_builds_correctly() {
 
-        let chans = [
+        let txreg = build_txreg(&[
             LogicalChannel::Bsch,
             LogicalChannel::Aach,
             LogicalChannel::Bnch
-        ];
+        ]);
 
-        let txreg = build_txreg(&chans);
-        let bitbuffer = BitBuffer::from_bytes(&txreg);
-        println!("{:?}", bitbuffer);
+        assert_eq!(txreg, [0x56, 0x18, 0x00, 0x00]);
     }
 
     #[test]
@@ -239,14 +235,13 @@ mod tests {
             true
         ]);
 
-        let bitbuffer = BitBuffer::from_bytes(&rxreg);
-        println!("{:?}", bitbuffer);
+        assert_eq!(rxreg, [0x25, 0x00, 0x00, 0x00]);
     }
 
     #[test]
     fn test_tmv_unitdata_request_header() {
 
-        let foo = make_unitdata_request(&TmvUnitdataReqSlot {
+        let unitdata_req = make_unitdata_request(&TmvUnitdataReqSlot {
             ts: TdmaTime { t: 1, f: 2, m: 3, h: 0 },
             ul_phy_chan: PhysicalChannel::Cp,
             blk1: Some(TmvUnitdataReq {
@@ -258,7 +253,6 @@ mod tests {
             blk2: None
         });
 
-        let bitbuffer = BitBuffer::from_bytes(&foo);
-        println!("{:?}", bitbuffer);
+        assert_eq!(unitdata_req, vec![0x01, 0x83, 0x08, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00]);
     }
 }
