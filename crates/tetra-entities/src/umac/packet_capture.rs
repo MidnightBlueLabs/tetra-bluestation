@@ -112,7 +112,7 @@ pub fn make_unitdata_request(slot: &TmvUnitdataReqSlot) -> Vec<u8> {
     header.push(WiresharkTetraType::UnitDataRequest as u8);
 
     // Carrier is always 0, since we only support one for now
-    // header.push(0);
+    header.extend_from_slice(&[0]);
 
     // Packed timer
     header.extend_from_slice(&pack_time(slot.ts));
@@ -151,7 +151,7 @@ pub fn make_unitdata_indication(indication: &TmvUnitdataInd, time: TdmaTime) -> 
     header.push(WiresharkTetraType::UnitDataIndication as u8);
 
     // Carrier is always 0, since we only support one for now
-    // header.push(0);
+    header.extend_from_slice(&[0]);
 
     // Packed timer
     header.extend_from_slice(&pack_time(time));
