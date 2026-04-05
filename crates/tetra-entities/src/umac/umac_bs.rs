@@ -60,9 +60,6 @@ pub struct UmacBs {
     /// Timestamp of last received UL voice frame per timeslot (0-indexed: ts1..ts4).
     /// Used to detect UL inactivity when a radio disappears mid-transmission.
     last_ul_voice: [Option<TdmaTime>; 4],
-
-    /// Wireshark capture sender
-    wireshark_sender: WiresharkSender
 }
 
 struct PendingStch {
@@ -90,7 +87,6 @@ impl UmacBs {
             // event_label_store: EventLabelStore::new(),
             channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps),
             last_ul_voice: [None; 4],
-            wireshark_sender: WiresharkSender::new().unwrap()
         }
     }
 
@@ -1596,6 +1592,7 @@ impl TetraEntityTrait for UmacBs {
             dltime: ts.add_timeslots(-1),
             msg: SapMsgInner::TmvUnitdataReq(elem),
         };
+
         tracing::trace!("UmacBs tick: Pushing finalized timeslot to LMAC: {:?}", s);
         queue.push_back(s);
     }
