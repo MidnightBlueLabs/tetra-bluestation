@@ -72,8 +72,13 @@ fn build_txreg(chans: &[LogicalChannel]) -> [u8; 4] {
 /// Similar to TXREG except includes CRC indications for the channels too
 fn build_rxreg(chans: &[LogicalChannel], crc_flags: &[bool]) -> [u8; 4] {
 
-    assert!(chans.len() <= 3, "Too many logical channels specified to build RXREG");
-    assert_eq!(chans.len(), crc_flags.len(), "Different number of logical channels and crc flags building RXREG");
+    assert!(chans.len() <= 3, "Too many logical channels specified to build RXREG (got {})", chans.len());
+    assert_eq!(
+        chans.len(),
+        crc_flags.len(),
+        "Different number of logical channels and crc flags building RXREG (chans {}, crc_flags {}",
+        chans.len(), crc_flags.len()
+    );
 
     let chan_count = chans.len() as u32;
 

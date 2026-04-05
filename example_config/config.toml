@@ -187,3 +187,20 @@ voice_service = true
 # SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled. 
 # If left commented, all (outside of local_ssi_ranges) calls are allowed over Brew
 # whitelisted_ssis = [91]
+
+#
+# Packet Capture
+#
+# Uses the Wireshark TETRA dissector, which is a bit strange but works fine for basic DL/UL frame capture and analysis.
+# See https://github.com/wireshark/wireshark/blob/master/epan/dissectors/asn1/tetra/packet-tetra-template.c
+#
+# To capture frames in Wireshark, use the "UDP Listener remote capture: udpdump" Interface.
+#
+# The default Listen port is 7074.
+# The payload type must be set to "tetra".
+#
+# You can filter downlink broadcast traffic with a filter like ((!(tetra.null_pdu_element)) ) && !(tetra.txchannel1 == 5)
+#
+# [packet_capture]
+# host = "127.0.0.1"
+# port = 7074
