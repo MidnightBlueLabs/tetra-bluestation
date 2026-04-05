@@ -11,6 +11,8 @@ use crate::bluestation::{CellInfoDto, CfgControlDto, NetInfoDto, apply_control_p
 use super::config::{StackConfig, StackMode};
 use super::sec_brew::{CfgBrewDto, apply_brew_patch};
 use super::sec_telemetry::{CfgTelemetryDto, apply_telemetry_patch};
+use super::sec_packet_capture::{CfgPacketCaptureDto, apply_packet_capture_patch};
+
 use super::{PhyIoDto, phy_dto_to_cfg};
 
 /// Build `StackConfig` from a TOML configuration file
@@ -74,6 +76,7 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         brew: None,
         telemetry: None,
         control: None,
+        packet_capture: None,
     };
 
     if let Some(brew) = root.brew {
@@ -86,6 +89,10 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
 
     if let Some(command) = root.command {
         cfg.control = Some(apply_control_patch(command)?);
+    }
+
+    if let Some(packet_capture) = root.packet_capture {
+        cfg.packet_capture = Some(apply_packet_capture_patch(packet_capture)?);
     }
 
     Ok(cfg)
@@ -128,6 +135,7 @@ struct TomlConfigRoot {
     brew: Option<CfgBrewDto>,
     telemetry: Option<CfgTelemetryDto>,
     command: Option<CfgControlDto>,
+    packet_capture: Option<CfgPacketCaptureDto>,
 
     #[serde(flatten)]
     extra: HashMap<String, Value>,
