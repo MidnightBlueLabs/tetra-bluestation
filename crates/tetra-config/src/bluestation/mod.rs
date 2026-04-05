@@ -25,5 +25,8 @@ pub use sec_telemetry::*;
 pub mod sec_control;
 pub use sec_control::*;
 
+pub mod sec_packet_capture;
+pub use sec_packet_capture::*;
+
 pub mod state;
 pub use state::*;

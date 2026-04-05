@@ -9,4 +9,3 @@ pub mod ms_defrag;
 
 pub mod event_label_store;
 pub mod fillbits;
-pub mod wireshark;

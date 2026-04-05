@@ -1,9 +1,8 @@
 use std::net::UdpSocket;
+use tetra_config::bluestation::CfgPacketCapture;
 use tetra_core::TdmaTime;
 use tetra_saps::tmv::enums::logical_chans::LogicalChannel;
-use tetra_saps::tmv::{TmvUnitdataInd, TmvUnitdataReq, TmvUnitdataReqSlot};
-use crate::net_telemetry::codec::{TelemetryCodecBitcode, TelemetryCodecJson};
-use crate::net_telemetry::TelemetryEvent;
+use tetra_saps::tmv::{TmvUnitdataInd, TmvUnitdataReqSlot};
 
 /// TETRA capture format, defined by the Wireshark `tetra` dissector, which is weirdly undocumented...
 /// https://github.com/wireshark/wireshark/blob/master/epan/dissectors/asn1/tetra/packet-tetra-template.c
@@ -20,7 +19,7 @@ pub enum WiresharkTetraType {
 fn pack_time(time: TdmaTime) -> [u8; 4] {
     let mut t: u32 = 0;
     t |= (time.t as u32 & 0xF) << 11;
-    t |= (time.f as u32 & 0xF) << 6;
+    t |= (time.f as u32 & 0x1F) << 6;
     t |= time.m as u32 & 0x3F;
     t.to_le_bytes()
 }
@@ -99,7 +98,7 @@ fn build_rxreg(chans: &[LogicalChannel], crc_flags: &[bool]) -> [u8; 4] {
 }
 
 /// Build a Wireshark TETRA dissector message for a TMV-UNITDATA Request
-pub fn make_unitdata_request(slot: TmvUnitdataReqSlot) -> Vec<u8> {
+pub fn make_unitdata_request(slot: &TmvUnitdataReqSlot) -> Vec<u8> {
 
     let mut header = Vec::new();
     let mut blocks_concat = Vec::new();
@@ -108,7 +107,7 @@ pub fn make_unitdata_request(slot: TmvUnitdataReqSlot) -> Vec<u8> {
     header.push(WiresharkTetraType::UnitDataRequest as u8);
 
     // Carrier is always 0, since we only support one for now
-    header.push(0);
+    // header.push(0);
 
     // Packed timer
     header.extend_from_slice(&pack_time(slot.ts));
@@ -116,17 +115,17 @@ pub fn make_unitdata_request(slot: TmvUnitdataReqSlot) -> Vec<u8> {
     let mut logical_channels: Vec<LogicalChannel> = Vec::new();
 
     // Add each of the channels for the blocks
-    if let Some(blk1) = slot.blk1 {
+    if let Some(blk1) = slot.blk1.as_ref() {
         logical_channels.push(blk1.logical_channel);
-        (blocks_concat).extend_from_slice(&blk1.mac_block.into_bytes());
+        (blocks_concat).extend_from_slice(&blk1.mac_block.clone().into_bytes());
     }
-    if let Some(bbk) = slot.bbk {
+    if let Some(bbk) = slot.bbk.as_ref() {
         logical_channels.push(bbk.logical_channel);
-        (blocks_concat).extend_from_slice(&bbk.mac_block.into_bytes());
+        (blocks_concat).extend_from_slice(&bbk.mac_block.clone().into_bytes());
     }
-    if let Some(blk2) = slot.blk2 {
+    if let Some(blk2) = slot.blk2.as_ref() {
         logical_channels.push(blk2.logical_channel);
-        (blocks_concat).extend_from_slice(&blk2.mac_block.into_bytes());
+        (blocks_concat).extend_from_slice(&blk2.mac_block.clone().into_bytes());
     }
 
     // Build the TXREG value for this message
@@ -139,7 +138,7 @@ pub fn make_unitdata_request(slot: TmvUnitdataReqSlot) -> Vec<u8> {
 
 /// Build a Wireshark TETRA dissector message for a TMV-UNITDATA Indication
 /// While the dissector does support multiplexed channels, we'll only ever send one at once.
-pub fn make_unitdata_indication(indication: TmvUnitdataInd, time: TdmaTime) -> Vec<u8> {
+pub fn make_unitdata_indication(indication: &TmvUnitdataInd, time: TdmaTime) -> Vec<u8> {
 
     let mut header = Vec::new();
 
@@ -147,7 +146,7 @@ pub fn make_unitdata_indication(indication: TmvUnitdataInd, time: TdmaTime) -> V
     header.push(WiresharkTetraType::UnitDataIndication as u8);
 
     // Carrier is always 0, since we only support one for now
-    header.push(0);
+    // header.push(0);
 
     // Packed timer
     header.extend_from_slice(&pack_time(time));
@@ -155,7 +154,7 @@ pub fn make_unitdata_indication(indication: TmvUnitdataInd, time: TdmaTime) -> V
     // Length of PDU bytes
     let block_buf_clone = indication.pdu.clone();
     let block_bytes = block_buf_clone.into_bytes();
-    header.extend(block_bytes.len().to_le_bytes());
+    header.extend((block_bytes.len() as u32).to_le_bytes());
 
     // Build RXREG
     let rxreg = build_rxreg(&vec![indication.logical_channel], &[indication.crc_pass]);
@@ -165,24 +164,57 @@ pub fn make_unitdata_indication(indication: TmvUnitdataInd, time: TdmaTime) -> V
     [header, block_bytes].concat()
 }
 
-pub struct WiresharkSender {
+pub struct PacketCaptureClient {
+
+    /// UDP socket used to send messages to Wireshark
     socket: UdpSocket,
+
+    /// The destination host for the UDP messages, which Wireshark should be listening on
+    host: String,
+
+    /// The destination port for the UDP messages, which Wireshark should be listening on
+    port: u16,
 }
 
-impl WiresharkSender {
+impl PacketCaptureClient {
 
-    pub fn new() -> std::io::Result<Self> {
-        let socket = UdpSocket::bind("127.0.0.1:0")?;
-        Ok(Self { socket })
+    pub fn new(config: &CfgPacketCapture) -> std::io::Result<Self> {
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        Ok(Self {
+            socket,
+            host: config.host.clone(),
+            port: config.port,
+        })
     }
 
-}
+    /// Send a TMV-UNITDATA Request message to Wireshark
+    pub fn capture_tmv_unitdata_req(&self, slot: &TmvUnitdataReqSlot) -> std::io::Result<()> {
+        let data = make_unitdata_request(slot);
+        self.socket.send_to(&data, (self.host.as_ref(), self.port))?;
+        Ok(())
+    }
 
+    /// Send a TMV-UNITDATA Indication message to Wireshark
+    pub fn capture_tmv_unitdata_ind(&self, indication: &TmvUnitdataInd, time: TdmaTime) -> std::io::Result<()> {
+        let data = make_unitdata_indication(indication, time);
+        self.socket.send_to(&data, (self.host.as_ref(), self.port))?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use tetra_core::BitBuffer;
+    use tetra_core::{BitBuffer, PhysicalChannel};
+    use tetra_saps::tmv::TmvUnitdataReq;
     use super::*;
+
+    #[test]
+    fn test_time_packs_correctly() {
+        let time = TdmaTime { t: 1, f: 1, m: 1, h: 1 };
+        let packed = pack_time(time);
+        let bitbuffer = BitBuffer::from_bytes(&packed);
+        println!("{:?}", bitbuffer);
+    }
 
     #[test]
     fn test_txreg_builds_correctly() {
@@ -211,7 +243,22 @@ mod tests {
         println!("{:?}", bitbuffer);
     }
 
+    #[test]
+    fn test_tmv_unitdata_request_header() {
 
+        let foo = make_unitdata_request(&TmvUnitdataReqSlot {
+            ts: TdmaTime { t: 1, f: 2, m: 3, h: 0 },
+            ul_phy_chan: PhysicalChannel::Cp,
+            blk1: Some(TmvUnitdataReq {
+                mac_block: BitBuffer::new(0),
+                logical_channel: LogicalChannel::SchF,
+                scrambling_code: 0,
+            }),
+            bbk: None,
+            blk2: None
+        });
 
-
+        let bitbuffer = BitBuffer::from_bytes(&foo);
+        println!("{:?}", bitbuffer);
+    }
 }

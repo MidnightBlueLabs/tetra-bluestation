@@ -35,7 +35,7 @@ use crate::lmac::components::scrambler;
 use crate::umac::subcomp::bs_sched::{BsChannelScheduler, PrecomputedUmacPdus, TCH_S_CAP};
 use crate::umac::subcomp::fillbits;
 use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
-
+use crate::umac::packet_capture::PacketCaptureClient;
 use super::subcomp::bs_defrag::BsDefrag;
 
 pub struct UmacBs {
@@ -47,6 +47,9 @@ pub struct UmacBs {
     /// This MAC's endpoint ID, for addressing by the higher layers
     /// When using only a single base radio, we can set this to a fixed value
     endpoint_id: u32,
+
+    /// Packet capture client
+    packet_capture_client: Option<PacketCaptureClient>,
 
     /// Subcomponents
     defrag: BsDefrag,
@@ -76,6 +79,10 @@ impl UmacBs {
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
         let system_wide_services = Self::get_system_wide_services_state(&config);
         let precomps = Self::generate_precomps(&config);
+        if let Some(packet_capture) = &c.packet_capture {
+            tracing::info!("UmacBs: Packet capture enabled - host {} port {}", packet_capture.host, packet_capture.port);
+        }
+
         Self {
             self_component: TetraEntity::Umac,
             config,
@@ -87,6 +94,11 @@ impl UmacBs {
             // event_label_store: EventLabelStore::new(),
             channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps),
             last_ul_voice: [None; 4],
+            packet_capture_client: if c.packet_capture.is_some() {
+                Some(PacketCaptureClient::new(c.packet_capture.as_ref().unwrap()).expect("Failed to initialize packet capture client"))
+            } else {
+                None
+            }
         }
     }
 
@@ -274,10 +286,16 @@ impl UmacBs {
     }
 
     pub fn rx_tmv_unitdata_ind(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
+
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
         tracing::trace!("rx_tmv_unitdata_ind: {:?}", prim.logical_channel);
+
+        // Capture packet
+        if let Some(packet_capture_client) = &self.packet_capture_client {
+            packet_capture_client.capture_tmv_unitdata_ind(prim, message.dltime).expect("Failed to capture packet");
+        }
 
         match prim.logical_channel {
             LogicalChannel::SchF => {
@@ -343,9 +361,6 @@ impl UmacBs {
             };
             let orig_start = prim.pdu.get_raw_start();
             let lchan = prim.logical_channel;
-
-            // Clone the bitbuffer
-            let pdu_clone = prim.pdu.clone();
 
             // Clause 21.4.1; handling differs between SCH_HU and others
             match lchan {
@@ -1585,6 +1600,12 @@ impl TetraEntityTrait for UmacBs {
         // Collect/construct traffic that should be sent down to the LMAC
         // This is basically the _previous_ timeslot
         let elem = self.channel_scheduler.finalize_ts_for_tick();
+
+        // Capture packet
+        if let Some(packet_capture_client) = &self.packet_capture_client {
+            packet_capture_client.capture_tmv_unitdata_req(&elem).expect("Failed to send packet capture");
+        }
+
         let s = SapMsg {
             sap: Sap::TmvSap,
             src: self.self_component,
