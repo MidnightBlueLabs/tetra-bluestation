@@ -63,16 +63,21 @@ impl SdsBsSubentity {
         let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
         let source_ssi = calling_party.ssi;
 
-        tracing::info!(
-            "SDS: U-SDS-DATA from ISSI {} to ISSI {}, type={}",
-            source_ssi,
-            dest_ssi,
-            pdu.user_defined_data.type_identifier()
-        );
-
         // Route: local delivery (ISSI or GSSI), Brew forward, or drop
         let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
         let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);
+        let is_brew_routable = net_brew::is_active(&self.config) && (
+            net_brew::is_brew_issi_routable(&self.config, dest_ssi) ||
+            net_brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi)
+        );
+
+        tracing::info!(
+            "SDS: U-SDS-DATA from ISSI {} to {} {}, type={}",
+            source_ssi,
+            if is_local_group { "GSSI" } else if is_local_issi { "ISSI" } else if is_brew_routable { "Brew-routable ISSI" } else { "Unknown SSI" },
+            dest_ssi,
+            pdu.user_defined_data.type_identifier()
+        );
 
         if is_local_issi {
             tracing::info!("SDS: local delivery: {} -> {}", source_ssi, dest_ssi);
@@ -80,9 +85,7 @@ impl SdsBsSubentity {
         } else if is_local_group {
             tracing::info!("SDS: group delivery: {} -> GSSI {}", source_ssi, dest_ssi);
             self.send_d_sds_data(queue, message.dltime, source_ssi, dest_ssi, SsiType::Gssi, pdu.user_defined_data);
-        } else if net_brew::feature_sds_enabled(&self.config)
-            && (net_brew::is_brew_issi_routable(&self.config, dest_ssi) || net_brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
-        {
+        } else if is_brew_routable {
             tracing::info!("SDS: forwarding to Brew: {} -> {}", source_ssi, dest_ssi);
             queue.push_back(SapMsg {
                 sap: Sap::Control,
@@ -100,10 +103,6 @@ impl SdsBsSubentity {
             return;
         }
 
-        // The U-STATUS has been forwarded (as far as we know), so confirm receipt with a D-STATUS
-        // TODO For individual destinations, we could use the L2 ACK as confirmation and only send this D-STATUS on confirmed success
-        // TODO For group destinations, there is no L2 ACK, so we'd just have to send this anyway.
-        self.send_d_status(queue, message.dltime, SWMI_SSI_ADDRESS, source_ssi, D_STATUS_PRE_CODED_GENERAL_STATUS_ACKNOWLEDGEMENT);
     }
 
     /// Handle incoming SDS data from Brew entity (network-originated SDS)
@@ -150,17 +149,20 @@ impl SdsBsSubentity {
             panic!("Expected SendSds command");
         };
 
+        let dest_type_name = dest_is_group.then(|| "GSSI").unwrap_or("ISSI");
+
         tracing::info!(
             "SDS: received from Control {}: {} -> {}, type={}, {} bits",
             handle,
             source_ssi,
             dest_ssi,
-            dest_is_group.then(|| "GSSI").unwrap_or("ISSI"),
+            dest_type_name,
             len_bits
         );
 
         if !self.config.state_read().subscribers.is_registered(dest_ssi) {
-            tracing::warn!("SDS: dest ISSI {} from Control is not locally registered, dropping", dest_ssi);
+            tracing::warn!(
+                "SDS: dest {} {} from Control is not locally registered, dropping", dest_type_name,  dest_ssi);
             return false;
         }
 
@@ -206,20 +208,30 @@ impl SdsBsSubentity {
         let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
         let source_ssi = calling_party.ssi;
 
+        // Route: local delivery (ISSI or GSSI), Brew forward, or drop
+        let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
+        let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);
+        let is_brew_routable = net_brew::is_active(&self.config) && (
+            net_brew::is_brew_issi_routable(&self.config, dest_ssi) ||
+            net_brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi)
+        );
+
         tracing::info!(
-            "SDS: U-STATUS from ISSI {} to ISSI {}, status={}",
+            "SDS: U-STATUS from ISSI {} to {} {}, status={}",
             source_ssi,
+            if is_local_group { "GSSI" } else if is_local_issi { "ISSI" } else if is_brew_routable { "Brew-routable ISSI" } else { "Unknown SSI" },
             dest_ssi,
             pdu.pre_coded_status
         );
 
         // Route: local delivery, Brew forward, or drop
-        if self.config.state_read().subscribers.is_registered(dest_ssi) {
+        if is_local_issi {
             tracing::info!("SDS-STATUS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_status(queue, message.dltime, source_ssi, dest_ssi, pdu.pre_coded_status);
-        } else if net_brew::is_active(&self.config)
-            && (net_brew::is_brew_issi_routable(&self.config, dest_ssi) || net_brew::is_tetrapack_sds_service_issi(&self.config, dest_ssi))
-        {
+        } else if is_local_group {
+            tracing::info!("SDS-STATUS: group delivery: {} -> GSSI {}", source_ssi, dest_ssi);
+            self.send_d_status(queue, message.dltime, source_ssi, dest_ssi, pdu.pre_coded_status);
+        } else if is_brew_routable {
             // Brew forwarding only: when the pre-coded status carries an SDS-TL short report
             // (ETSI 29.4.2.3), convert it to a full SDS-TL REPORT PDU (Type4) so the
             // remote end recognizes it as a delivery confirmation. ETSI 29.3.3.4.4
@@ -259,12 +271,20 @@ impl SdsBsSubentity {
                     user_defined_data,
                 }),
             });
+
         } else {
             tracing::warn!(
-                "SDS-STATUS: dest ISSI {} not locally registered and not Brew-routable, dropping",
+                "SDS-STATUS: dest SSI {} not locally registered and not Brew-routable, dropping",
                 dest_ssi
             );
+            return;
         }
+
+        // The U-STATUS has been forwarded (as far as we know), so confirm receipt with a D-STATUS
+        // TODO For individual destinations, we could use the L2 ACK as confirmation and only send this D-STATUS on confirmed success
+        // TODO For group destinations, there is no L2 ACK, so we'd just have to send this anyway.
+        tracing::info!("SDS: sending general status acknowledgement to {}", source_ssi);
+        self.send_d_status(queue, message.dltime, SWMI_SSI_ADDRESS, source_ssi, D_STATUS_PRE_CODED_GENERAL_STATUS_ACKNOWLEDGEMENT);
     }
 
     /// Build and send a D-STATUS PDU to a local MS
