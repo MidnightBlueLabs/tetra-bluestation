@@ -9,6 +9,7 @@ use tetra_saps::lcmc::LcmcMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
+use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus::NetworkUserSpecific;
 use tetra_pdus::cmce::pdus::d_sds_data::DSdsData;
 use tetra_pdus::cmce::pdus::d_status::DStatus;
 use tetra_pdus::cmce::pdus::u_sds_data::USdsData;
@@ -17,6 +18,11 @@ use tetra_pdus::cmce::pdus::u_status::UStatus;
 use crate::MessageQueue;
 use crate::net_brew;
 use crate::net_control::ControlCommand;
+
+/// Defined as part of the TETRA Interoperability Profile (TIP)
+/// https://tcca.info/documents/TTR001-01_v700_Core.pdf
+const SWMI_SSI_ADDRESS: u32 = 0xFFFFFD;
+const D_STATUS_PRE_CODED_GENERAL_STATUS_ACKNOWLEDGEMENT: PreCodedStatus = NetworkUserSpecific(0xFE00);
 
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
@@ -91,7 +97,13 @@ impl SdsBsSubentity {
             });
         } else {
             tracing::warn!("SDS: dest SSI {} not local and not Brew-routable, dropping", dest_ssi);
+            return;
         }
+
+        // The U-STATUS has been forwarded (as far as we know), so confirm receipt with a D-STATUS
+        // TODO For individual destinations, we could use the L2 ACK as confirmation and only send this D-STATUS on confirmed success
+        // TODO For group destinations, there is no L2 ACK, so we'd just have to send this anyway.
+        self.send_d_status(queue, message.dltime, SWMI_SSI_ADDRESS, source_ssi, D_STATUS_PRE_CODED_GENERAL_STATUS_ACKNOWLEDGEMENT);
     }
 
     /// Handle incoming SDS data from Brew entity (network-originated SDS)
@@ -192,7 +204,6 @@ impl SdsBsSubentity {
 
         // Extract destination SSI (guaranteed present after feature check)
         let dest_ssi = pdu.called_party_ssi.unwrap() as u32;
-
         let source_ssi = calling_party.ssi;
 
         tracing::info!(
