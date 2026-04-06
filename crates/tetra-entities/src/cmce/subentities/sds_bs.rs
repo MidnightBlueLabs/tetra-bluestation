@@ -23,6 +23,7 @@ use crate::net_control::ControlCommand;
 /// https://tcca.info/documents/TTR001-01_v700_Core.pdf
 const SWMI_SSI_ADDRESS: u32 = 0xFFFFFD;
 const D_STATUS_PRE_CODED_GENERAL_STATUS_ACKNOWLEDGEMENT: PreCodedStatus = NetworkUserSpecific(0xFE00);
+const D_STATUS_PRE_CODED_GENERAL_STATUS_NEGATIVE_ACKNOWLEDGEMENT: PreCodedStatus = NetworkUserSpecific(0xFE01);
 
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
@@ -273,10 +274,15 @@ impl SdsBsSubentity {
             });
 
         } else {
+
             tracing::warn!(
                 "SDS-STATUS: dest SSI {} not locally registered and not Brew-routable, dropping",
                 dest_ssi
             );
+
+            tracing::info!("SDS: sending general status negative acknowledgement to {}", source_ssi);
+            self.send_d_status(queue, message.dltime, SWMI_SSI_ADDRESS, source_ssi, D_STATUS_PRE_CODED_GENERAL_STATUS_NEGATIVE_ACKNOWLEDGEMENT);
+
             return;
         }
 
