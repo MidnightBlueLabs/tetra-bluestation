@@ -113,6 +113,21 @@ local MM_PDU_NAMES = {
     [15] = "MM FUNCTION NOT SUPPORTED",
 }
 
+local MM_PDU_NAMES_UL = {
+    [0] = "U-AUTHENTICATION",
+    [1] = "U-ITSI DETACH",
+    [2] = "U-LOCATION UPDATE DEMAND",
+    [3] = "U-MM STATUS",
+    [4] = "U-CK CHANGE RESULT",
+    [5] = "U-OTAR",
+    [6] = "U-INFORMATION PROVIDE",
+    [7] = "U-ATTACH/DETACH GROUP IDENTITY",
+    [8] = "U-ATTACH/DETACH GROUP IDENTITY ACK",
+    [9] = "U-TEI PROVIDE",
+    [11] = "U-DISABLE STATUS",
+    [15] = "MM FUNCTION NOT SUPPORTED",
+}
+
 local CMCE_PDU_NAMES = {
     [0] = "D-ALERT",
     [1] = "D-CALL PROCEEDING",
@@ -131,6 +146,22 @@ local CMCE_PDU_NAMES = {
     [14] = "D-CALL RESTORE",
     [15] = "D-SDS-DATA",
     [16] = "D-FACILITY",
+    [31] = "CMCE FUNCTION NOT SUPPORTED",
+}
+
+local CMCE_PDU_NAMES_UL = {
+    [0] = "U-ALERT",
+    [2] = "U-CONNECT",
+    [4] = "U-DISCONNECT",
+    [5] = "U-INFO",
+    [6] = "U-RELEASE",
+    [7] = "U-SETUP",
+    [8] = "U-STATUS",
+    [9] = "U-TX CEASED",
+    [10] = "U-TX DEMAND",
+    [14] = "U-CALL RESTORE",
+    [15] = "U-SDS-DATA",
+    [16] = "U-FACILITY",
     [31] = "CMCE FUNCTION NOT SUPPORTED",
 }
 
@@ -276,6 +307,25 @@ local STATUS_DOWNLINK_NAMES = {
     [22] = "CommandToRemoveDmMsAddresses",
     [23] = "CommandToChangeRegistrationLabel",
     [24] = "CommandToStopDmGatewayOperation",
+}
+
+local STATUS_UPLINK_NAMES = {
+    [1] = "ChangeOfEnergySavingModeRequest",
+    [2] = "ChangeOfEnergySavingModeResponse",
+    [3] = "DualWatchModeRequest",
+    [4] = "TerminatingDualWatchModeRequest",
+    [5] = "ChangeOfDualWatchModeResponse",
+    [6] = "StartOfDirectModeOperation",
+    [7] = "MsFrequencyBandsInformation",
+    [16] = "RequestToStartDmGatewayOperation",
+    [17] = "RequestToContinuedmGatewayOperation",
+    [18] = "RequestToStopDmGatewayOperation",
+    [19] = "RequestToAddDmMsAddresses",
+    [20] = "RequestToRemoveDmMsAddresses",
+    [21] = "RequestToReplaceDmMsAddresses",
+    [22] = "AcceptanceToRemovalOfDmMsAddresses",
+    [23] = "AcceptanceToChangeRegistrationLabel",
+    [24] = "AcceptanceToStopDmGatewayOperation",
 }
 
 local CIRCUIT_MODE_NAMES = {
@@ -1097,6 +1147,37 @@ local function parse_mle_mm_downlink(bits, tree, range)
     end
 end
 
+local function parse_mle_mm_uplink(bits, tree, range)
+    local cur = new_cursor(bits)
+    local pdu_type = cursor_read_uint(cur, 4)
+    if pdu_type == nil then
+        add_text(tree, range, "MM PDU: truncated")
+        return
+    end
+
+    local mm_tree = tree:add(range, "MM: " .. lookup(MM_PDU_NAMES_UL, pdu_type, "Unknown"))
+    add_named_value(mm_tree, range, "PDU type", pdu_type, MM_PDU_NAMES_UL, 4)
+
+    if pdu_type == 3 then
+        local status_uplink = cursor_read_uint(cur, 6)
+        if status_uplink == nil then
+            add_text(mm_tree, range, "U-MM STATUS: truncated")
+            return
+        end
+        if STATUS_UPLINK_NAMES[status_uplink] ~= nil then
+            add_named_value(mm_tree, range, "Status uplink", status_uplink, STATUS_UPLINK_NAMES, 6)
+        else
+            add_text(mm_tree, range, "Status uplink: " .. format_uint_with_hex(status_uplink, 6))
+        end
+        if cursor_remaining(cur) > 0 then
+            local tail = cursor_read_bits(cur, cursor_remaining(cur))
+            add_text(mm_tree, range, string.format("U-MM STATUS dependent information (%u bits): %s", #tail, preview_bits(tail, 160)))
+        end
+    else
+        parse_type34_tail_only(cur, mm_tree, range, "MM payload")
+    end
+end
+
 local function parse_cmce_setup_optional_calling_party(cur, tree, range)
     local pbit = cursor_read_uint(cur, 1)
     if pbit == nil then
@@ -1419,6 +1500,84 @@ local function parse_mle_cmce_downlink(bits, tree, range)
     end
 end
 
+local function parse_mle_cmce_uplink(bits, tree, range)
+    local cur = new_cursor(bits)
+    local pdu_type = cursor_read_uint(cur, 5)
+    if pdu_type == nil then
+        add_text(tree, range, "CMCE PDU: truncated")
+        return
+    end
+
+    local cmce_tree = tree:add(range, "CMCE: " .. lookup(CMCE_PDU_NAMES_UL, pdu_type, "Unknown"))
+    add_named_value(cmce_tree, range, "PDU type", pdu_type, CMCE_PDU_NAMES_UL, 5)
+
+    if pdu_type == 8 then
+        parse_cmce_party_address(cur, cmce_tree, range, "Calling party type identifier")
+        local pre_coded_status = cursor_read_uint(cur, 16)
+        if pre_coded_status == nil then
+            add_text(cmce_tree, range, "Pre-coded status: truncated")
+            return
+        end
+        add_text(cmce_tree, range, "Pre-coded status: " .. describe_pre_coded_status(pre_coded_status) .. " [" .. format_uint_with_hex(pre_coded_status, 16) .. "]")
+        if cursor_remaining(cur) > 0 then
+            local tail = cursor_read_bits(cur, cursor_remaining(cur))
+            add_text(cmce_tree, range, string.format("U-STATUS trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+        end
+    elseif pdu_type == 15 then
+        parse_cmce_party_address(cur, cmce_tree, range, "Calling party type identifier")
+        local short_data_type = cursor_read_uint(cur, 2)
+        if short_data_type == nil then
+            add_text(cmce_tree, range, "Short data type identifier: truncated")
+            return
+        end
+        add_named_value(cmce_tree, range, "Short data type identifier", short_data_type, SHORT_DATA_TYPE_NAMES, 2)
+
+        local sds_tree = cmce_tree:add(range, "SDS user data")
+        if short_data_type == 0 then
+            local payload = cursor_read_bits(cur, 16)
+            if payload == nil then
+                add_text(sds_tree, range, "User defined data-1: truncated")
+                return
+            end
+            parse_sds_payload(payload, sds_tree, range)
+        elseif short_data_type == 1 then
+            local payload = cursor_read_bits(cur, 32)
+            if payload == nil then
+                add_text(sds_tree, range, "User defined data-2: truncated")
+                return
+            end
+            parse_sds_payload(payload, sds_tree, range)
+        elseif short_data_type == 2 then
+            local payload = cursor_read_bits(cur, 64)
+            if payload == nil then
+                add_text(sds_tree, range, "User defined data-3: truncated")
+                return
+            end
+            parse_sds_payload(payload, sds_tree, range)
+        else
+            local length_indicator = cursor_read_uint(cur, 11)
+            if length_indicator == nil then
+                add_text(sds_tree, range, "Length indicator: truncated")
+                return
+            end
+            add_text(sds_tree, range, "Length indicator: " .. length_indicator .. " bits")
+            local payload = cursor_read_bits(cur, length_indicator)
+            if payload == nil then
+                add_text(sds_tree, range, "User defined data-4: truncated")
+                return
+            end
+            parse_sds_payload(payload, sds_tree, range)
+        end
+
+        if cursor_remaining(cur) > 0 then
+            local tail = cursor_read_bits(cur, cursor_remaining(cur))
+            add_text(cmce_tree, range, string.format("U-SDS-DATA trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+        end
+    else
+        parse_type34_tail_only(cur, cmce_tree, range, "CMCE payload")
+    end
+end
+
 local function parse_tl_sdu(bits, tree, range, direction)
     if bits == nil or bits == "" then
         add_text(tree, range, "TL-SDU: <empty>")
@@ -1436,17 +1595,22 @@ local function parse_tl_sdu(bits, tree, range, direction)
     add_named_value(tl_tree, range, "MLE protocol discriminator", protocol, MLE_PROTOCOL_NAMES, 3)
 
     local payload_bits = cursor_read_bits(cur, cursor_remaining(cur)) or ""
-    if direction ~= 0 then
-        add_text(tl_tree, range, string.format("Uplink %s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
-        return
-    end
-
-    if protocol == 1 then
-        parse_mle_mm_downlink(payload_bits, tl_tree, range)
-    elseif protocol == 2 then
-        parse_mle_cmce_downlink(payload_bits, tl_tree, range)
+    if direction == 0 then
+        if protocol == 1 then
+            parse_mle_mm_downlink(payload_bits, tl_tree, range)
+        elseif protocol == 2 then
+            parse_mle_cmce_downlink(payload_bits, tl_tree, range)
+        else
+            add_text(tl_tree, range, string.format("%s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
+        end
     else
-        add_text(tl_tree, range, string.format("%s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
+        if protocol == 1 then
+            parse_mle_mm_uplink(payload_bits, tl_tree, range)
+        elseif protocol == 2 then
+            parse_mle_cmce_uplink(payload_bits, tl_tree, range)
+        else
+            add_text(tl_tree, range, string.format("Uplink %s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
+        end
     end
 end
 
@@ -1979,14 +2143,79 @@ local function parse_mac_u_signal(bits, tree, range)
     ))
 end
 
+local function parse_mac_access(bits, tree, range)
+    local fill_bits = bits_to_uint(bits, 1, 1)
+    local encrypted = bits_to_uint(bits, 2, 1)
+    local addr_type = bits_to_uint(bits, 3, 2)
+    if fill_bits == nil or encrypted == nil or addr_type == nil then
+        add_text(tree, range, "MAC-ACCESS truncated")
+        return
+    end
+
+    local ma_tree = tree:add(range, "MAC-ACCESS")
+    add_text(ma_tree, range, string.format("fill_bits=%s encrypted=%s addr_type=%u",
+        fill_bits == 1 and "true" or "false",
+        encrypted == 1 and "true" or "false",
+        addr_type
+    ))
+
+    local pos = 5
+    if addr_type == 0 or addr_type == 2 or addr_type == 3 then
+        local addr = bits_to_uint(bits, pos, 24)
+        add_text(ma_tree, range, string.format("Address: %u", addr or 0))
+        pos = pos + 24
+    elseif addr_type == 1 then
+        local event_label = bits_to_uint(bits, pos, 10)
+        add_text(ma_tree, range, string.format("Event label: %u", event_label or 0))
+        pos = pos + 10
+    end
+
+    local optional_field_flag = bits_to_uint(bits, pos, 1)
+    if optional_field_flag == nil then
+        add_text(ma_tree, range, "Optional field flag: truncated")
+        return
+    end
+    pos = pos + 1
+
+    if optional_field_flag == 0 then
+        add_text(ma_tree, range, "Optional field flag: false")
+        return
+    end
+
+    add_text(ma_tree, range, "Optional field flag: true")
+    local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if length_ind_or_cap_req == nil then
+        add_text(ma_tree, range, "Length indication/capacity request flag: truncated")
+        return
+    end
+
+    if length_ind_or_cap_req == 0 then
+        local length_ind = bits_to_uint(bits, pos, 5)
+        add_text(ma_tree, range, string.format("Length indication: %u", length_ind or 0))
+    else
+        local frag_flag = bits_to_uint(bits, pos, 1)
+        local reservation_req = bits_to_uint(bits, pos + 1, 4)
+        add_text(ma_tree, range, string.format("Fragmentation: frag_flag=%s reservation_requirement=%s",
+            frag_flag == 1 and "true" or "false",
+            lookup(RES_REQ_NAMES, reservation_req, tostring(reservation_req))
+        ))
+    end
+end
+
 local function parse_generic_mac(bits, tree, range, direction, logical_channel)
     if #bits < 2 then
         add_text(tree, range, "MAC block truncated")
         return
     end
 
-    if logical_channel == 7 and #bits >= 1 and bits_to_uint(bits, 0, 1) == 1 then
-        parse_mac_end_or_frag(bits, tree, range, direction, logical_channel)
+    if logical_channel == 7 then
+        local sch_hu_type = bits_to_uint(bits, 0, 1)
+        if sch_hu_type == 0 then
+            parse_mac_access(bits, tree, range)
+        else
+            parse_mac_end_or_frag(bits, tree, range, direction, logical_channel)
+        end
         return
     end
 
@@ -2035,19 +2264,21 @@ local function summarize_mle_payload(bits, direction)
     local payload_bits = bits_slice(bits, 3, #bits - 3) or ""
     local protocol_name = lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown")
 
-    if direction ~= 0 then
-        return protocol_name
-    end
-
     if protocol == 1 then
         local pdu_type = bits_to_uint(payload_bits, 0, 4)
         if pdu_type ~= nil then
-            return lookup(MM_PDU_NAMES, pdu_type, protocol_name)
+            if direction == 0 then
+                return lookup(MM_PDU_NAMES, pdu_type, protocol_name)
+            end
+            return lookup(MM_PDU_NAMES_UL, pdu_type, protocol_name)
         end
     elseif protocol == 2 then
         local pdu_type = bits_to_uint(payload_bits, 0, 5)
         if pdu_type ~= nil then
-            return lookup(CMCE_PDU_NAMES, pdu_type, protocol_name)
+            if direction == 0 then
+                return lookup(CMCE_PDU_NAMES, pdu_type, protocol_name)
+            end
+            return lookup(CMCE_PDU_NAMES_UL, pdu_type, protocol_name)
         end
     end
 
@@ -2165,6 +2396,62 @@ local function summarize_mac_resource(bits, direction)
     return "MAC-RESOURCE"
 end
 
+local function summarize_mac_access(bits, direction)
+    local encrypted = bits_to_uint(bits, 2, 1)
+    local addr_type = bits_to_uint(bits, 3, 2)
+    if encrypted == nil or addr_type == nil then
+        return "MAC-ACCESS"
+    end
+
+    local pos = 5
+    if addr_type == 0 or addr_type == 2 or addr_type == 3 then
+        pos = pos + 24
+    elseif addr_type == 1 then
+        pos = pos + 10
+    end
+
+    local optional_field_flag = bits_to_uint(bits, pos, 1)
+    if optional_field_flag == nil or optional_field_flag == 0 then
+        return "MAC-ACCESS"
+    end
+    pos = pos + 1
+
+    local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if length_ind_or_cap_req == nil then
+        return "MAC-ACCESS"
+    end
+
+    if length_ind_or_cap_req == 1 then
+        local reservation_req = bits_to_uint(bits, pos + 1, 4)
+        if reservation_req ~= nil then
+            return "MAC-ACCESS / " .. lookup(RES_REQ_NAMES, reservation_req, "CapacityRequest")
+        end
+        return "MAC-ACCESS / CapacityRequest"
+    end
+
+    local length_ind = bits_to_uint(bits, pos, 5)
+    if length_ind == nil then
+        return "MAC-ACCESS"
+    elseif length_ind == 0 then
+        return "MAC-ACCESS / Null"
+    elseif length_ind == 31 then
+        return "MAC-ACCESS / FragmentStart"
+    end
+
+    if encrypted == 1 then
+        return "MAC-ACCESS / Encrypted"
+    end
+
+    local tm_sdu = bits_slice(bits, pos + 5, #bits - (pos + 5))
+    local inner = summarize_llc(tm_sdu, direction)
+    if inner ~= nil and inner ~= "" then
+        return "MAC-ACCESS / " .. inner
+    end
+
+    return "MAC-ACCESS"
+end
+
 local function summarize_mac_data(bits, direction)
     local encrypted = bits_to_uint(bits, 3, 1)
     local addr_type = bits_to_uint(bits, 4, 2)
@@ -2204,7 +2491,11 @@ local function summarize_mac(bits, direction, logical_channel)
         return nil
     end
 
-    if logical_channel == 7 and #bits >= 1 and bits_to_uint(bits, 0, 1) == 1 then
+    if logical_channel == 7 then
+        local sch_hu_type = bits_to_uint(bits, 0, 1)
+        if sch_hu_type == 0 then
+            return summarize_mac_access(bits, direction)
+        end
         return "MAC-END-HU"
     end
 
