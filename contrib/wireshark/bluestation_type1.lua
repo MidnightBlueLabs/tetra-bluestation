@@ -454,6 +454,8 @@ f.scrambling_code = ProtoField.uint32("bluestation.type1.scrambling_code", "Scra
 f.bit_length = ProtoField.uint16("bluestation.type1.bit_length", "Bit Length", base.DEC)
 f.bits = ProtoField.string("bluestation.type1.bits", "Type-1 Bits")
 
+local pending_sch_hu_fragments = {}
+
 local function lookup(tbl, value, fallback)
     if tbl[value] ~= nil then
         return tbl[value]
@@ -2134,6 +2136,44 @@ local function extract_mac_payload(bits, payload_pos, pdu_len_bits, has_fill_bit
     return bits_slice(bits, payload_pos, payload_end - payload_pos)
 end
 
+local function sch_hu_fragment_key(ctx)
+    if ctx == nil or ctx.direction ~= 1 or ctx.logical_channel ~= 7 or ctx.timeslot == nil then
+        return nil
+    end
+    return tostring(ctx.timeslot)
+end
+
+local function remember_sch_hu_fragment(ctx, fragment_bits, addr_text)
+    local key = sch_hu_fragment_key(ctx)
+    if key == nil or fragment_bits == nil or fragment_bits == "" then
+        return
+    end
+    pending_sch_hu_fragments[key] = {
+        bits = fragment_bits,
+        addr = addr_text,
+        packet_number = ctx.packet_number or 0,
+    }
+end
+
+local function get_sch_hu_fragment(ctx)
+    local key = sch_hu_fragment_key(ctx)
+    if key == nil then
+        return nil
+    end
+    local pending = pending_sch_hu_fragments[key]
+    if pending == nil then
+        return nil
+    end
+    local current_packet = ctx.packet_number or 0
+    if pending.packet_number ~= nil and current_packet > 0 then
+        local delta = current_packet - pending.packet_number
+        if delta <= 0 or delta > 32 then
+            return nil
+        end
+    end
+    return pending
+end
+
 local function parse_mac_resource(bits, tree, range, direction)
     local fill_bits = bits_to_uint(bits, 2, 1)
     local pos_of_grant = bits_to_uint(bits, 3, 1)
@@ -2271,7 +2311,7 @@ local function parse_mac_data(bits, tree, range, direction)
     end
 end
 
-local function parse_mac_end_or_frag(bits, tree, range, direction, logical_channel)
+local function parse_mac_end_or_frag(bits, tree, range, direction, logical_channel, ctx)
     if logical_channel == 7 then
         local mac_pdu_type = bits_to_uint(bits, 0, 1)
         if mac_pdu_type == 1 then
@@ -2283,6 +2323,23 @@ local function parse_mac_end_or_frag(bits, tree, range, direction, logical_chann
                     fill_bits == 1 and "true" or "false",
                     length_ind or 0
                 ))
+                if length_ind ~= nil then
+                    local pdu_len_bits = length_ind * 8
+                    local frag_bits = extract_mac_payload(bits, 7, pdu_len_bits, fill_bits)
+                    if frag_bits ~= nil and frag_bits ~= "" then
+                        local pending = get_sch_hu_fragment(ctx)
+                        if pending ~= nil and pending.bits ~= nil then
+                            local combined = pending.bits .. frag_bits
+                            local label = "Reassembled TM-SDU"
+                            if pending.addr ~= nil then
+                                label = label .. " (addr " .. pending.addr .. ")"
+                            end
+                            parse_tm_sdu(combined, tree, range, direction, label)
+                        else
+                            parse_tm_sdu(frag_bits, tree, range, direction, "TM-SDU")
+                        end
+                    end
+                end
             else
                 local reservation_req = bits_to_uint(bits, 3, 4)
                 add_text(tree, range, string.format("MAC-END-HU: fill_bits=%s reservation_requirement=%s",
@@ -2369,7 +2426,7 @@ local function parse_mac_u_blck(bits, tree, range)
     ))
 end
 
-local function parse_mac_access(bits, tree, range)
+local function parse_mac_access(bits, tree, range, ctx)
     local fill_bits = bits_to_uint(bits, 1, 1)
     local encrypted = bits_to_uint(bits, 2, 1)
     local addr_type = bits_to_uint(bits, 3, 2)
@@ -2386,9 +2443,13 @@ local function parse_mac_access(bits, tree, range)
     ))
 
     local pos = 5
+    local addr_text = nil
     if addr_type == 0 or addr_type == 2 or addr_type == 3 then
         local addr = bits_to_uint(bits, pos, 24)
         add_text(ma_tree, range, string.format("Address: %u", addr or 0))
+        if addr ~= nil then
+            addr_text = tostring(addr)
+        end
         pos = pos + 24
     elseif addr_type == 1 then
         local event_label = bits_to_uint(bits, pos, 10)
@@ -2437,6 +2498,7 @@ local function parse_mac_access(bits, tree, range)
             if frag_flag == 1 then
                 local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
                 if frag_bits ~= nil and frag_bits ~= "" then
+                    remember_sch_hu_fragment(ctx, frag_bits, addr_text)
                     add_text(ma_tree, range, "TM-SDU fragment bits: " .. preview_bits(frag_bits, 160))
                 end
                 return
@@ -2454,7 +2516,7 @@ local function parse_mac_access(bits, tree, range)
     end
 end
 
-local function parse_generic_mac(bits, tree, range, direction, logical_channel)
+local function parse_generic_mac(bits, tree, range, direction, logical_channel, ctx)
     if #bits < 2 then
         add_text(tree, range, "MAC block truncated")
         return
@@ -2463,9 +2525,9 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
     if logical_channel == 7 then
         local sch_hu_type = bits_to_uint(bits, 0, 1)
         if sch_hu_type == 0 then
-            parse_mac_access(bits, tree, range)
+            parse_mac_access(bits, tree, range, ctx)
         else
-            parse_mac_end_or_frag(bits, tree, range, direction, logical_channel)
+            parse_mac_end_or_frag(bits, tree, range, direction, logical_channel, ctx)
         end
         return
     end
@@ -2479,7 +2541,7 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
             parse_mac_data(bits, mac_tree, range, direction)
         end
     elseif mac_pdu_type == 1 then
-        parse_mac_end_or_frag(bits, mac_tree, range, direction, logical_channel)
+        parse_mac_end_or_frag(bits, mac_tree, range, direction, logical_channel, ctx)
     elseif mac_pdu_type == 2 then
         local broadcast_type = bits_to_uint(bits, 2, 2)
         add_text(mac_tree, range, "Broadcast subtype: " .. lookup(BROADCAST_NAMES, broadcast_type, "Unknown"))
@@ -2681,7 +2743,7 @@ local function summarize_mac_resource(bits, direction)
     return "MAC-RESOURCE"
 end
 
-local function summarize_mac_access(bits, direction)
+local function summarize_mac_access(bits, direction, ctx)
     local fill_bits = bits_to_uint(bits, 1, 1)
     local encrypted = bits_to_uint(bits, 2, 1)
     local addr_type = bits_to_uint(bits, 3, 2)
@@ -2733,6 +2795,8 @@ local function summarize_mac_access(bits, direction)
                 prefix = prefix .. " / CapacityRequest"
             end
             if frag_flag == 1 then
+                local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
+                remember_sch_hu_fragment(ctx, frag_bits, nil)
                 return prefix .. " / FragmentStart"
             end
         end
@@ -2749,6 +2813,41 @@ local function summarize_mac_access(bits, direction)
     end
 
     return prefix
+end
+
+local function summarize_mac_end_hu(bits, direction, ctx)
+    local fill_bits = bits_to_uint(bits, 1, 1)
+    local length_ind_or_cap_req = bits_to_uint(bits, 2, 1)
+    if fill_bits == nil or length_ind_or_cap_req == nil then
+        return "MAC-END-HU"
+    end
+    if length_ind_or_cap_req == 1 then
+        local reservation_req = bits_to_uint(bits, 3, 4)
+        if reservation_req ~= nil then
+            return "MAC-END-HU / " .. lookup(RES_REQ_NAMES, reservation_req, "CapacityRequest")
+        end
+        return "MAC-END-HU"
+    end
+
+    local length_ind = bits_to_uint(bits, 3, 4)
+    if length_ind == nil then
+        return "MAC-END-HU"
+    end
+    local frag_bits = extract_mac_payload(bits, 7, length_ind * 8, fill_bits)
+    local pending = get_sch_hu_fragment(ctx)
+    if pending ~= nil and pending.bits ~= nil and frag_bits ~= nil then
+        local inner = summarize_llc(pending.bits .. frag_bits, direction)
+        if inner ~= nil and inner ~= "" then
+            return "MAC-END-HU / " .. inner
+        end
+    end
+    if frag_bits ~= nil and frag_bits ~= "" then
+        local inner = summarize_llc(frag_bits, direction)
+        if inner ~= nil and inner ~= "" then
+            return "MAC-END-HU / " .. inner
+        end
+    end
+    return "MAC-END-HU"
 end
 
 local function summarize_mac_data(bits, direction)
@@ -2785,7 +2884,7 @@ local function summarize_mac_data(bits, direction)
     return "MAC-DATA"
 end
 
-local function summarize_mac(bits, direction, logical_channel)
+local function summarize_mac(bits, direction, logical_channel, ctx)
     if bits == nil or bits == "" then
         return nil
     end
@@ -2793,9 +2892,9 @@ local function summarize_mac(bits, direction, logical_channel)
     if logical_channel == 7 then
         local sch_hu_type = bits_to_uint(bits, 0, 1)
         if sch_hu_type == 0 then
-            return summarize_mac_access(bits, direction)
+            return summarize_mac_access(bits, direction, ctx)
         end
-        return "MAC-END-HU"
+        return summarize_mac_end_hu(bits, direction, ctx)
     end
 
     local mac_pdu_type = bits_to_uint(bits, 0, 2)
@@ -2840,7 +2939,7 @@ local function summarize_mac(bits, direction, logical_channel)
     return lookup(MAC_PDU_NAMES, mac_pdu_type, "MAC")
 end
 
-local function summarize_type1(bits, direction, logical_channel, frame)
+local function summarize_type1(bits, direction, logical_channel, frame, ctx)
     if logical_channel == 1 then
         return frame == 18 and "ACCESS-ASSIGN FR18" or "ACCESS-ASSIGN"
     elseif logical_channel == 2 then
@@ -2848,7 +2947,7 @@ local function summarize_type1(bits, direction, logical_channel, frame)
     elseif logical_channel == 3 then
         return "MAC-SYSINFO / D-MLE-SYSINFO"
     elseif logical_channel == 4 or logical_channel == 5 or logical_channel == 6 or logical_channel == 7 then
-        return summarize_mac(bits, direction, logical_channel)
+        return summarize_mac(bits, direction, logical_channel, ctx)
     elseif logical_channel >= 8 and logical_channel <= 11 then
         return "Traffic payload"
     end
@@ -2856,7 +2955,7 @@ local function summarize_type1(bits, direction, logical_channel, frame)
     return nil
 end
 
-local function decode_type1(bits, tree, range, direction, logical_channel, frame, crc_pass)
+local function decode_type1(bits, tree, range, direction, logical_channel, frame, crc_pass, ctx)
     if crc_pass ~= 1 and logical_channel ~= 1 then
         add_text(tree, range, "Control-block CRC failed in BlueStation; payload decode is unreliable, so no deeper MAC/LLC/MM/CMCE dissection is attempted")
         return
@@ -2869,7 +2968,7 @@ local function decode_type1(bits, tree, range, direction, logical_channel, frame
     elseif logical_channel == 3 then
         parse_bnch(bits, tree, range)
     elseif logical_channel == 4 or logical_channel == 5 or logical_channel == 6 or logical_channel == 7 then
-        parse_generic_mac(bits, tree, range, direction, logical_channel)
+        parse_generic_mac(bits, tree, range, direction, logical_channel, ctx)
     elseif logical_channel >= 8 and logical_channel <= 11 then
         add_text(tree, range, "Traffic channel type-1 bits: voice/data payload not further dissected")
     else
@@ -2900,6 +2999,12 @@ local function dissect_impl(tvb, pinfo, tree)
     local bit_bytes = math.min(bit_length, available_bit_bytes)
     local payload_range = tvb(21, bit_bytes)
     local bits = payload_range:string()
+    local ctx = {
+        direction = direction,
+        logical_channel = logical_channel,
+        timeslot = timeslot,
+        packet_number = pinfo.number,
+    }
 
     pinfo.cols.protocol = "BST1"
     local crc_text
@@ -2916,7 +3021,7 @@ local function dissect_impl(tvb, pinfo, tree)
     )
     local type1_summary = nil
     if crc_pass == 1 or logical_channel == 1 then
-        type1_summary = summarize_type1(bits, direction, logical_channel, frame)
+        type1_summary = summarize_type1(bits, direction, logical_channel, frame, ctx)
     end
     if type1_summary ~= nil and type1_summary ~= "" then
         info = info .. " " .. type1_summary
@@ -2949,7 +3054,7 @@ local function dissect_impl(tvb, pinfo, tree)
         add_text(subtree, payload_range, string.format("Truncated capture payload: expected %u bit characters, got %u", bit_length, bit_bytes))
     end
 
-    decode_type1(bits, subtree, payload_range, direction, logical_channel, frame, crc_pass)
+    decode_type1(bits, subtree, payload_range, direction, logical_channel, frame, crc_pass, ctx)
     return true
 end
 
