@@ -15,6 +15,42 @@ port = 42069
 
 Install in Wireshark by copying `bluestation_type1.lua` into your personal or global plugins directory, then restart Wireshark.
 
+Useful display filters:
+
+```wireshark
+udp.port == 42069
+```
+
+```wireshark
+bluestation.type1.direction == 1
+```
+
+```wireshark
+bluestation.type1.direction == 0
+```
+
+```wireshark
+bluestation.type1.direction == 1 && bluestation.type1.crc_pass == 0
+```
+
+```wireshark
+bluestation.type1.direction == 1 && bluestation.type1.logical_channel == 7
+```
+
+```wireshark
+bluestation.type1.direction == 1 && bluestation.type1.logical_channel == 5
+```
+
+```wireshark
+bluestation.type1.logical_channel != 2 && bluestation.type1.logical_channel != 3
+```
+
+Field values:
+
+- `bluestation.type1.direction`: `0 = Downlink`, `1 = Uplink`
+- `bluestation.type1.crc_pass`: `0 = false`, `1 = true`
+- `bluestation.type1.logical_channel`: `2 = BSCH`, `3 = BNCH`, `5 = SCH/F`, `7 = SCH/HU`, `8 = TCH/S`
+
 Notes:
 
 - The dissector registers heuristically on UDP by checking for the `TBSW` magic header, so it can decode any configured destination port.
