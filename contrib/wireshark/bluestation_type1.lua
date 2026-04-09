@@ -2222,7 +2222,12 @@ local function remember_sch_hu_fragment_in(cache, ctx, fragment_bits, addr_text)
     if key == nil or fragment_bits == nil or fragment_bits == "" then
         return
     end
-    cache[key] = {
+    local queue = cache[key]
+    if queue == nil then
+        queue = {}
+        cache[key] = queue
+    end
+    queue[#queue + 1] = {
         bits = fragment_bits,
         addr = addr_text,
         packet_number = ctx.packet_number or 0,
@@ -2243,22 +2248,36 @@ local function get_sch_hu_fragment_from(cache, ctx)
     if key == nil then
         return nil
     end
-    local pending = cache[key]
-    if pending == nil then
+    local queue = cache[key]
+    if queue == nil or #queue == 0 then
         return nil
     end
     local current_packet = ctx.packet_number or 0
-    if pending.packet_number ~= nil and current_packet > 0 then
-        local delta = current_packet - pending.packet_number
-        if delta <= 0 or delta > 32 then
-            cache[key] = nil
-            return nil
+    local idx = 1
+    while idx <= #queue do
+        local pending = queue[idx]
+        local remove = false
+
+        if pending.packet_number ~= nil and current_packet > 0 then
+            local delta = current_packet - pending.packet_number
+            if delta <= 0 or delta > 32 then
+                remove = true
+            end
+        end
+
+        if not remove and pending.consumed_by ~= nil and pending.consumed_by ~= current_packet then
+            remove = true
+        end
+
+        if remove then
+            table.remove(queue, idx)
+        else
+            return pending
         end
     end
-    if pending.consumed_by ~= nil and pending.consumed_by ~= current_packet then
-        return nil
-    end
-    return pending
+
+    cache[key] = nil
+    return nil
 end
 
 local function get_sch_hu_fragment(ctx)
