@@ -2591,7 +2591,12 @@ local function summarize_type1(bits, direction, logical_channel, frame)
     return nil
 end
 
-local function decode_type1(bits, tree, range, direction, logical_channel, frame)
+local function decode_type1(bits, tree, range, direction, logical_channel, frame, crc_pass)
+    if crc_pass ~= 1 and logical_channel ~= 1 then
+        add_text(tree, range, "Control-block CRC failed in BlueStation; payload decode is unreliable, so no deeper MAC/LLC/MM/CMCE dissection is attempted")
+        return
+    end
+
     if logical_channel == 1 then
         parse_access_assign(bits, tree, range, frame == 18)
     elseif logical_channel == 2 then
@@ -2638,7 +2643,10 @@ local function dissect_impl(tvb, pinfo, tree)
         lookup(BLOCK_NAMES, block, "Unknown"),
         crc_pass == 1 and "CRC ok" or "CRC fail"
     )
-    local type1_summary = summarize_type1(bits, direction, logical_channel, frame)
+    local type1_summary = nil
+    if crc_pass == 1 or logical_channel == 1 then
+        type1_summary = summarize_type1(bits, direction, logical_channel, frame)
+    end
     if type1_summary ~= nil and type1_summary ~= "" then
         info = info .. " " .. type1_summary
     end
@@ -2664,7 +2672,7 @@ local function dissect_impl(tvb, pinfo, tree)
         add_text(subtree, payload_range, string.format("Truncated capture payload: expected %u bit characters, got %u", bit_length, bit_bytes))
     end
 
-    decode_type1(bits, subtree, payload_range, direction, logical_channel, frame)
+    decode_type1(bits, subtree, payload_range, direction, logical_channel, frame, crc_pass)
     return true
 end
 
