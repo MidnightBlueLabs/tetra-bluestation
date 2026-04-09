@@ -112,6 +112,9 @@ impl LmacBs {
     ) {
         let wireshark_cfg = self.config.config().wireshark.clone();
         if let Some(cfg) = wireshark_cfg {
+            if cfg.suppress_access_assign && direction == Type1Direction::Downlink && logical_channel == LogicalChannel::Aach {
+                return;
+            }
             if cfg.suppress_d_mle_sync && direction == Type1Direction::Downlink && logical_channel == LogicalChannel::Bsch {
                 return;
             }
