@@ -50,12 +50,14 @@ pub struct LmacBs {
     dltime: TdmaTime,
 
     /// Per-timeslot UL physical channel indicator from UMAC.
-    /// UL bursts arrive 2 timeslots after the corresponding DL slot, so we must
-    /// keep this keyed by timeslot rather than a single "latest" value.
+    /// UL bursts arrive two slots after the DL slot that announces their usage,
+    /// so this is keyed by the eventual uplink slot number rather than the
+    /// current downlink slot.
     uplink_phy_chan: [PhysicalChannel; 4],
 
-    /// Signalled by Umac per timeslot. Set to true when in a traffic burst, the 1st stolen block shows that the 2nd slot is also stolen
-    blk2_stolen: bool,
+    /// Signalled by UMAC per uplink timeslot. Set to true when block1 of a
+    /// traffic burst indicates that block2 is also stolen.
+    blk2_stolen: [bool; 4],
     // Details about current burst, parsed from BBK broadcast block
     // cur_burst: CurBurst,
 }
@@ -86,8 +88,16 @@ impl LmacBs {
 
             dltime: TdmaTime::default(),
             uplink_phy_chan: [PhysicalChannel::Unallocated; 4],
-            blk2_stolen: false,
+            blk2_stolen: [false; 4],
         }
+    }
+
+    fn ul_slot_index(ul_time: TdmaTime) -> usize {
+        ul_time.t as usize - 1
+    }
+
+    fn ul_slot_index_for_dl_time(dl_time: TdmaTime) -> usize {
+        Self::ul_slot_index(dl_time.add_timeslots(-2))
     }
 
     fn emit_type1_capture(
@@ -310,19 +320,43 @@ impl LmacBs {
         let SapMsgInner::TpUnitdataInd(prim) = message.msg else { panic!() };
 
         // let pchan = self.determine_phy_chan_ul();
-        let ts_idx = ul_time.t as usize - 1;
+        let ts_idx = Self::ul_slot_index(ul_time);
         let pchan = self.uplink_phy_chan[ts_idx];
-        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, self.blk2_stolen);
+        let mut blk2_stolen = self.blk2_stolen[ts_idx];
+
+        if prim.block_num == PhyBlockNum::Block1 && blk2_stolen {
+            tracing::warn!(
+                "rx_tp_prim: clearing stale blk2_stolen for ts {} before block1",
+                ul_time.t
+            );
+            blk2_stolen = false;
+            self.blk2_stolen[ts_idx] = false;
+        }
+
+        if pchan != PhysicalChannel::Tp && blk2_stolen {
+            tracing::warn!(
+                "rx_tp_prim: clearing stale blk2_stolen for non-traffic burst on ts {}",
+                ul_time.t
+            );
+            blk2_stolen = false;
+            self.blk2_stolen[ts_idx] = false;
+        }
+
+        let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, blk2_stolen);
 
         // Sanity checks
-        assert!(
-            prim.block_num != PhyBlockNum::Block1 || !self.blk2_stolen,
+        debug_assert!(
+            prim.block_num != PhyBlockNum::Block1 || !blk2_stolen,
             "blk2_stolen must be false when receiving block1"
         );
-        assert!(
-            pchan == PhysicalChannel::Tp || !self.blk2_stolen,
+        debug_assert!(
+            pchan == PhysicalChannel::Tp || !blk2_stolen,
             "blk2_stolen must be false when not in a traffic burst"
         );
+
+        if prim.block_num == PhyBlockNum::Block2 {
+            self.blk2_stolen[ts_idx] = false;
+        }
 
         match lchan {
             LogicalChannel::Clch => {}
@@ -343,7 +377,8 @@ impl LmacBs {
             panic!()
         };
         if let Some(stolen) = prim.blk2_stolen {
-            self.blk2_stolen = stolen;
+            let ts_idx = Self::ul_slot_index_for_dl_time(message.dltime);
+            self.blk2_stolen[ts_idx] = stolen;
         }
     }
 
@@ -354,8 +389,9 @@ impl LmacBs {
             panic!()
         };
 
-        // Update per-timeslot UL physical channel indicator
-        let ts_idx = prim.ts.t as usize - 1;
+        // Cache the announced UL physical channel against the uplink slot that
+        // will actually arrive two slots later.
+        let ts_idx = Self::ul_slot_index_for_dl_time(prim.ts);
         self.uplink_phy_chan[ts_idx] = prim.ul_phy_chan;
 
         if let Some(ref bbk) = prim.bbk {
@@ -530,6 +566,21 @@ impl TetraEntityTrait for LmacBs {
 
     fn tick_start(&mut self, _queue: &mut MessageQueue, ts: TdmaTime) {
         self.dltime = ts;
-        self.blk2_stolen = false; // reset in case it was set during this tick
+        self.blk2_stolen = [false; 4];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LmacBs;
+    use tetra_core::TdmaTime;
+
+    #[test]
+    fn maps_downlink_slot_to_corresponding_uplink_slot() {
+        let dl_time = TdmaTime::default().add_timeslots(2);
+        assert_eq!(LmacBs::ul_slot_index_for_dl_time(dl_time), 0);
+
+        let dl_time = TdmaTime::default().add_timeslots(3);
+        assert_eq!(LmacBs::ul_slot_index_for_dl_time(dl_time), 1);
     }
 }

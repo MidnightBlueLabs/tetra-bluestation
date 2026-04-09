@@ -2014,12 +2014,249 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
         if #bits > 3 then
             local tail_bits = bits_slice(bits, 3, #bits - 3)
             if tail_bits ~= nil and tail_bits ~= "" then
-                add_text(mac_tree, range, "Remaining bits: " .. tail_bits)
+                parse_tm_sdu(tail_bits, mac_tree, range, direction, "TM-SDU")
             end
         end
     else
         add_text(mac_tree, range, "Raw bits: " .. bits)
     end
+end
+
+local function summarize_mle_payload(bits, direction)
+    if bits == nil or bits == "" then
+        return nil
+    end
+
+    local protocol = bits_to_uint(bits, 0, 3)
+    if protocol == nil then
+        return nil
+    end
+
+    local payload_bits = bits_slice(bits, 3, #bits - 3) or ""
+    local protocol_name = lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown")
+
+    if direction ~= 0 then
+        return protocol_name
+    end
+
+    if protocol == 1 then
+        local pdu_type = bits_to_uint(payload_bits, 0, 4)
+        if pdu_type ~= nil then
+            return lookup(MM_PDU_NAMES, pdu_type, protocol_name)
+        end
+    elseif protocol == 2 then
+        local pdu_type = bits_to_uint(payload_bits, 0, 5)
+        if pdu_type ~= nil then
+            return lookup(CMCE_PDU_NAMES, pdu_type, protocol_name)
+        end
+    end
+
+    return protocol_name
+end
+
+local function summarize_tl_sdu(bits, direction)
+    return summarize_mle_payload(bits, direction)
+end
+
+local function summarize_llc(bits, direction)
+    if bits == nil or bits == "" then
+        return nil
+    end
+
+    local cur = new_cursor(bits)
+    local llc_link_type = cursor_read_uint(cur, 1)
+    local has_fcs = cursor_read_uint(cur, 1)
+    local basic_type = cursor_read_uint(cur, 2)
+    if llc_link_type == nil or has_fcs == nil or basic_type == nil then
+        return nil
+    end
+
+    local pdu_type = basic_type + (has_fcs * 4)
+    local summary = lookup(LLC_PDU_NAMES, pdu_type, "LLC")
+
+    if llc_link_type ~= 0 then
+        return summary
+    end
+
+    if basic_type == 0 then
+        if cursor_read_uint(cur, 1) == nil or cursor_read_uint(cur, 1) == nil then
+            return summary
+        end
+    elseif basic_type == 1 then
+        if cursor_read_uint(cur, 1) == nil then
+            return summary
+        end
+    elseif basic_type == 3 then
+        return summary
+    end
+
+    local remaining = cursor_remaining(cur)
+    if remaining < 0 then
+        return summary
+    end
+
+    local payload_bits = nil
+    if has_fcs == 1 then
+        if remaining < 32 then
+            payload_bits = cursor_read_bits(cur, remaining)
+        else
+            payload_bits = cursor_read_bits(cur, remaining - 32)
+        end
+    else
+        payload_bits = cursor_read_bits(cur, remaining)
+    end
+
+    local inner = summarize_tl_sdu(payload_bits or "", direction)
+    if inner ~= nil and inner ~= "" then
+        return summary .. " / " .. inner
+    end
+
+    return summary
+end
+
+local function summarize_mac_resource(bits, direction)
+    local encryption_mode = bits_to_uint(bits, 4, 2)
+    local addr_type = bits_to_uint(bits, 13, 3)
+    if encryption_mode == nil or addr_type == nil then
+        return "MAC-RESOURCE"
+    end
+
+    local pos = 16
+    if addr_type == 1 or addr_type == 3 or addr_type == 4 then
+        pos = pos + 24
+    elseif addr_type == 2 then
+        pos = pos + 10
+    elseif addr_type == 5 or addr_type == 7 then
+        pos = pos + 34
+    elseif addr_type == 6 then
+        pos = pos + 30
+    else
+        return "MAC-RESOURCE"
+    end
+
+    local power_control_flag = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if power_control_flag == 1 then
+        pos = pos + 4
+    end
+
+    local slot_granting_flag = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if slot_granting_flag == 1 then
+        pos = pos + 8
+    end
+
+    local chan_alloc_flag = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if chan_alloc_flag == 1 then
+        return "MAC-RESOURCE / Channel Allocation"
+    end
+
+    if encryption_mode ~= 0 then
+        return "MAC-RESOURCE / Encrypted"
+    end
+
+    local tm_sdu = bits_slice(bits, pos, #bits - pos)
+    local inner = summarize_llc(tm_sdu, direction)
+    if inner ~= nil and inner ~= "" then
+        return "MAC-RESOURCE / " .. inner
+    end
+
+    return "MAC-RESOURCE"
+end
+
+local function summarize_mac_data(bits, direction)
+    local encrypted = bits_to_uint(bits, 3, 1)
+    local addr_type = bits_to_uint(bits, 4, 2)
+    if encrypted == nil or addr_type == nil then
+        return "MAC-DATA"
+    end
+
+    local pos = 6
+    if addr_type == 0 or addr_type == 2 or addr_type == 3 then
+        pos = pos + 24
+    elseif addr_type == 1 then
+        pos = pos + 10
+    end
+
+    local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
+    pos = pos + 1
+    if length_ind_or_cap_req == nil then
+        return "MAC-DATA"
+    end
+    pos = pos + 6
+
+    if encrypted == 1 then
+        return "MAC-DATA / Encrypted"
+    end
+
+    local tm_sdu = bits_slice(bits, pos, #bits - pos)
+    local inner = summarize_llc(tm_sdu, direction)
+    if inner ~= nil and inner ~= "" then
+        return "MAC-DATA / " .. inner
+    end
+
+    return "MAC-DATA"
+end
+
+local function summarize_mac(bits, direction, logical_channel)
+    if bits == nil or bits == "" then
+        return nil
+    end
+
+    if logical_channel == 7 and #bits >= 1 and bits_to_uint(bits, 0, 1) == 1 then
+        return "MAC-END-HU"
+    end
+
+    local mac_pdu_type = bits_to_uint(bits, 0, 2)
+    if mac_pdu_type == nil then
+        return nil
+    end
+
+    if mac_pdu_type == 0 then
+        if direction == 0 then
+            return summarize_mac_resource(bits, direction)
+        end
+        return summarize_mac_data(bits, direction)
+    elseif mac_pdu_type == 1 then
+        if logical_channel == 7 then
+            return "MAC-END-HU"
+        elseif direction == 0 then
+            return "MAC-END-DL"
+        end
+        return "MAC-END-UL"
+    elseif mac_pdu_type == 2 then
+        local broadcast_type = bits_to_uint(bits, 2, 2)
+        if broadcast_type ~= nil then
+            return lookup(BROADCAST_NAMES, broadcast_type, "Broadcast")
+        end
+        return "Broadcast"
+    elseif mac_pdu_type == 3 then
+        local tail_bits = bits_slice(bits, 3, #bits - 3)
+        local inner = summarize_llc(tail_bits, direction)
+        if inner ~= nil and inner ~= "" then
+            return "MAC-U-SIGNAL / " .. inner
+        end
+        return "MAC-U-SIGNAL"
+    end
+
+    return lookup(MAC_PDU_NAMES, mac_pdu_type, "MAC")
+end
+
+local function summarize_type1(bits, direction, logical_channel, frame)
+    if logical_channel == 1 then
+        return frame == 18 and "ACCESS-ASSIGN FR18" or "ACCESS-ASSIGN"
+    elseif logical_channel == 2 then
+        return "MAC-SYNC / D-MLE-SYNC"
+    elseif logical_channel == 3 then
+        return "MAC-SYSINFO / D-MLE-SYSINFO"
+    elseif logical_channel == 4 or logical_channel == 5 or logical_channel == 6 or logical_channel == 7 then
+        return summarize_mac(bits, direction, logical_channel)
+    elseif logical_channel >= 8 and logical_channel <= 11 then
+        return "Traffic payload"
+    end
+
+    return nil
 end
 
 local function decode_type1(bits, tree, range, direction, logical_channel, frame)
@@ -2063,12 +2300,17 @@ local function dissect_impl(tvb, pinfo, tree)
     local bits = payload_range:string()
 
     pinfo.cols.protocol = "BST1"
-    pinfo.cols.info = string.format("%s %s %s %s",
+    local info = string.format("%s %s %s %s",
         lookup(DIRECTION_NAMES, direction, "Unknown"),
         lookup(LOGICAL_CHANNEL_NAMES, logical_channel, "Unknown"),
         lookup(BLOCK_NAMES, block, "Unknown"),
         crc_pass == 1 and "CRC ok" or "CRC fail"
     )
+    local type1_summary = summarize_type1(bits, direction, logical_channel, frame)
+    if type1_summary ~= nil and type1_summary ~= "" then
+        info = info .. " " .. type1_summary
+    end
+    pinfo.cols.info = info
 
     local subtree = tree:add(bluestation_type1, tvb(), "BlueStation Type-1 Capture")
     subtree:add(f.magic, tvb(0, 4))
