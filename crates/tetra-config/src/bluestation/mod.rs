@@ -22,6 +22,9 @@ pub use sec_brew::*;
 pub mod sec_telemetry;
 pub use sec_telemetry::*;
 
+pub mod sec_wireshark;
+pub use sec_wireshark::*;
+
 pub mod sec_control;
 pub use sec_control::*;
 

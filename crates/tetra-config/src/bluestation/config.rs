@@ -6,6 +6,7 @@ use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBacke
 
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;
+use super::sec_wireshark::CfgWireshark;
 
 /// Wrapper for a string that should be treated as a secret. Display and Debug will redact the actual value,
 /// to prevent accidental logging of secrets.
@@ -69,6 +70,9 @@ pub struct StackConfig {
 
     /// Control endpoint configuration
     pub control: Option<CfgControl>,
+
+    /// Optional Wireshark UDP capture endpoint
+    pub wireshark: Option<CfgWireshark>,
 }
 
 impl StackConfig {

@@ -101,7 +101,7 @@ impl<D: RxTxDev> PhyBs<D> {
         queue.push_back(sapmsg);
     }
 
-    fn split_rxslot_and_send_to_lmac(queue: &mut MessageQueue, burst: &RxBurstBits<'_>, dltime: TdmaTime) {
+    fn split_rxslot_and_send_to_lmac(queue: &mut MessageQueue, burst: &RxBurstBits<'_>, dltime: TdmaTime, from_fullslot: bool) {
         let train_seq = burst.train_type;
         match train_seq {
             TrainingSequence::NormalTrainSeq1 => {
@@ -118,8 +118,21 @@ impl<D: RxTxDev> PhyBs<D> {
             TrainingSequence::NormalTrainSeq2 => {
                 assert!(burst.bits.len() == NUB_BITS);
 
+                let mut blk_both = BitBuffer::new(NUB_BLK_BITS * 2);
+                blk_both.copy_bits_from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
+                blk_both.copy_bits_from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
+                blk_both.seek(0);
+
                 let blk1 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
                 let blk2 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
+
+                if from_fullslot {
+                    // Full-slot NTS2 uplink bursts need two views:
+                    // - `Both` so LMAC can decode full-slot TCH/S speech
+                    // - split Block1/Block2 so uplink FACCH/STCH stealing and LLC acks
+                    //   on active traffic channels are still visible to UMAC.
+                    Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk_both, dltime);
+                }
 
                 Self::send_rxblock_to_lmac(
                     queue,
@@ -259,7 +272,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(3, self.tick, rx_slot.slot.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.slot, self.dltime);
+                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.slot, self.dltime, true);
                     slot_sent = true;
                 }
                 if rx_slot.subslot1.train_type != TrainingSequence::NotFound {
@@ -272,7 +285,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(1, self.tick, rx_slot.subslot1.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot1, self.dltime);
+                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot1, self.dltime, false);
                     slot_sent = true;
                 }
                 if rx_slot.subslot2.train_type != TrainingSequence::NotFound {
@@ -285,7 +298,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         let _ = ul_rx_sender.try_send(FileWriteMsg::WriteHeaderAndBlock(2, self.tick, rx_slot.subslot2.bits.to_vec()));
                     }
 
-                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot2, self.dltime);
+                    Self::split_rxslot_and_send_to_lmac(queue, &rx_slot.subslot2, self.dltime, false);
                 }
             }
         }

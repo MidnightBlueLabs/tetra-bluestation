@@ -19,6 +19,7 @@ pub fn default_test_config_bs() -> StackConfig {
         brew: None,
         telemetry: None,
         control: None,
+        wireshark: None,
     }
 }
 

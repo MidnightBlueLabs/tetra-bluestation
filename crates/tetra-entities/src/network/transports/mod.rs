@@ -14,6 +14,9 @@ pub mod websocket;
 /// Basic TCP transport implementation
 pub mod tcp;
 
+/// Basic UDP transport implementation
+pub mod udp;
+
 /// Network transport abstraction for Entity-to-network external communications
 ///
 /// This trait defines a unified interface for both reliable (TCP, QUIC streams)
