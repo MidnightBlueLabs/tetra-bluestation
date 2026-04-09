@@ -2143,6 +2143,26 @@ local function parse_mac_u_signal(bits, tree, range)
     ))
 end
 
+local function parse_mac_u_blck(bits, tree, range)
+    local supp_pdu_subtype = bits_to_uint(bits, 2, 1)
+    local fill_bits = bits_to_uint(bits, 3, 1)
+    local encrypted = bits_to_uint(bits, 4, 1)
+    local event_label = bits_to_uint(bits, 5, 10)
+    local reservation_req = bits_to_uint(bits, 15, 4)
+    if supp_pdu_subtype == nil or fill_bits == nil or encrypted == nil or event_label == nil or reservation_req == nil then
+        add_text(tree, range, "MAC-U-BLCK truncated")
+        return
+    end
+
+    local mub_tree = tree:add(range, "MAC-U-BLCK")
+    add_text(mub_tree, range, string.format("fill_bits=%s encrypted=%s event_label=%u reservation_requirement=%s",
+        fill_bits == 1 and "true" or "false",
+        encrypted == 1 and "true" or "false",
+        event_label,
+        lookup(RES_REQ_NAMES, reservation_req, tostring(reservation_req))
+    ))
+end
+
 local function parse_mac_access(bits, tree, range)
     local fill_bits = bits_to_uint(bits, 1, 1)
     local encrypted = bits_to_uint(bits, 2, 1)
@@ -2239,11 +2259,21 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
             add_text(mac_tree, range, "Broadcast payload bits: " .. (tm_sdu or "<truncated>"))
         end
     elseif mac_pdu_type == 3 then
-        parse_mac_u_signal(bits, mac_tree, range)
-        if #bits > 3 then
-            local tail_bits = bits_slice(bits, 3, #bits - 3)
-            if tail_bits ~= nil and tail_bits ~= "" then
-                parse_tm_sdu(tail_bits, mac_tree, range, direction, "TM-SDU")
+        if logical_channel == 6 and direction == 1 then
+            parse_mac_u_signal(bits, mac_tree, range)
+            if #bits > 3 then
+                local tail_bits = bits_slice(bits, 3, #bits - 3)
+                if tail_bits ~= nil and tail_bits ~= "" then
+                    parse_tm_sdu(tail_bits, mac_tree, range, direction, "TM-SDU")
+                end
+            end
+        else
+            local supp_pdu_subtype = bits_to_uint(bits, 2, 1)
+            if supp_pdu_subtype == 0 then
+                parse_mac_u_blck(bits, mac_tree, range)
+            else
+                add_text(mac_tree, range, "Supplementary MAC subtype not decoded; raw bits follow")
+                add_text(mac_tree, range, "Raw bits: " .. bits)
             end
         end
     else
@@ -2523,12 +2553,19 @@ local function summarize_mac(bits, direction, logical_channel)
         end
         return "Broadcast"
     elseif mac_pdu_type == 3 then
-        local tail_bits = bits_slice(bits, 3, #bits - 3)
-        local inner = summarize_llc(tail_bits, direction)
-        if inner ~= nil and inner ~= "" then
-            return "MAC-U-SIGNAL / " .. inner
+        if logical_channel == 6 and direction == 1 then
+            local tail_bits = bits_slice(bits, 3, #bits - 3)
+            local inner = summarize_llc(tail_bits, direction)
+            if inner ~= nil and inner ~= "" then
+                return "MAC-U-SIGNAL / " .. inner
+            end
+            return "MAC-U-SIGNAL"
         end
-        return "MAC-U-SIGNAL"
+        local supp_pdu_subtype = bits_to_uint(bits, 2, 1)
+        if supp_pdu_subtype == 0 then
+            return "MAC-U-BLCK"
+        end
+        return "Supplementary"
     end
 
     return lookup(MAC_PDU_NAMES, mac_pdu_type, "MAC")
