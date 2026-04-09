@@ -185,12 +185,22 @@ impl LmacBs {
                         // Clause 9.4.4.3.2:
                         // STCH+TCH
                         // STCH+STCH (if blk1 has resource stating 2nd block stolen)
+                        // Some uplink full-slot traffic bursts are still detected with
+                        // NormalTrainSeq2 by PHY; if they arrive as one full block,
+                        // keep them as full-slot traffic/signalling instead of forcing
+                        // half-slot interpretation.
                         if !burst_is_traffic {
                             tracing::debug!("NUB with NormalTrainSeq2 but non-traffic burst");
                             // tracing::warn!("NUB with NormalTrainSeq2 but non-traffic burst, unexpected");
                         }
 
-                        if blk.block_num == PhyBlockNum::Block1 {
+                        if blk.block_num == PhyBlockNum::Both {
+                            if burst_is_traffic {
+                                LogicalChannel::TchS
+                            } else {
+                                LogicalChannel::SchF
+                            }
+                        } else if blk.block_num == PhyBlockNum::Block1 {
                             LogicalChannel::Stch
                         } else if blk.block_num == PhyBlockNum::Block2 {
                             if !burst_is_traffic || block2_stolen {
@@ -201,7 +211,7 @@ impl LmacBs {
                                 LogicalChannel::TchS
                             }
                         } else {
-                            panic!("NUB with NormalTrainSeq2 must have two blocks, got {:?}", blk.block_num);
+                            panic!("NUB with NormalTrainSeq2 has invalid block_num {:?}", blk.block_num);
                         }
                     }
                     _ => panic!(),

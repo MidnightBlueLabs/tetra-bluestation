@@ -2168,8 +2168,21 @@ local function get_sch_hu_fragment(ctx)
     if pending.packet_number ~= nil and current_packet > 0 then
         local delta = current_packet - pending.packet_number
         if delta <= 0 or delta > 32 then
+            pending_sch_hu_fragments[key] = nil
             return nil
         end
+    end
+    return pending
+end
+
+local function pop_sch_hu_fragment(ctx)
+    local key = sch_hu_fragment_key(ctx)
+    if key == nil then
+        return nil
+    end
+    local pending = get_sch_hu_fragment(ctx)
+    if pending ~= nil then
+        pending_sch_hu_fragments[key] = nil
     end
     return pending
 end
@@ -2327,7 +2340,7 @@ local function parse_mac_end_or_frag(bits, tree, range, direction, logical_chann
                     local pdu_len_bits = length_ind * 8
                     local frag_bits = extract_mac_payload(bits, 7, pdu_len_bits, fill_bits)
                     if frag_bits ~= nil and frag_bits ~= "" then
-                        local pending = get_sch_hu_fragment(ctx)
+                        local pending = pop_sch_hu_fragment(ctx)
                         if pending ~= nil and pending.bits ~= nil then
                             local combined = pending.bits .. frag_bits
                             local label = "Reassembled TM-SDU"
