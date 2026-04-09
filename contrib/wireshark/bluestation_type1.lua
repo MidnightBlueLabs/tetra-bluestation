@@ -2226,6 +2226,7 @@ local function remember_sch_hu_fragment_in(cache, ctx, fragment_bits, addr_text)
         bits = fragment_bits,
         addr = addr_text,
         packet_number = ctx.packet_number or 0,
+        consumed_by = nil,
     }
 end
 
@@ -2254,6 +2255,9 @@ local function get_sch_hu_fragment_from(cache, ctx)
             return nil
         end
     end
+    if pending.consumed_by ~= nil and pending.consumed_by ~= current_packet then
+        return nil
+    end
     return pending
 end
 
@@ -2266,13 +2270,9 @@ local function get_sch_hu_summary_fragment(ctx)
 end
 
 local function pop_sch_hu_fragment_from(cache, ctx)
-    local key = sch_hu_fragment_key(ctx)
-    if key == nil then
-        return nil
-    end
     local pending = get_sch_hu_fragment_from(cache, ctx)
     if pending ~= nil then
-        cache[key] = nil
+        pending.consumed_by = ctx.packet_number or 0
     end
     return pending
 end
@@ -2605,7 +2605,9 @@ local function parse_mac_access(bits, tree, range, ctx)
             if frag_flag == 1 then
                 local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
                 if frag_bits ~= nil and frag_bits ~= "" then
-                    remember_sch_hu_fragment(ctx, frag_bits, addr_text)
+                    if not ctx.visited then
+                        remember_sch_hu_fragment(ctx, frag_bits, addr_text)
+                    end
                     add_text(ma_tree, range, "TM-SDU fragment bits: " .. preview_bits(frag_bits, 160))
                 end
                 return
@@ -2908,7 +2910,9 @@ local function summarize_mac_access(bits, direction, ctx)
             end
             if frag_flag == 1 then
                 local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
-                remember_sch_hu_summary_fragment(ctx, frag_bits, nil)
+                if not ctx.visited then
+                    remember_sch_hu_summary_fragment(ctx, frag_bits, nil)
+                end
                 return prefix .. " / FragmentStart"
             end
         end
@@ -3116,6 +3120,7 @@ local function dissect_impl(tvb, pinfo, tree)
         logical_channel = logical_channel,
         timeslot = timeslot,
         packet_number = pinfo.number,
+        visited = pinfo.visited,
     }
 
     pinfo.cols.protocol = "BST1"
