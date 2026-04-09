@@ -1621,23 +1621,27 @@ local function parse_llc(bits, tree, range, direction)
     end
 
     local cur = new_cursor(bits)
-    local llc_link_type = cursor_read_uint(cur, 1)
-    local has_fcs = cursor_read_uint(cur, 1)
-    local basic_type = cursor_read_uint(cur, 2)
-    if llc_link_type == nil or has_fcs == nil or basic_type == nil then
+    local pdu_type = cursor_read_uint(cur, 4)
+    if pdu_type == nil then
         add_text(tree, range, "LLC: truncated")
         return
     end
 
     local llc_tree = tree:add(range, "LLC")
-    add_text(llc_tree, range, "Link type: " .. llc_link_type)
-    local pdu_type = basic_type + (has_fcs * 4)
     add_named_value(llc_tree, range, "PDU type", pdu_type, LLC_PDU_NAMES, 4)
 
-    if llc_link_type ~= 0 then
-        parse_type34_tail_only(cur, llc_tree, range, "Non-basic LLC")
+    if pdu_type >= 8 then
+        local tail = cursor_read_bits(cur, cursor_remaining(cur)) or ""
+        if tail ~= "" then
+            add_text(llc_tree, range, string.format("Non-basic LLC raw tail (%u bits): %s", #tail, preview_bits(tail, 160)))
+        else
+            add_text(llc_tree, range, "Non-basic LLC with no payload")
+        end
         return
     end
+
+    local has_fcs = pdu_type >= 4 and pdu_type <= 7
+    local basic_type = pdu_type % 4
 
     if basic_type == 0 then
         local nr = cursor_read_uint(cur, 1)
@@ -2325,19 +2329,19 @@ local function summarize_llc(bits, direction)
     end
 
     local cur = new_cursor(bits)
-    local llc_link_type = cursor_read_uint(cur, 1)
-    local has_fcs = cursor_read_uint(cur, 1)
-    local basic_type = cursor_read_uint(cur, 2)
-    if llc_link_type == nil or has_fcs == nil or basic_type == nil then
+    local pdu_type = cursor_read_uint(cur, 4)
+    if pdu_type == nil then
         return nil
     end
 
-    local pdu_type = basic_type + (has_fcs * 4)
     local summary = lookup(LLC_PDU_NAMES, pdu_type, "LLC")
 
-    if llc_link_type ~= 0 then
+    if pdu_type >= 8 then
         return summary
     end
+
+    local has_fcs = pdu_type >= 4 and pdu_type <= 7
+    local basic_type = pdu_type % 4
 
     if basic_type == 0 then
         if cursor_read_uint(cur, 1) == nil or cursor_read_uint(cur, 1) == nil then
