@@ -113,6 +113,10 @@ local MM_PDU_NAMES = {
     [15] = "MM FUNCTION NOT SUPPORTED",
 }
 
+local function is_traffic_channel(logical_channel)
+    return logical_channel >= 8 and logical_channel <= 11
+end
+
 local MM_PDU_NAMES_UL = {
     [0] = "U-AUTHENTICATION",
     [1] = "U-ITSI DETACH",
@@ -2898,11 +2902,17 @@ local function dissect_impl(tvb, pinfo, tree)
     local bits = payload_range:string()
 
     pinfo.cols.protocol = "BST1"
+    local crc_text
+    if is_traffic_channel(logical_channel) then
+        crc_text = crc_pass == 1 and "Class2 CRC ok" or "BFI"
+    else
+        crc_text = crc_pass == 1 and "CRC ok" or "CRC fail"
+    end
     local info = string.format("%s %s %s %s",
         lookup(DIRECTION_NAMES, direction, "Unknown"),
         lookup(LOGICAL_CHANNEL_NAMES, logical_channel, "Unknown"),
         lookup(BLOCK_NAMES, block, "Unknown"),
-        crc_pass == 1 and "CRC ok" or "CRC fail"
+        crc_text
     )
     local type1_summary = nil
     if crc_pass == 1 or logical_channel == 1 then
@@ -2928,6 +2938,12 @@ local function dissect_impl(tvb, pinfo, tree)
     subtree:add(f.scrambling_code, tvb(15, 4))
     subtree:add(f.bit_length, tvb(19, 2))
     subtree:add(f.bits, payload_range)
+
+    if is_traffic_channel(logical_channel) then
+        add_text(subtree, payload_range, crc_pass == 1
+            and "Traffic decode status: speech Class-2 CRC passed"
+            or "Traffic decode status: Bad Frame Indication (speech Class-2 CRC failed)")
+    end
 
     if bit_bytes < bit_length then
         add_text(subtree, payload_range, string.format("Truncated capture payload: expected %u bit characters, got %u", bit_length, bit_bytes))
