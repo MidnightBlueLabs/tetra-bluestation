@@ -118,36 +118,40 @@ impl<D: RxTxDev> PhyBs<D> {
             TrainingSequence::NormalTrainSeq2 => {
                 assert!(burst.bits.len() == NUB_BITS);
 
+                let mut blk_both = BitBuffer::new(NUB_BLK_BITS * 2);
+                blk_both.copy_bits_from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
+                blk_both.copy_bits_from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
+                blk_both.seek(0);
+
+                let blk1 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
+                let blk2 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
+
                 if from_fullslot {
-                    let mut blk = BitBuffer::new(NUB_BLK_BITS * 2);
-                    blk.copy_bits_from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
-                    blk.copy_bits_from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
-                    blk.seek(0);
-
-                    Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk, dltime);
-                } else {
-                    let blk1 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK1_OFFSET..NUB_BLK1_OFFSET + NUB_BLK_BITS]);
-                    let blk2 = BitBuffer::from_bitarr(&burst.bits[NUB_BLK2_OFFSET..NUB_BLK2_OFFSET + NUB_BLK_BITS]);
-
-                    Self::send_rxblock_to_lmac(
-                        queue,
-                        train_seq,
-                        BurstType::NUB,
-                        PhyBlockType::NUB,
-                        PhyBlockNum::Block1,
-                        blk1,
-                        dltime,
-                    );
-                    Self::send_rxblock_to_lmac(
-                        queue,
-                        train_seq,
-                        BurstType::NUB,
-                        PhyBlockType::NUB,
-                        PhyBlockNum::Block2,
-                        blk2,
-                        dltime,
-                    );
+                    // Full-slot NTS2 uplink bursts need two views:
+                    // - `Both` so LMAC can decode full-slot TCH/S speech
+                    // - split Block1/Block2 so uplink FACCH/STCH stealing and LLC acks
+                    //   on active traffic channels are still visible to UMAC.
+                    Self::send_rxblock_to_lmac(queue, train_seq, BurstType::NUB, PhyBlockType::NUB, PhyBlockNum::Both, blk_both, dltime);
                 }
+
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    train_seq,
+                    BurstType::NUB,
+                    PhyBlockType::NUB,
+                    PhyBlockNum::Block1,
+                    blk1,
+                    dltime,
+                );
+                Self::send_rxblock_to_lmac(
+                    queue,
+                    train_seq,
+                    BurstType::NUB,
+                    PhyBlockType::NUB,
+                    PhyBlockNum::Block2,
+                    blk2,
+                    dltime,
+                );
             }
             TrainingSequence::ExtendedTrainSeq => {
                 assert!(burst.bits.len() == CUB_BITS);
