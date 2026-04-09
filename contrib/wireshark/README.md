@@ -9,6 +9,7 @@ Example config:
 host = "127.0.0.1"
 port = 42069
 # pcap_file = "./bluestation-type1-debug.pcap"
+# suppress_mac_resource = true
 # suppress_access_assign = true
 # suppress_d_mle_sync = true
 # suppress_d_mle_sysinfo = true
@@ -58,6 +59,7 @@ Notes:
 - Port `42069` is also registered directly as a convenience for the example config.
 - If `pcap_file` is configured, BlueStation also writes synthetic Ethernet/IPv4/UDP packets carrying the same `TBSW` datagrams into a PCAP file so the capture can be opened directly in Wireshark later.
 - BlueStation requires an interactive `yes` acknowledgement at startup before it will write a PCAP file.
+- `suppress_mac_resource` drops downlink `MAC-RESOURCE` exports at the source.
 - `suppress_access_assign` drops AACH `ACCESS-ASSIGN` exports at the source.
 - `suppress_d_mle_sync` drops BSCH `D-MLE-SYNC` exports at the source.
 - `suppress_d_mle_sysinfo` drops BNCH `D-MLE-SYSINFO` exports at the source.

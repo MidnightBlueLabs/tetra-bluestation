@@ -466,6 +466,7 @@ f.bit_length = ProtoField.uint16("bluestation.type1.bit_length", "Bit Length", b
 f.bits = ProtoField.string("bluestation.type1.bits", "Type-1 Bits")
 
 local pending_sch_hu_fragments = {}
+local pending_sch_hu_summary_fragments = {}
 
 local function lookup(tbl, value, fallback)
     if tbl[value] ~= nil then
@@ -2216,24 +2217,32 @@ local function sch_hu_fragment_key(ctx)
     return tostring(ctx.timeslot)
 end
 
-local function remember_sch_hu_fragment(ctx, fragment_bits, addr_text)
+local function remember_sch_hu_fragment_in(cache, ctx, fragment_bits, addr_text)
     local key = sch_hu_fragment_key(ctx)
     if key == nil or fragment_bits == nil or fragment_bits == "" then
         return
     end
-    pending_sch_hu_fragments[key] = {
+    cache[key] = {
         bits = fragment_bits,
         addr = addr_text,
         packet_number = ctx.packet_number or 0,
     }
 end
 
-local function get_sch_hu_fragment(ctx)
+local function remember_sch_hu_fragment(ctx, fragment_bits, addr_text)
+    remember_sch_hu_fragment_in(pending_sch_hu_fragments, ctx, fragment_bits, addr_text)
+end
+
+local function remember_sch_hu_summary_fragment(ctx, fragment_bits, addr_text)
+    remember_sch_hu_fragment_in(pending_sch_hu_summary_fragments, ctx, fragment_bits, addr_text)
+end
+
+local function get_sch_hu_fragment_from(cache, ctx)
     local key = sch_hu_fragment_key(ctx)
     if key == nil then
         return nil
     end
-    local pending = pending_sch_hu_fragments[key]
+    local pending = cache[key]
     if pending == nil then
         return nil
     end
@@ -2241,23 +2250,35 @@ local function get_sch_hu_fragment(ctx)
     if pending.packet_number ~= nil and current_packet > 0 then
         local delta = current_packet - pending.packet_number
         if delta <= 0 or delta > 32 then
-            pending_sch_hu_fragments[key] = nil
+            cache[key] = nil
             return nil
         end
     end
     return pending
 end
 
-local function pop_sch_hu_fragment(ctx)
+local function get_sch_hu_fragment(ctx)
+    return get_sch_hu_fragment_from(pending_sch_hu_fragments, ctx)
+end
+
+local function get_sch_hu_summary_fragment(ctx)
+    return get_sch_hu_fragment_from(pending_sch_hu_summary_fragments, ctx)
+end
+
+local function pop_sch_hu_fragment_from(cache, ctx)
     local key = sch_hu_fragment_key(ctx)
     if key == nil then
         return nil
     end
-    local pending = get_sch_hu_fragment(ctx)
+    local pending = get_sch_hu_fragment_from(cache, ctx)
     if pending ~= nil then
-        pending_sch_hu_fragments[key] = nil
+        cache[key] = nil
     end
     return pending
+end
+
+local function pop_sch_hu_fragment(ctx)
+    return pop_sch_hu_fragment_from(pending_sch_hu_fragments, ctx)
 end
 
 local function parse_mac_resource(bits, tree, range, direction)
@@ -2887,7 +2908,7 @@ local function summarize_mac_access(bits, direction, ctx)
             end
             if frag_flag == 1 then
                 local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
-                remember_sch_hu_fragment(ctx, frag_bits, nil)
+                remember_sch_hu_summary_fragment(ctx, frag_bits, nil)
                 return prefix .. " / FragmentStart"
             end
         end
@@ -2925,7 +2946,7 @@ local function summarize_mac_end_hu(bits, direction, ctx)
         return "MAC-END-HU"
     end
     local frag_bits = extract_mac_payload(bits, 7, length_ind * 8, fill_bits)
-    local pending = get_sch_hu_fragment(ctx)
+    local pending = get_sch_hu_summary_fragment(ctx)
     if pending ~= nil and pending.bits ~= nil and frag_bits ~= nil then
         local inner = summarize_llc(pending.bits .. frag_bits, direction)
         if inner ~= nil and inner ~= "" then

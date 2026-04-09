@@ -112,6 +112,9 @@ impl LmacBs {
     ) {
         let wireshark_cfg = self.config.config().wireshark.clone();
         if let Some(cfg) = wireshark_cfg {
+            if cfg.suppress_mac_resource && Self::is_downlink_mac_resource(direction, logical_channel, bits) {
+                return;
+            }
             if cfg.suppress_access_assign && direction == Type1Direction::Downlink && logical_channel == LogicalChannel::Aach {
                 return;
             }
@@ -401,6 +404,20 @@ impl LmacBs {
             let ts_idx = Self::ul_slot_index_for_dl_time(message.dltime);
             self.blk2_stolen[ts_idx] = stolen;
         }
+    }
+
+    fn is_downlink_mac_resource(direction: Type1Direction, logical_channel: LogicalChannel, bits: &BitBuffer) -> bool {
+        if direction != Type1Direction::Downlink {
+            return false;
+        }
+        let is_mac_resource_channel = matches!(
+            logical_channel,
+            LogicalChannel::SchHd | LogicalChannel::SchF | LogicalChannel::Stch
+        );
+        if !is_mac_resource_channel || bits.get_len() < 2 {
+            return false;
+        }
+        bits.peek_bits(2) == Some(0)
     }
 
     /// Request from Umac to transmit a message

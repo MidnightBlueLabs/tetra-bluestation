@@ -199,6 +199,7 @@ voice_service = true
 # host = "127.0.0.1"
 # port = 42069
 # pcap_file = "./bluestation-type1-debug.pcap"
+# suppress_mac_resource = true
 # suppress_access_assign = true
 # suppress_d_mle_sync = true
 # suppress_d_mle_sysinfo = true

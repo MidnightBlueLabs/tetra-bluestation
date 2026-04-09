@@ -12,6 +12,8 @@ pub struct CfgWireshark {
     pub port: u16,
     /// Optional PCAP file path for saving synthetic UDP capture packets
     pub pcap_file: Option<String>,
+    /// Suppress downlink MAC-RESOURCE packets from Wireshark export
+    pub suppress_mac_resource: bool,
     /// Suppress AACH/ACCESS-ASSIGN packets from Wireshark export
     pub suppress_access_assign: bool,
     /// Suppress BSCH/D-MLE-SYNC packets from Wireshark export
@@ -28,6 +30,8 @@ pub struct CfgWiresharkDto {
     pub port: u16,
     /// Optional PCAP file path for saving synthetic UDP capture packets
     pub pcap_file: Option<String>,
+    /// Suppress downlink MAC-RESOURCE packets from Wireshark export
+    pub suppress_mac_resource: Option<bool>,
     /// Suppress AACH/ACCESS-ASSIGN packets from Wireshark export
     pub suppress_access_assign: Option<bool>,
     /// Suppress BSCH/D-MLE-SYNC packets from Wireshark export
@@ -57,6 +61,7 @@ pub fn apply_wireshark_patch(src: CfgWiresharkDto) -> Result<CfgWireshark, Strin
         host: src.host,
         port: src.port,
         pcap_file: src.pcap_file,
+        suppress_mac_resource: src.suppress_mac_resource.unwrap_or(false),
         suppress_access_assign: src.suppress_access_assign.unwrap_or(false),
         suppress_d_mle_sync: src.suppress_d_mle_sync.unwrap_or(false),
         suppress_d_mle_sysinfo: src.suppress_d_mle_sysinfo.unwrap_or(false),
