@@ -472,7 +472,7 @@ impl UmacBs {
 
         if second_half_stolen {
             tracing::debug!("rx_mac_data: STCH 2nd half stolen");
-            self.signal_lmac_second_half_stolen(queue);
+            self.signal_lmac_second_half_stolen(queue, message.dltime);
         }
 
         // Truncate len if past end (okay with standard)
@@ -1298,14 +1298,16 @@ impl UmacBs {
         }
     }
 
-    fn signal_lmac_second_half_stolen(&mut self, queue: &mut MessageQueue) {
+    fn signal_lmac_second_half_stolen(&mut self, queue: &mut MessageQueue, ul_time: TdmaTime) {
         // Signal LMAC that Block2 is also stolen (STCH, not TCH).
         // Must be Immediate priority so LMAC sees it before processing Block2.
+        // LMAC keys this configuration by the corresponding downlink slot, which
+        // is always two timeslots ahead of the received uplink burst.
         let m = SapMsg {
             sap: Sap::TmvSap,
             src: self.self_component,
             dest: TetraEntity::Lmac,
-            dltime: self.dltime, // Control message so don't care
+            dltime: ul_time.add_timeslots(2),
             msg: SapMsgInner::TmvConfigureReq(TmvConfigureReq {
                 blk2_stolen: Some(true),
                 ..Default::default()

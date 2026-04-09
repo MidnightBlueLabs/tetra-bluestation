@@ -286,8 +286,6 @@ impl LmacBs {
             &type1bits,
         );
 
-        // TODO FIXME, for now, we're not passing broken CRC msgs up to Lmac
-        // If we see purpose, we may pass it up in the future
         if !crc_pass {
             return;
         }
