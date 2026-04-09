@@ -408,6 +408,11 @@ local GROUP_IDENTITY_ACCEPT_REJECT_NAMES = {
     [1] = "Reject",
 }
 
+local GROUP_IDENTITY_ATTACH_DETACH_MODE_UL_NAMES = {
+    [0] = "Amendment",
+    [1] = "DetachAllAndAttachSpecifiedGroups",
+}
+
 local GROUP_IDENTITY_ATTACHMENT_LIFETIME_NAMES = {
     [0] = "AttachmentNotNeeded",
     [1] = "AttachmentForNextItsiAttachRequired",
@@ -880,6 +885,83 @@ local function parse_group_identity_attachment(cur, tree, range)
     add_text(tree, range, "Class of usage: " .. class_of_usage)
 end
 
+local function parse_group_identity_uplink(cur, tree, range)
+    local attach_detach_type = cursor_read_uint(cur, 1)
+    if attach_detach_type == nil then
+        add_text(tree, range, "Group identity uplink: truncated")
+        return
+    end
+
+    if attach_detach_type == 0 then
+        local class_of_usage = cursor_read_uint(cur, 3)
+        if class_of_usage == nil then
+            add_text(tree, range, "Class of usage: truncated")
+            return
+        end
+        add_text(tree, range, "Class of usage: " .. class_of_usage)
+    else
+        local detachment = cursor_read_uint(cur, 2)
+        if detachment == nil then
+            add_text(tree, range, "Group identity detachment uplink: truncated")
+            return
+        end
+        add_text(tree, range, "Group identity detachment uplink: " .. detachment)
+    end
+
+    local address_type = cursor_read_uint(cur, 2)
+    if address_type == nil then
+        add_text(tree, range, "Group identity address type: truncated")
+        return
+    end
+    add_named_value(tree, range, "Group identity address type", address_type, GROUP_IDENTITY_ADDRESS_TYPE_NAMES, 2)
+
+    if address_type == 0 or address_type == 1 then
+        local gssi = cursor_read_uint(cur, 24)
+        if gssi == nil then
+            add_text(tree, range, "GSSI: truncated")
+            return
+        end
+        add_text(tree, range, "GSSI: " .. format_uint_with_hex(gssi, 24))
+    end
+    if address_type == 1 then
+        local address_extension = cursor_read_uint(cur, 24)
+        if address_extension == nil then
+            add_text(tree, range, "Address extension: truncated")
+            return
+        end
+        add_text(tree, range, "Address extension: " .. format_uint_with_hex(address_extension, 24))
+    end
+    if address_type == 2 then
+        local vgssi = cursor_read_uint(cur, 24)
+        if vgssi == nil then
+            add_text(tree, range, "VGSSI: truncated")
+            return
+        end
+        add_text(tree, range, "VGSSI: " .. format_uint_with_hex(vgssi, 24))
+    end
+end
+
+local function parse_group_identity_location_demand(cur, tree, range)
+    local reserved = cursor_read_uint(cur, 1)
+    local mode = cursor_read_uint(cur, 1)
+    if reserved == nil or mode == nil then
+        add_text(tree, range, "Group identity location demand: truncated")
+        return
+    end
+
+    add_text(tree, range, "Reserved: " .. reserved)
+    add_named_value(tree, range, "Group identity attach/detach mode", mode, GROUP_IDENTITY_ATTACH_DETACH_MODE_UL_NAMES, 1)
+
+    local obit = read_obit(cur, tree, range, "Group identity location demand")
+    if obit == nil then
+        return
+    end
+    if obit then
+        parse_type4_struct(cur, tree, range, 8, "Group identity uplink", parse_group_identity_uplink)
+        finalize_optional_tail(cur, tree, range, "Group identity location demand")
+    end
+end
+
 local function parse_group_identity_downlink(cur, tree, range)
     local attach_detach_type = cursor_read_uint(cur, 1)
     if attach_detach_type == nil then
@@ -1158,7 +1240,54 @@ local function parse_mle_mm_uplink(bits, tree, range)
     local mm_tree = tree:add(range, "MM: " .. lookup(MM_PDU_NAMES_UL, pdu_type, "Unknown"))
     add_named_value(mm_tree, range, "PDU type", pdu_type, MM_PDU_NAMES_UL, 4)
 
-    if pdu_type == 3 then
+    if pdu_type == 1 then
+        local obit = read_obit(cur, mm_tree, range, "U-ITSI DETACH")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, mm_tree, range, "Address extension", 24)
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "U-ITSI DETACH")
+        end
+    elseif pdu_type == 2 then
+        local location_update_type = cursor_read_uint(cur, 3)
+        local request_to_append_la = cursor_read_uint(cur, 1)
+        local cipher_control = cursor_read_uint(cur, 1)
+        if location_update_type == nil or request_to_append_la == nil or cipher_control == nil then
+            add_text(mm_tree, range, "U-LOCATION UPDATE DEMAND: truncated")
+            return
+        end
+        add_named_value(mm_tree, range, "Location update type", location_update_type, LOCATION_UPDATE_TYPE_NAMES, 3)
+        add_text(mm_tree, range, "Request to append LA: " .. bool_text(request_to_append_la))
+        add_text(mm_tree, range, "Cipher control: " .. bool_text(cipher_control))
+        if cipher_control == 1 then
+            local ciphering_parameters = cursor_read_uint(cur, 10)
+            if ciphering_parameters == nil then
+                add_text(mm_tree, range, "Ciphering parameters: truncated")
+                return
+            end
+            add_text(mm_tree, range, "Ciphering parameters: " .. format_uint_with_hex(ciphering_parameters, 10))
+        end
+
+        local obit = read_obit(cur, mm_tree, range, "U-LOCATION UPDATE DEMAND")
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type2_uint(cur, mm_tree, range, "Class of MS", 24)
+            parse_type2_uint(cur, mm_tree, range, "Energy saving mode", 3, ENERGY_SAVING_MODE_NAMES)
+            parse_type2_uint(cur, mm_tree, range, "LA information", 15)
+            parse_type2_uint(cur, mm_tree, range, "SSI", 24)
+            parse_type2_uint(cur, mm_tree, range, "Address extension", 24)
+            parse_type3_struct(cur, mm_tree, range, 8, "Group identity location demand", parse_group_identity_location_demand)
+            parse_type3_generic(cur, mm_tree, range, 4, "Group report response", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 10, "Authentication uplink", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 14, "Extended capabilities", MM_TYPE34_NAMES)
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, "U-LOCATION UPDATE DEMAND")
+        end
+    elseif pdu_type == 3 then
         local status_uplink = cursor_read_uint(cur, 6)
         if status_uplink == nil then
             add_text(mm_tree, range, "U-MM STATUS: truncated")
@@ -1172,6 +1301,26 @@ local function parse_mle_mm_uplink(bits, tree, range)
         if cursor_remaining(cur) > 0 then
             local tail = cursor_read_bits(cur, cursor_remaining(cur))
             add_text(mm_tree, range, string.format("U-MM STATUS dependent information (%u bits): %s", #tail, preview_bits(tail, 160)))
+        end
+    elseif pdu_type == 7 or pdu_type == 8 then
+        local group_identity_report = cursor_read_uint(cur, 1)
+        local mode = cursor_read_uint(cur, 1)
+        if group_identity_report == nil or mode == nil then
+            add_text(mm_tree, range, "U-ATTACH/DETACH GROUP IDENTITY: truncated")
+            return
+        end
+        add_text(mm_tree, range, "Group identity report: " .. bool_text(group_identity_report))
+        add_named_value(mm_tree, range, "Group identity attach/detach mode", mode, GROUP_IDENTITY_ATTACH_DETACH_MODE_UL_NAMES, 1)
+
+        local obit = read_obit(cur, mm_tree, range, lookup(MM_PDU_NAMES_UL, pdu_type, "MM"))
+        if obit == nil then
+            return
+        end
+        if obit then
+            parse_type3_generic(cur, mm_tree, range, 4, "Group report response", MM_TYPE34_NAMES)
+            parse_type4_struct(cur, mm_tree, range, 8, "Group identity uplink", parse_group_identity_uplink)
+            parse_type3_generic(cur, mm_tree, range, 15, "Proprietary", MM_TYPE34_NAMES)
+            finalize_optional_tail(cur, mm_tree, range, lookup(MM_PDU_NAMES_UL, pdu_type, "MM"))
         end
     else
         parse_type34_tail_only(cur, mm_tree, range, "MM payload")
@@ -1932,6 +2081,55 @@ local function parse_tm_sdu(bits, tree, range, direction, label)
     parse_llc(bits, tm_tree, range, direction)
 end
 
+local function count_fill_bits(bits, pdu_len_bits, payload_pos)
+    if bits == nil or pdu_len_bits == nil or payload_pos == nil then
+        return 0
+    end
+    if pdu_len_bits <= payload_pos or pdu_len_bits > #bits then
+        return 0
+    end
+
+    for idx = pdu_len_bits, payload_pos + 1, -1 do
+        local c = bits:byte(idx)
+        if c == nil then
+            return 0
+        end
+        if c == 49 then
+            return pdu_len_bits - idx + 1
+        end
+    end
+
+    return 0
+end
+
+local function extract_mac_payload(bits, payload_pos, pdu_len_bits, has_fill_bits)
+    if bits == nil or payload_pos == nil then
+        return nil
+    end
+
+    local effective_pdu_len = pdu_len_bits or #bits
+    if effective_pdu_len > #bits then
+        effective_pdu_len = #bits
+    end
+    if effective_pdu_len <= payload_pos then
+        return ""
+    end
+
+    local payload_end = effective_pdu_len
+    if has_fill_bits == 1 then
+        local num_fill_bits = count_fill_bits(bits, effective_pdu_len, payload_pos)
+        if num_fill_bits > 0 and num_fill_bits <= (payload_end - payload_pos) then
+            payload_end = payload_end - num_fill_bits
+        end
+    end
+
+    if payload_end <= payload_pos then
+        return ""
+    end
+
+    return bits_slice(bits, payload_pos, payload_end - payload_pos)
+end
+
 local function parse_mac_resource(bits, tree, range, direction)
     local fill_bits = bits_to_uint(bits, 2, 1)
     local pos_of_grant = bits_to_uint(bits, 3, 1)
@@ -2201,29 +2399,54 @@ local function parse_mac_access(bits, tree, range)
     end
     pos = pos + 1
 
+    local pdu_len_bits = #bits
     if optional_field_flag == 0 then
         add_text(ma_tree, range, "Optional field flag: false")
-        return
-    end
-
-    add_text(ma_tree, range, "Optional field flag: true")
-    local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
-    pos = pos + 1
-    if length_ind_or_cap_req == nil then
-        add_text(ma_tree, range, "Length indication/capacity request flag: truncated")
-        return
-    end
-
-    if length_ind_or_cap_req == 0 then
-        local length_ind = bits_to_uint(bits, pos, 5)
-        add_text(ma_tree, range, string.format("Length indication: %u", length_ind or 0))
     else
-        local frag_flag = bits_to_uint(bits, pos, 1)
-        local reservation_req = bits_to_uint(bits, pos + 1, 4)
-        add_text(ma_tree, range, string.format("Fragmentation: frag_flag=%s reservation_requirement=%s",
-            frag_flag == 1 and "true" or "false",
-            lookup(RES_REQ_NAMES, reservation_req, tostring(reservation_req))
-        ))
+        add_text(ma_tree, range, "Optional field flag: true")
+        local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
+        pos = pos + 1
+        if length_ind_or_cap_req == nil then
+            add_text(ma_tree, range, "Length indication/capacity request flag: truncated")
+            return
+        end
+
+        if length_ind_or_cap_req == 0 then
+            local length_ind = bits_to_uint(bits, pos, 5)
+            add_text(ma_tree, range, string.format("Length indication: %u", length_ind or 0))
+            if length_ind == nil then
+                return
+            end
+            pos = pos + 5
+            pdu_len_bits = length_ind * 8
+            if length_ind == 0 then
+                return
+            end
+        else
+            local frag_flag = bits_to_uint(bits, pos, 1)
+            local reservation_req = bits_to_uint(bits, pos + 1, 4)
+            add_text(ma_tree, range, string.format("Fragmentation: frag_flag=%s reservation_requirement=%s",
+                frag_flag == 1 and "true" or "false",
+                lookup(RES_REQ_NAMES, reservation_req, tostring(reservation_req))
+            ))
+            pos = pos + 5
+            if frag_flag == 1 then
+                local frag_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
+                if frag_bits ~= nil and frag_bits ~= "" then
+                    add_text(ma_tree, range, "TM-SDU fragment bits: " .. preview_bits(frag_bits, 160))
+                end
+                return
+            end
+        end
+    end
+
+    local sdu_bits = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
+    if sdu_bits ~= nil and sdu_bits ~= "" then
+        if encrypted == 0 then
+            parse_tm_sdu(sdu_bits, ma_tree, range, 1, "TM-SDU")
+        else
+            add_text(ma_tree, range, "Encrypted TM-SDU bits: " .. preview_bits(sdu_bits, 160))
+        end
     end
 end
 
@@ -2285,6 +2508,8 @@ local function parse_generic_mac(bits, tree, range, direction, logical_channel)
     end
 end
 
+local summarize_mm_uplink_payload
+
 local function summarize_mle_payload(bits, direction)
     if bits == nil or bits == "" then
         return nil
@@ -2304,7 +2529,7 @@ local function summarize_mle_payload(bits, direction)
             if direction == 0 then
                 return lookup(MM_PDU_NAMES, pdu_type, protocol_name)
             end
-            return lookup(MM_PDU_NAMES_UL, pdu_type, protocol_name)
+            return summarize_mm_uplink_payload(payload_bits)
         end
     elseif protocol == 2 then
         local pdu_type = bits_to_uint(payload_bits, 0, 5)
@@ -2317,6 +2542,28 @@ local function summarize_mle_payload(bits, direction)
     end
 
     return protocol_name
+end
+
+summarize_mm_uplink_payload = function(payload_bits)
+    local pdu_type = bits_to_uint(payload_bits, 0, 4)
+    if pdu_type == nil then
+        return nil
+    end
+
+    local summary = lookup(MM_PDU_NAMES_UL, pdu_type, "MM")
+    if pdu_type == 2 then
+        local location_update_type = bits_to_uint(payload_bits, 4, 3)
+        if location_update_type ~= nil then
+            return summary .. " / " .. lookup(LOCATION_UPDATE_TYPE_NAMES, location_update_type, tostring(location_update_type))
+        end
+    elseif pdu_type == 7 or pdu_type == 8 then
+        local mode = bits_to_uint(payload_bits, 5, 1)
+        if mode ~= nil then
+            return summary .. " / " .. lookup(GROUP_IDENTITY_ATTACH_DETACH_MODE_UL_NAMES, mode, tostring(mode))
+        end
+    end
+
+    return summary
 end
 
 local function summarize_tl_sdu(bits, direction)
@@ -2431,9 +2678,10 @@ local function summarize_mac_resource(bits, direction)
 end
 
 local function summarize_mac_access(bits, direction)
+    local fill_bits = bits_to_uint(bits, 1, 1)
     local encrypted = bits_to_uint(bits, 2, 1)
     local addr_type = bits_to_uint(bits, 3, 2)
-    if encrypted == nil or addr_type == nil then
+    if fill_bits == nil or encrypted == nil or addr_type == nil then
         return "MAC-ACCESS"
     end
 
@@ -2445,45 +2693,58 @@ local function summarize_mac_access(bits, direction)
     end
 
     local optional_field_flag = bits_to_uint(bits, pos, 1)
-    if optional_field_flag == nil or optional_field_flag == 0 then
-        return "MAC-ACCESS"
-    end
-    pos = pos + 1
-
-    local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
-    pos = pos + 1
-    if length_ind_or_cap_req == nil then
+    if optional_field_flag == nil then
         return "MAC-ACCESS"
     end
 
-    if length_ind_or_cap_req == 1 then
-        local reservation_req = bits_to_uint(bits, pos + 1, 4)
-        if reservation_req ~= nil then
-            return "MAC-ACCESS / " .. lookup(RES_REQ_NAMES, reservation_req, "CapacityRequest")
+    local prefix = "MAC-ACCESS"
+    local pdu_len_bits = #bits
+    pos = pos + 1
+    if optional_field_flag == 1 then
+        local length_ind_or_cap_req = bits_to_uint(bits, pos, 1)
+        pos = pos + 1
+        if length_ind_or_cap_req == nil then
+            return prefix
         end
-        return "MAC-ACCESS / CapacityRequest"
-    end
 
-    local length_ind = bits_to_uint(bits, pos, 5)
-    if length_ind == nil then
-        return "MAC-ACCESS"
-    elseif length_ind == 0 then
-        return "MAC-ACCESS / Null"
-    elseif length_ind == 31 then
-        return "MAC-ACCESS / FragmentStart"
+        if length_ind_or_cap_req == 0 then
+            local length_ind = bits_to_uint(bits, pos, 5)
+            if length_ind == nil then
+                return prefix
+            end
+            pos = pos + 5
+            pdu_len_bits = length_ind * 8
+            if length_ind == 0 then
+                return prefix .. " / Null"
+            elseif length_ind == 31 then
+                return prefix .. " / FragmentStart"
+            end
+        else
+            local frag_flag = bits_to_uint(bits, pos, 1)
+            local reservation_req = bits_to_uint(bits, pos + 1, 4)
+            pos = pos + 5
+            if reservation_req ~= nil then
+                prefix = prefix .. " / " .. lookup(RES_REQ_NAMES, reservation_req, "CapacityRequest")
+            else
+                prefix = prefix .. " / CapacityRequest"
+            end
+            if frag_flag == 1 then
+                return prefix .. " / FragmentStart"
+            end
+        end
     end
 
     if encrypted == 1 then
-        return "MAC-ACCESS / Encrypted"
+        return prefix .. " / Encrypted"
     end
 
-    local tm_sdu = bits_slice(bits, pos + 5, #bits - (pos + 5))
+    local tm_sdu = extract_mac_payload(bits, pos, pdu_len_bits, fill_bits)
     local inner = summarize_llc(tm_sdu, direction)
     if inner ~= nil and inner ~= "" then
-        return "MAC-ACCESS / " .. inner
+        return prefix .. " / " .. inner
     end
 
-    return "MAC-ACCESS"
+    return prefix
 end
 
 local function summarize_mac_data(bits, direction)
