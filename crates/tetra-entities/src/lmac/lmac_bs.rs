@@ -110,6 +110,16 @@ impl LmacBs {
         scrambling_code: u32,
         bits: &BitBuffer,
     ) {
+        let wireshark_cfg = self.config.config().wireshark.clone();
+        if let Some(cfg) = wireshark_cfg {
+            if cfg.suppress_d_mle_sync && direction == Type1Direction::Downlink && logical_channel == LogicalChannel::Bsch {
+                return;
+            }
+            if cfg.suppress_d_mle_sysinfo && direction == Type1Direction::Downlink && logical_channel == LogicalChannel::Bnch {
+                return;
+            }
+        }
+
         if let Some(sink) = &self.wireshark {
             sink.send(Type1Capture {
                 direction,

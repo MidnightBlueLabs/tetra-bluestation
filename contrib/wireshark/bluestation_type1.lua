@@ -97,6 +97,17 @@ local MLE_PROTOCOL_NAMES = {
     [6] = "TME",
 }
 
+local MLE_PDU_NAMES_DL = {
+    [0] = "D-NEW CELL",
+    [1] = "D-PREPARE FAIL",
+    [2] = "D-NWRK-BROADCAST",
+    [3] = "D-NWRK-BROADCAST EXT",
+    [4] = "D-RESTORE ACK",
+    [5] = "D-RESTORE FAIL",
+    [6] = "D-CHANNEL RESPONSE",
+    [7] = "MLE EXT PDU",
+}
+
 local MM_PDU_NAMES = {
     [0] = "D-OTAR",
     [1] = "D-AUTHENTICATION",
@@ -1733,6 +1744,66 @@ local function parse_mle_cmce_uplink(bits, tree, range)
     end
 end
 
+local function parse_mle_downlink(bits, tree, range)
+    local cur = new_cursor(bits)
+    local pdu_type = cursor_read_uint(cur, 3)
+    if pdu_type == nil then
+        add_text(tree, range, "MLE downlink: truncated")
+        return
+    end
+
+    local mle_tree = tree:add(range, "MLE downlink")
+    add_named_value(mle_tree, range, "PDU type", pdu_type, MLE_PDU_NAMES_DL, 3)
+
+    if pdu_type == 2 then
+        local cell_reselect_parameters = cursor_read_uint(cur, 16)
+        local cell_load_ca = cursor_read_uint(cur, 2)
+        if cell_reselect_parameters == nil or cell_load_ca == nil then
+            add_text(mle_tree, range, "D-NWRK-BROADCAST body: truncated")
+            return
+        end
+
+        local nwrk_tree = mle_tree:add(range, "MLE: D-NWRK-BROADCAST")
+        add_text(nwrk_tree, range, "Cell re-select parameters: " .. format_uint_with_hex(cell_reselect_parameters, 16))
+        add_text(nwrk_tree, range, "Cell load CA: " .. format_uint_with_hex(cell_load_ca, 2))
+
+        local obit = read_obit(cur, nwrk_tree, range, "D-NWRK-BROADCAST")
+        if obit == nil then
+            return
+        end
+        add_text(nwrk_tree, range, "Optional fields present: " .. tostring(obit))
+        if not obit then
+            if cursor_remaining(cur) > 0 then
+                local tail = cursor_read_bits(cur, cursor_remaining(cur)) or ""
+                if tail ~= "" then
+                    add_text(nwrk_tree, range, string.format("D-NWRK-BROADCAST trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+                end
+            end
+            return
+        end
+
+        local tetra_network_time = parse_type2_uint(cur, nwrk_tree, range, "TETRA network time", 48)
+        local number_of_ca_neighbour_cells = parse_type2_uint(cur, nwrk_tree, range, "Number of CA neighbour cells", 3)
+
+        if number_of_ca_neighbour_cells ~= nil and number_of_ca_neighbour_cells > 0 then
+            add_text(nwrk_tree, range, "Neighbour cell information for CA: not decoded")
+        end
+
+        if cursor_remaining(cur) > 0 then
+            local tail = cursor_read_bits(cur, cursor_remaining(cur)) or ""
+            if tail ~= "" then
+                add_text(nwrk_tree, range, string.format("D-NWRK-BROADCAST trailing bits (%u): %s", #tail, preview_bits(tail, 160)))
+            end
+        end
+        return
+    end
+
+    local payload = cursor_read_bits(cur, cursor_remaining(cur)) or ""
+    if payload ~= "" then
+        add_text(mle_tree, range, string.format("%s payload (%u bits): %s", lookup(MLE_PDU_NAMES_DL, pdu_type, "MLE"), #payload, preview_bits(payload, 160)))
+    end
+end
+
 local function parse_tl_sdu(bits, tree, range, direction)
     if bits == nil or bits == "" then
         add_text(tree, range, "TL-SDU: <empty>")
@@ -1755,6 +1826,8 @@ local function parse_tl_sdu(bits, tree, range, direction)
             parse_mle_mm_downlink(payload_bits, tl_tree, range)
         elseif protocol == 2 then
             parse_mle_cmce_downlink(payload_bits, tl_tree, range)
+        elseif protocol == 5 then
+            parse_mle_downlink(payload_bits, tl_tree, range)
         else
             add_text(tl_tree, range, string.format("%s payload (%u bits): %s", lookup(MLE_PROTOCOL_NAMES, protocol, "Unknown"), #payload_bits, preview_bits(payload_bits, 160)))
         end
@@ -2617,6 +2690,11 @@ local function summarize_mle_payload(bits, direction)
                 return lookup(CMCE_PDU_NAMES, pdu_type, protocol_name)
             end
             return lookup(CMCE_PDU_NAMES_UL, pdu_type, protocol_name)
+        end
+    elseif protocol == 5 and direction == 0 then
+        local pdu_type = bits_to_uint(payload_bits, 0, 3)
+        if pdu_type ~= nil then
+            return lookup(MLE_PDU_NAMES_DL, pdu_type, protocol_name)
         end
     end
 

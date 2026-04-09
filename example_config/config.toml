@@ -199,4 +199,6 @@ voice_service = true
 # host = "127.0.0.1"
 # port = 42069
 # pcap_file = "./bluestation-type1-debug.pcap"
+# suppress_d_mle_sync = true
+# suppress_d_mle_sysinfo = true
 # When pcap_file is set, BlueStation will require an interactive startup acknowledgement.

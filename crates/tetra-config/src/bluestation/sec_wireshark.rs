@@ -12,6 +12,10 @@ pub struct CfgWireshark {
     pub port: u16,
     /// Optional PCAP file path for saving synthetic UDP capture packets
     pub pcap_file: Option<String>,
+    /// Suppress BSCH/D-MLE-SYNC packets from Wireshark export
+    pub suppress_d_mle_sync: bool,
+    /// Suppress BNCH/D-MLE-SYSINFO packets from Wireshark export
+    pub suppress_d_mle_sysinfo: bool,
 }
 
 #[derive(Deserialize)]
@@ -22,6 +26,10 @@ pub struct CfgWiresharkDto {
     pub port: u16,
     /// Optional PCAP file path for saving synthetic UDP capture packets
     pub pcap_file: Option<String>,
+    /// Suppress BSCH/D-MLE-SYNC packets from Wireshark export
+    pub suppress_d_mle_sync: Option<bool>,
+    /// Suppress BNCH/D-MLE-SYSINFO packets from Wireshark export
+    pub suppress_d_mle_sysinfo: Option<bool>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -45,5 +53,7 @@ pub fn apply_wireshark_patch(src: CfgWiresharkDto) -> Result<CfgWireshark, Strin
         host: src.host,
         port: src.port,
         pcap_file: src.pcap_file,
+        suppress_d_mle_sync: src.suppress_d_mle_sync.unwrap_or(false),
+        suppress_d_mle_sysinfo: src.suppress_d_mle_sysinfo.unwrap_or(false),
     })
 }
