@@ -1,9 +1,8 @@
 use crate::mle::components::mle_router::MleRouter;
-use crate::mle::components::network_time::encode_tetra_network_time;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, unimplemented_log};
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::lmm::LmmMleUnitdataInd;
 use tetra_saps::ltpd::LtpdMleUnitdataInd;
@@ -14,9 +13,9 @@ use tetra_pdus::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 use tetra_pdus::mle::enums::mle_protocol_discriminator::MleProtocolDiscriminator;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
-use tetra_pdus::mle::pdus::d_nwrk_broadcast::DNwrkBroadcast;
 
 pub struct MleMs {
+    self_component: TetraEntity,
     config: SharedConfig,
     router: MleRouter,
 }
@@ -24,6 +23,7 @@ pub struct MleMs {
 impl MleMs {
     pub fn new(config: SharedConfig) -> Self {
         Self {
+            self_component: TetraEntity::Mle,
             config,
             router: MleRouter::new(),
         }
