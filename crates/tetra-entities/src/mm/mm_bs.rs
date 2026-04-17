@@ -3,17 +3,20 @@ use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Layer2Service, Sap, SsiType, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
+use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
 use crate::mm::components::client_state::{MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
+use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
 use tetra_pdus::mm::enums::mm_pdu_type_ul::MmPduTypeUl;
 use tetra_pdus::mm::enums::reject_cause::RejectCause;
+use tetra_pdus::mm::enums::status_downlink::StatusDownlink;
 use tetra_pdus::mm::enums::status_uplink::StatusUplink;
+use tetra_pdus::mm::fields::energy_saving_information::EnergySavingInformation;
 use tetra_pdus::mm::fields::group_identity_attachment::GroupIdentityAttachment;
 use tetra_pdus::mm::fields::group_identity_downlink::GroupIdentityDownlink;
 use tetra_pdus::mm::fields::group_identity_location_accept::GroupIdentityLocationAccept;
@@ -22,6 +25,7 @@ use tetra_pdus::mm::pdus::d_attach_detach_group_identity_acknowledgement::DAttac
 use tetra_pdus::mm::pdus::d_location_update_accept::DLocationUpdateAccept;
 use tetra_pdus::mm::pdus::d_location_update_command::DLocationUpdateCommand;
 use tetra_pdus::mm::pdus::d_location_update_reject::DLocationUpdateReject;
+use tetra_pdus::mm::pdus::d_mm_status::DMmStatus;
 use tetra_pdus::mm::pdus::u_attach_detach_group_identity::UAttachDetachGroupIdentity;
 use tetra_pdus::mm::pdus::u_itsi_detach::UItsiDetach;
 use tetra_pdus::mm::pdus::u_location_update_demand::ULocationUpdateDemand;
@@ -180,22 +184,27 @@ impl MmBs {
             return;
         }
 
-        // Handle Energy Saving Mode request
-        // TODO FIXME this does not yet seem to be functional, and prevents the MS from remaining
-        // properly registered.
-        // let esi = if let Some(esm) = pdu.energy_saving_mode {
-        //     if esm != EnergySavingMode::StayAlive {
-        //         unimplemented_log!("Got req for EnergySavingMode {}, overriding with {}", esm, EnergySavingMode::StayAlive);
-        //     }
-        //     Some(EnergySavingInformation {
-        //         energy_saving_mode: EnergySavingMode::StayAlive,
-        //         frame_number: None,
-        //         multiframe_number: None,
-        //     })
-        // } else {
-        //     None
-        // };
-        let esi = None;
+        // Handle Energy Saving Mode request (clause 23.7.6)
+        // Always override to StayAlive. DL scheduler does not track per-MS monitoring
+        // patterns, so non-StayAlive modes would cause missed downlink messages.
+        // Per clause 16.7.1 NOTE 1: "The BS may allocate a different energy saving mode
+        // than requested and the BS assumes that the allocated value will be used."
+        let esi = if let Some(esm) = pdu.energy_saving_mode {
+            if esm != EnergySavingMode::StayAlive {
+                tracing::info!(
+                    "MS {} requested energy saving mode {:?}, overriding to StayAlive",
+                    prim.received_address.ssi,
+                    esm,
+                );
+            }
+            Some(EnergySavingInformation {
+                energy_saving_mode: EnergySavingMode::StayAlive,
+                frame_number: None,
+                multiframe_number: None,
+            })
+        } else {
+            None
+        };
 
         // Try to register the client
         let issi = prim.received_address.ssi;
@@ -217,6 +226,16 @@ impl MmBs {
             tracing::warn!("Failed updating roaming MS {}: {:?}", issi, e);
             return;
         }
+
+        // Store energy saving mode in client state
+        let esm = esi.as_ref().map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
+        let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+
+        // Store and log class_of_ms
+        if let Some(ref class) = pdu.class_of_ms {
+            tracing::info!("MS {} class_of_ms: {}", issi, class);
+        }
+        let _ = self.client_mgr.set_client_class_of_ms(issi, pdu.class_of_ms);
 
         // Process optional GroupIdentityLocationDemand field
         let gila = if let Some(gild) = pdu.group_identity_location_demand {
@@ -263,11 +282,6 @@ impl MmBs {
         tracing::debug!("-> {} sdu {}", pdu_response, sdu.dump_bin());
 
         // Build and submit response prim
-        let addr = TetraAddress {
-            encrypted: false,
-            ssi_type: SsiType::Ssi,
-            ssi: issi,
-        };
         let msg = SapMsg {
             sap: Sap::LmmSap,
             src: TetraEntity::Mm,
@@ -276,7 +290,7 @@ impl MmBs {
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
                 handle: prim.handle,
-                address: addr,
+                address: TetraAddress::issi(issi),
                 layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
@@ -307,16 +321,72 @@ impl MmBs {
                 pdu
             }
             Err(e) => {
-                tracing::warn!("Failed parsing UItsiDetach: {:?} {}", e, prim.sdu.dump_bin());
+                tracing::warn!("Failed parsing UMmStatus: {:?} {}", e, prim.sdu.dump_bin());
                 return;
             }
         };
 
-        let handled = false; // Set to true for properly handled U-MM STATUS messages
+        let issi = prim.received_address.ssi;
+        let handle = prim.handle;
+
+        let mut handled = false;
         match pdu.status_uplink {
-            StatusUplink::ChangeOfEnergySavingModeRequest
-            | StatusUplink::ChangeOfEnergySavingModeResponse
-            | StatusUplink::DualWatchModeRequest
+            StatusUplink::ChangeOfEnergySavingModeRequest => {
+                // Parse energy saving mode from the sub-PDU payload
+                let esm = if let Some(dep_info) = pdu.status_uplink_dependent_information {
+                    // First 3 bits of the dependent information contain the energy saving mode
+                    let dep_len = pdu.status_uplink_dependent_information_len.unwrap_or(0);
+                    if dep_len >= 3 {
+                        let mode_val = dep_info >> (dep_len - 3);
+                        EnergySavingMode::try_from(mode_val).unwrap_or(EnergySavingMode::StayAlive)
+                    } else {
+                        EnergySavingMode::StayAlive
+                    }
+                } else {
+                    EnergySavingMode::StayAlive
+                };
+
+                if esm != EnergySavingMode::StayAlive {
+                    tracing::info!(
+                        "MS {} requested energy saving mode change to {:?}, overriding to StayAlive",
+                        issi,
+                        esm
+                    );
+                } else {
+                    tracing::info!("MS {} energy saving mode change request: StayAlive", issi);
+                }
+
+                // Store StayAlive (see clause 16.7.1 NOTE 1)
+                let _ = self.client_mgr.set_client_energy_saving_mode(issi, EnergySavingMode::StayAlive);
+
+                // Respond with StayAlive
+                let esi = EnergySavingInformation {
+                    energy_saving_mode: EnergySavingMode::StayAlive,
+                    frame_number: None,
+                    multiframe_number: None,
+                };
+                Self::send_d_mm_status_energy_saving(queue, message.dltime, issi, handle, esi);
+                handled = true;
+            }
+            StatusUplink::ChangeOfEnergySavingModeResponse => {
+                // MS confirming a BS-initiated change
+                let esm = if let Some(dep_info) = pdu.status_uplink_dependent_information {
+                    let dep_len = pdu.status_uplink_dependent_information_len.unwrap_or(0);
+                    if dep_len >= 3 {
+                        let mode_val = dep_info >> (dep_len - 3);
+                        EnergySavingMode::try_from(mode_val).unwrap_or(EnergySavingMode::StayAlive)
+                    } else {
+                        EnergySavingMode::StayAlive
+                    }
+                } else {
+                    EnergySavingMode::StayAlive
+                };
+
+                tracing::info!("MS {} energy saving mode change response: {:?}", issi, esm);
+                let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+                handled = true;
+            }
+            StatusUplink::DualWatchModeRequest
             | StatusUplink::TerminatingDualWatchModeRequest
             | StatusUplink::ChangeOfDualWatchModeResponse
             | StatusUplink::StartOfDirectModeOperation
@@ -341,7 +411,7 @@ impl MmBs {
             // A fairly untested, best-effort way of sending a PDU not supported error back
             // Note that an MS is not required to really do anything with this message.
             let (sapmsg, debug_str) = make_ul_mm_pdu_function_not_supported(
-                prim.handle,
+                handle,
                 MmPduTypeUl::UMmStatus,
                 Some((6, pdu.status_uplink.into())),
                 prim.received_address,
@@ -438,11 +508,6 @@ impl MmBs {
         sdu.seek(0);
         tracing::debug!("-> {:?} sdu {}", pdu_response, sdu.dump_bin());
 
-        let addr = TetraAddress {
-            encrypted: false,
-            ssi_type: SsiType::Ssi,
-            ssi: issi,
-        };
         let msg = SapMsg {
             sap: Sap::LmmSap,
             src: TetraEntity::Mm,
@@ -451,7 +516,7 @@ impl MmBs {
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
                 handle: prim.handle,
-                address: addr,
+                address: TetraAddress::issi(issi),
                 layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
@@ -589,11 +654,6 @@ impl MmBs {
         sdu.seek(0);
         tracing::debug!("-> DLocationUpdateCommand sdu {}", sdu.dump_bin());
 
-        let addr = TetraAddress {
-            encrypted: false,
-            ssi_type: SsiType::Ssi,
-            ssi: issi,
-        };
         let msg = SapMsg {
             sap: Sap::LmmSap,
             src: TetraEntity::Mm,
@@ -602,7 +662,7 @@ impl MmBs {
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
                 handle,
-                address: addr,
+                address: TetraAddress::issi(issi),
                 layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
@@ -639,11 +699,6 @@ impl MmBs {
         sdu.seek(0);
         tracing::debug!("-> {} sdu {}", pdu, sdu.dump_bin());
 
-        let addr = TetraAddress {
-            encrypted: false,
-            ssi_type: SsiType::Ssi,
-            ssi: issi,
-        };
         let msg = SapMsg {
             sap: Sap::LmmSap,
             src: TetraEntity::Mm,
@@ -652,7 +707,39 @@ impl MmBs {
             msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
                 sdu,
                 handle,
-                address: addr,
+                address: TetraAddress::issi(issi),
+                layer2service: Layer2Service::Todo,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                encryption_flag: false,
+                is_null_pdu: false,
+                tx_reporter: None,
+            }),
+        };
+        queue.push_back(msg);
+    }
+
+    /// Sends a D-MM-STATUS with ChangeOfEnergySavingModeResponse
+    fn send_d_mm_status_energy_saving(queue: &mut MessageQueue, dltime: TdmaTime, issi: u32, handle: u32, esi: EnergySavingInformation) {
+        let pdu = DMmStatus {
+            status_downlink: StatusDownlink::ChangeOfEnergySavingModeResponse,
+            energy_saving_information: Some(esi),
+        };
+
+        let mut sdu = BitBuffer::new_autoexpand(32);
+        pdu.to_bitbuf(&mut sdu).unwrap();
+        sdu.seek(0);
+        tracing::debug!("-> {} sdu {}", pdu, sdu.dump_bin());
+
+        let msg = SapMsg {
+            sap: Sap::LmmSap,
+            src: TetraEntity::Mm,
+            dest: TetraEntity::Mle,
+            dltime,
+            msg: SapMsgInner::LmmMleUnitdataReq(LmmMleUnitdataReq {
+                sdu,
+                handle,
+                address: TetraAddress::issi(issi),
                 layer2service: Layer2Service::Todo,
                 stealing_permission: false,
                 stealing_repeats_flag: false,
@@ -694,12 +781,6 @@ impl MmBs {
         if pdu.ciphering_parameters.is_some() {
             unimplemented_log!("Unsupported ciphering_parameters present");
             supported = false;
-        }
-        if pdu.class_of_ms.is_some() {
-            unimplemented_log!("Unsupported class_of_ms present");
-        }
-        if pdu.energy_saving_mode.is_some() {
-            unimplemented_log!("Unsupported energy_saving_mode present");
         }
         if pdu.la_information.is_some() {
             unimplemented_log!("Unsupported la_information present");
