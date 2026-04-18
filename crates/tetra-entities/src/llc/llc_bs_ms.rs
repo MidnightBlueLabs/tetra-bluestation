@@ -102,10 +102,17 @@ impl Llc {
         });
     }
 
-    /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number
-    fn get_out_ack_seq_if_any(&mut self, tn: u8, addr: TetraAddress) -> Option<u8> {
+    /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number.
+    /// ETSI 22.3.2.3 case d: when a waiting ACK and outgoing TL-DATA exist for the same link, the
+    /// LLC shall emit a combined BL-ADATA PDU. Matching by SSI alone is correct today because all
+    /// downlink signalling funnels to ts1 (see dl_enqueue_tma in bs_sched), so any pending ACK
+    /// for this SSI will ride the same slot as the outgoing data.
+    /// TODO: once bs_sched's identify_timeslots_for_ssi is implemented and DL signalling can
+    /// land on non-ts1 slots, also match on the target timeslot to avoid bundling an ACK onto a
+    /// BL-DATA heading to a different slot than where the ACK was scheduled.
+    fn get_out_ack_seq_if_any(&mut self, addr: TetraAddress) -> Option<u8> {
         for i in 0..self.scheduled_out_acks.len() {
-            if self.scheduled_out_acks[i].t_start.t == tn && self.scheduled_out_acks[i].addr.ssi == addr.ssi {
+            if self.scheduled_out_acks[i].addr.ssi == addr.ssi {
                 let n = self.scheduled_out_acks[i].nr;
                 self.scheduled_out_acks.remove(i);
                 return Some(n);
@@ -257,7 +264,7 @@ impl Llc {
         }
 
         // If an ack still needs to be sent, get the relevant expected sequence number
-        let out_ack_n = self.get_out_ack_seq_if_any(self.dltime.t, prim.main_address);
+        let out_ack_n = self.get_out_ack_seq_if_any(prim.main_address);
 
         // Get per-link send sequence number N(S) = V(S), then toggle V(S)
         let ns = self.get_next_send_seq(&prim.main_address);
