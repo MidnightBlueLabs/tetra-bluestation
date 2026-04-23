@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Logical channels as defined in the standard
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogicalChannel {
@@ -92,5 +94,26 @@ impl LogicalChannel {
             | LogicalChannel::Tch72 => true,
             LogicalChannel::Aach | LogicalChannel::SchHd | LogicalChannel::Bsch | LogicalChannel::Bnch | LogicalChannel::Blch => false,
         }
+    }
+}
+
+impl fmt::Display for LogicalChannel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let name = match self {
+            LogicalChannel::Aach => "AACH",
+            LogicalChannel::SchHd => "SCH (half slot, downlink)",
+            LogicalChannel::SchF => "SCH (full slot)",
+            LogicalChannel::Stch => "STCH",
+            LogicalChannel::SchHu => "SCH (half slot, uplink)",
+            LogicalChannel::TchS => "TCH (Voice)",
+            LogicalChannel::Tch24 => "TCH (2.4 kbps)",
+            LogicalChannel::Tch48 => "TCH (4.8 kbps)",
+            LogicalChannel::Tch72 => "TCH (7.2 kbps)",
+            LogicalChannel::Bsch => "BSCH",
+            LogicalChannel::Bnch => "BNCH",
+            LogicalChannel::Blch => "BLCH",
+            LogicalChannel::Clch => "CLCH",
+        };
+        write!(f, "{}", name)
     }
 }

@@ -14,7 +14,7 @@ use tetra_pdus::{
         },
         fields::basic_slotgrant::BasicSlotgrant,
         pdus::{
-            access_assign::{AccessAssign, AccessField},
+            access_assign::{AccessAssign},
             access_assign_fr18::AccessAssignFr18,
             mac_resource::MacResource,
             mac_sync::MacSync,
@@ -22,7 +22,9 @@ use tetra_pdus::{
         },
     },
 };
-
+use tetra_pdus::umac::enums::access_code::AccessCode;
+use tetra_pdus::umac::structs::access_field::AccessField;
+use tetra_pdus::umac::structs::base_frame_length::BaseFrameLength;
 use crate::{
     lmac::components::scrambler,
     umac::subcomp::{bs_frag::BsFragger, circuit_mgr::CircuitMgr},
@@ -1010,7 +1012,7 @@ impl BsChannelScheduler {
 
         // Populate blk1 if empty: BSCH on frame 18, SCH/HD on other frames
         if elem.blk1.is_none() {
-            elem.blk1 = Some(self.generate_default_blks(ts));
+            elem.blk1 = Some(self.generate_default_blk1(ts));
         };
 
         // Check if second block may still be populated (blk1 is half-slot and blk2 is None)
@@ -1077,6 +1079,7 @@ impl BsChannelScheduler {
     }
 
     fn generate_bbk_block(&self, ts: TdmaTime) -> TmvUnitdataReq {
+
         let (ul_traffic_usage, dl_traffic_usage) = if ts.f == 18 {
             (None, None)
         } else {
@@ -1088,28 +1091,34 @@ impl BsChannelScheduler {
 
         // Generate BBK block
         let mut aach_bb = BitBuffer::new(14);
-        if ts.f != 18 {
-            let mut aach = AccessAssign::default();
 
-            match ts.t {
+        if ts.f != 18 {
+
+            let aach = match ts.t {
+
                 1 => {
+                    // TODO FIXME check spec to confirm
+                    // TODO FIXME AFAIK, in Normal Control Mode (I.e. not Minimum Control Mode), MCCH is *always* signalling
                     assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
-                    assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?"); // TODO FIXME check spec
+                    assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?");
 
                     // Always CommonOnly on TS1 (MCCH). Per ETSI 23.5.2.2.2, the MS
                     // with a grant transmits in granted slots without checking the AACH.
-                    aach.dl_usage = AccessAssignDlUsage::CommonControl;
-                    aach.ul_usage = AccessAssignUlUsage::CommonOnly;
-                    aach.f1_af1 = Some(AccessField {
-                        access_code: 0,
-                        base_frame_len: 4,
-                    });
-                    aach.f2_af2 = Some(AccessField {
-                        access_code: 0,
-                        base_frame_len: 4,
-                    });
-                }
+                    AccessAssign::DownlinkCommonControlUplinkCommonOnly {
+                        access_field_1: AccessField {
+                            access_code: AccessCode::AccessCodeA,
+                            base_frame_len: BaseFrameLength::Subslots10,
+                        },
+                        access_field_2: AccessField {
+                            access_code: AccessCode::AccessCodeA,
+                            base_frame_len: BaseFrameLength::Subslots10,
+                        },
+                    }
+
+                },
+
                 2..=4 => {
+
                     // Additional channels (TS2..TS4).
                     // Normal operation: Traffic(usage) when a circuit is active, else Unallocated.
                     // Hangtime: immediately switch AACH to AssignedControl so radios
@@ -1119,49 +1128,66 @@ impl BsChannelScheduler {
                     let in_hangtime = (2..=4).contains(&ts.t) && self.hangtime[ts.t as usize - 1];
 
                     if in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
-                        aach.dl_usage = AccessAssignDlUsage::AssignedControl;
-                        // AssignedOnly (Header 2) allows random access for MSs on
-                        // the assigned channel while blocking common control MSs.
-                        aach.ul_usage = AccessAssignUlUsage::AssignedOnly;
-                        aach.f2_af = Some(AccessField {
-                            access_code: 0,
-                            base_frame_len: 4,
-                        });
+
+                        AccessAssign::DownlinkDefinedUplinkAssignedOnly {
+                            downlink_usage_marker: AccessAssignDlUsage::AssignedControl,
+                            access_field: AccessField {
+                                access_code: AccessCode::AccessCodeA,
+                                base_frame_len: BaseFrameLength::Subslots10,
+                            },
+                        }
+
                     } else {
-                        aach.dl_usage = if let Some(usage) = dl_traffic_usage {
-                            AccessAssignDlUsage::Traffic(usage)
-                        } else {
-                            AccessAssignDlUsage::Unallocated
-                        };
-                        aach.ul_usage = if let Some(usage) = ul_traffic_usage {
-                            AccessAssignUlUsage::Traffic(usage)
-                        } else {
-                            AccessAssignUlUsage::Unallocated
-                        };
+
+                        AccessAssign::DownlinkDefinedUplinkDefined {
+                            downlink_usage_marker: if let Some(usage) = dl_traffic_usage {
+                                AccessAssignDlUsage::Traffic(usage)
+                            } else {
+                                AccessAssignDlUsage::Unallocated
+                            },
+                            uplink_usage_marker: if let Some(usage) = ul_traffic_usage {
+                                AccessAssignUlUsage::Traffic(usage)
+                            } else {
+                                AccessAssignUlUsage::Unallocated
+                            }
+                        }
+
                     }
-                }
-                _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t),
-            }
+                },
+
+                _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t)
+            };
 
             aach.to_bitbuf(&mut aach_bb);
+
         } else {
-            // Fr18
+
+            // Frame 18 is the Control Frame, which cannot contain traffic
             assert!(ul_traffic_usage.is_none() && dl_traffic_usage.is_none());
-            let aach = AccessAssignFr18 {
-                ul_usage: AccessAssignUlUsage::CommonOnly,
-                f1_af1: Some(AccessField {
-                    access_code: 0,
-                    base_frame_len: 1,
-                }),
-                f2_af2: Some(AccessField {
-                    access_code: 0,
-                    base_frame_len: 0,
-                }),
-                ..Default::default()
+
+            // Mark CLCH opportunities as required
+            // 23.4.5.1 "The MS may linearize during these subslots without checking the
+            // ACCESS-ASSIGN PDU contents but the BS should set the ACCESS-ASSIGN PDU appropriately
+            // to indicate a CLCH opportunity."
+            let base_frame_len = if ts.is_mandatory_clch() {
+                BaseFrameLength::CLCHSubslot
+            } else {
+                BaseFrameLength::Subslots10
             };
-            // TODO FIXME: Access field defaults are possibly not great
+
+            let aach = AccessAssignFr18::UplinkCommonOnly {
+                access_field_1: AccessField {
+                    access_code: AccessCode::AccessCodeA,
+                    base_frame_len
+                },
+                access_field_2: AccessField {
+                    access_code: AccessCode::AccessCodeA,
+                    base_frame_len
+                },
+            };
+
             aach.to_bitbuf(&mut aach_bb);
-        }
+        };
 
         TmvUnitdataReq {
             logical_channel: LogicalChannel::Aach,
@@ -1170,46 +1196,63 @@ impl BsChannelScheduler {
         }
     }
 
-    fn generate_default_blks(&self, ts: TdmaTime) -> TmvUnitdataReq {
+    /// Generate a default block 1 for the given timeslot, if no traffic or signalling blocks are scheduled.
+    /// Block 2 will be automatically populated (for half-slot block 1) or left empty (for full-slot block 1) by the caller.
+    fn generate_default_blk1(&self, ts: TdmaTime) -> TmvUnitdataReq {
         match (ts.f, ts.t) {
+
+            // On the MCCH, every frame except frame 18...
             (1..=17, 1) => {
-                // Two options: [Blk1: SCH/HD Null | Blk2: BNCH SYSINFO] or [Both: SCH/F Null]
-                // Alternate every frame
-                match ts.f % 2 {
-                    0 => {
-                        // Half-slot Null PDU on SCH/HD, SYSINFO gets added later as BNCH blk2
-                        let mut buf1 = BitBuffer::new(SCH_HD_CAP);
-                        let blk1 = MacResource::null_pdu();
-                        blk1.to_bitbuf(&mut buf1);
-                        TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchHd,
-                            mac_block: buf1,
-                            scrambling_code: self.scrambling_code,
-                        }
-                    }
-                    1 => {
-                        // Full-slot Null PDU
-                        let mut buf = BitBuffer::new(SCH_F_CAP);
-                        let blk = MacResource::null_pdu();
-                        blk.to_bitbuf(&mut buf);
-                        TmvUnitdataReq {
-                            logical_channel: LogicalChannel::SchF,
-                            mac_block: buf,
-                            scrambling_code: self.scrambling_code,
-                        }
-                    }
-                    _ => panic!(), // never happens
+                // Full-slot Null PDU
+                let mut buf = BitBuffer::new(SCH_F_CAP);
+                let blk = MacResource::null_pdu();
+                blk.to_bitbuf(&mut buf);
+                TmvUnitdataReq {
+                    logical_channel: LogicalChannel::SchF,
+                    mac_block: buf,
+                    scrambling_code: self.scrambling_code,
                 }
             }
+
+            // On all other slots in frames 1-17, and in every slot on frame 18...
             (1..=17, 2..=4) | (18, _) => {
-                // SYNC + SYSINFO (added later)
-                let mut buf = BitBuffer::new(60);
-                self.precomps.mac_sync.to_bitbuf(&mut buf);
-                self.precomps.mle_sync.to_bitbuf(&mut buf);
+
+                // Mandatory BSCH (which will only be in Frame 18)?
+                if ts.is_mandatory_bsch() {
+                    // SYNC + (SYSINFO added later)
+                    let mut buf = BitBuffer::new(60);
+                    self.precomps.mac_sync.to_bitbuf(&mut buf);
+                    self.precomps.mle_sync.to_bitbuf(&mut buf);
+                    return TmvUnitdataReq {
+                        logical_channel: LogicalChannel::Bsch,
+                        mac_block: buf,
+                        scrambling_code: scrambler::SCRAMB_INIT,
+                    };
+                }
+
+                // Mandatory BNCH (which will only be in Frame 18)?
+                if ts.is_mandatory_bnch() {
+                    // SCH/HD + (SYSINFO added later)
+                    let mut buf1 = BitBuffer::new(SCH_HD_CAP);
+                    let blk1 = MacResource::null_pdu();
+                    blk1.to_bitbuf(&mut buf1);
+                    return TmvUnitdataReq {
+                        logical_channel: LogicalChannel::SchHd,
+                        mac_block: buf1,
+                        scrambling_code: self.scrambling_code,
+                    };
+                }
+
+                // Otherwise, a full-slot Null PDU
+                // TODO FIXME: Seem to remember two half-slots are the standard, but currently
+                // TODO FIXME: finalize_ts_for_tick() will stick a SYSINFO in the second half...
+                let mut buf = BitBuffer::new(SCH_F_CAP);
+                let blk = MacResource::null_pdu();
+                blk.to_bitbuf(&mut buf);
                 TmvUnitdataReq {
-                    logical_channel: LogicalChannel::Bsch,
+                    logical_channel: LogicalChannel::SchF,
                     mac_block: buf,
-                    scrambling_code: scrambler::SCRAMB_INIT,
+                    scrambling_code: self.scrambling_code,
                 }
             }
             _ => panic!(), // never happens

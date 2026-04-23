@@ -272,6 +272,8 @@ impl SdrSettings {
             rx_gain: vec![("PGA".to_string(), 50.0)],
             tx_gain: vec![("PGA".to_string(), 45.0)],
 
+            use_get_hardware_time: false,
+
             ..Self::default(mode)
         }
     }
