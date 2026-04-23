@@ -177,7 +177,6 @@ mod tests {
             TetraAddress {
                 ssi: 1234,
                 ssi_type: SsiType::Issi,
-                encrypted: false,
             },
             None,
         );

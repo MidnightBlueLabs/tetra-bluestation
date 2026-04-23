@@ -1,7 +1,6 @@
 use core::fmt::Display;
 
 use tetra_core::Sap;
-use tetra_core::TdmaTime;
 use tetra_core::tetra_entities::TetraEntity;
 
 use crate::control::brew::MmSubscriberUpdate;
@@ -126,37 +125,14 @@ impl Display for SapMsgInner {
 #[derive(Debug, Clone)]
 pub struct SapMsg {
     pub sap: Sap,
-    // pub prim: SapPrim,
-    // pub subprim: SapSubPrim,
     pub src: TetraEntity,
     pub dest: TetraEntity,
-    /// Downlink time at the time the message was created
-    pub dltime: TdmaTime,
-    // pub t_action: TdmaTime,
     pub msg: SapMsgInner,
 }
 
 impl SapMsg {
-    pub fn new(
-        sap: Sap,
-        // prim: SapPrim,
-        // subprim: SapSubPrim,
-        src: TetraEntity,
-        dest: TetraEntity,
-        t_submit: TdmaTime,
-        // t_action: TdmaTime,
-        msg: SapMsgInner,
-    ) -> Self {
-        Self {
-            sap,
-            // prim,
-            // subprim,
-            src,
-            dest,
-            dltime: t_submit,
-            // t_action,
-            msg,
-        }
+    pub fn new(sap: Sap, src: TetraEntity, dest: TetraEntity, msg: SapMsgInner) -> Self {
+        Self { sap, src, dest, msg }
     }
 
     pub fn get_source(&self) -> &TetraEntity {

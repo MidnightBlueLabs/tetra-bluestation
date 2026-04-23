@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use tetra_core::ranges::SortedDisjointSsiRanges;
+use tetra_core::ranges::{SortedDisjointSsiRanges, SsiRange};
 use toml::Value;
 
 #[derive(Debug, Clone)]
@@ -52,6 +52,8 @@ pub struct CfgCellInfo {
     pub u_plane_dtx: bool,
     pub frame_18_ext: bool,
 
+    pub ms_txpwr_max_cell: u8,
+
     pub local_ssi_ranges: SortedDisjointSsiRanges,
 
     /// IANA timezone name (e.g. "Europe/Amsterdam"). When set, enables D-NWRK-BROADCAST
@@ -92,6 +94,8 @@ pub struct CellInfoDto {
     pub u_plane_dtx: Option<bool>,
     pub frame_18_ext: Option<bool>,
 
+    pub ms_txpwr_max_cell: Option<u8>,
+
     pub local_ssi_ranges: Option<Vec<(u32, u32)>>,
 
     pub timezone: Option<String>,
@@ -129,10 +133,18 @@ pub fn cell_dto_to_cfg(ci: CellInfoDto) -> CfgCellInfo {
         ts_reserved_frames: ci.ts_reserved_frames.unwrap_or(0),
         u_plane_dtx: ci.u_plane_dtx.unwrap_or(false),
         frame_18_ext: ci.frame_18_ext.unwrap_or(false),
+        ms_txpwr_max_cell: ci.ms_txpwr_max_cell.unwrap_or(4), // 30 dBm (1W), Table 18.57
         local_ssi_ranges: ci
             .local_ssi_ranges
             .map(SortedDisjointSsiRanges::from_vec_tuple)
-            .unwrap_or(SortedDisjointSsiRanges::from_vec_ssirange(vec![])),
+            .unwrap_or(default_tetrapack_local_ranges()),
         timezone: ci.timezone,
     }
+}
+
+/// Default local SSI ranges are defined as 0-90 (inclusive), which fits the TetraPack configuration.
+/// This helps prevent excessive flows of unroutable traffic to TetraPack, and can be overridden
+/// by users if needed.
+fn default_tetrapack_local_ranges() -> SortedDisjointSsiRanges {
+    SortedDisjointSsiRanges::from_vec_ssirange(vec![SsiRange::new(0, 90)])
 }

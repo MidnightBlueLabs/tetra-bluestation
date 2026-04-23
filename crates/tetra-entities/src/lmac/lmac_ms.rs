@@ -82,7 +82,6 @@ impl LmacMs {
             sap: Sap::TmvSap,
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
-            dltime: self.ts.unwrap_or_default(),
             msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
                 pdu: type1,
                 block_num: PhyBlockNum::Undefined,
@@ -182,7 +181,6 @@ impl LmacMs {
                 sap: Sap::TmvSap,
                 src: TetraEntity::Lmac,
                 dest: TetraEntity::Umac,
-                dltime: self.ts.unwrap_or_default(),
                 msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
                     pdu: type1bits,
                     block_num,

@@ -25,6 +25,7 @@ use crate::{MessagePrio, MessageQueue, TetraEntityTrait};
 
 pub struct UmacMs {
     // config: Option<SharedConfig>,
+    dltime: TdmaTime,
     self_component: TetraEntity,
     config: SharedConfig,
     defrag: MsDefrag,
@@ -42,6 +43,7 @@ pub struct UmacMs {
 impl UmacMs {
     pub fn new(config: SharedConfig) -> Self {
         Self {
+            dltime: TdmaTime::default(),
             self_component: TetraEntity::Umac,
             config,
             defrag: MsDefrag::new(),
@@ -212,26 +214,26 @@ impl UmacMs {
         };
 
         // TODO FIXME adopt sysinfo info into global state
-
-        if pdu.hyperframe_number.is_some() && pdu.hyperframe_number.unwrap() != message.dltime.h {
+        if pdu.hyperframe_number.is_some() && pdu.hyperframe_number.unwrap() != self.dltime.h {
             // Send message to Phy about new hyperframe number
+            let mut new_time = self.dltime;
+            new_time.h = pdu.hyperframe_number.unwrap();
             let t = TdmaTime {
-                t: message.dltime.t,
-                f: message.dltime.f,
-                m: message.dltime.m,
+                t: self.dltime.t,
+                f: self.dltime.f,
+                m: self.dltime.m,
                 h: pdu.hyperframe_number.unwrap(),
             };
             let m = SapMsg {
                 sap: Sap::TmvSap,
                 src: self.self_component,
                 dest: TetraEntity::Lmac,
-                dltime: message.dltime,
                 msg: SapMsgInner::TmvConfigureReq(TmvConfigureReq {
                     time: Some(t),
                     ..Default::default()
                 }),
             };
-            tracing::info!("rx_broadcast_sysinfo: Updated TdmaTime: {:?} -> {:?}", message.dltime, t);
+            tracing::info!("rx_broadcast_sysinfo: Updated TdmaTime: {:?} -> {:?}", self.dltime, new_time);
             queue.push_back(m);
         }
 
@@ -240,7 +242,6 @@ impl UmacMs {
             sap: Sap::TlmbSap,
             src: TetraEntity::Umac,
             dest: TetraEntity::Mle,
-            dltime: message.dltime,
             msg: SapMsgInner::TlmbSysinfoInd(TlmbSysinfoInd {
                 endpoint_id: 0,
                 tl_sdu: tlsdu,
@@ -349,7 +350,7 @@ impl UmacMs {
         tracing::debug!("rx_mac_resource: {}", prim.pdu.dump_bin_full(true));
         if pdu.length_ind == 0b111111 {
             // Fragmentation start, add to defragmenter
-            self.defrag.insert_first(&mut prim.pdu, message.dltime, pdu.addr.unwrap(), None);
+            self.defrag.insert_first(&mut prim.pdu, self.dltime, pdu.addr.unwrap(), None);
         } else if pdu.length_ind == 0b111110 {
             tracing::warn!("rx_mac_resource: SECOND HALF SLOT STOLEN IN STCH but not implemented");
         } else {
@@ -373,8 +374,6 @@ impl UmacMs {
                     sap: Sap::TmaSap,
                     src: TetraEntity::Umac,
                     dest: TetraEntity::Llc,
-                    dltime: message.dltime,
-
                     msg: SapMsgInner::TmaUnitdataInd(TmaUnitdataInd {
                         pdu: sdu,
                         main_address: pdu.addr.unwrap(),
@@ -436,14 +435,14 @@ impl UmacMs {
         tracing::debug!("rx_mac_frag: pdu_len_bits: {} fill_bits: {}", pdu_len_bits, num_fill_bits);
 
         // Decrypt if needed
-        if let Some(_aie_info) = self.defrag.buffers[(message.dltime.t - 1) as usize].aie_info {
+        if let Some(_aie_info) = self.defrag.buffers[(self.dltime.t - 1) as usize].aie_info {
             // TODO FIXME implement
             unimplemented_log!("rx_mac_frag: Encryption not supported");
             return;
         }
 
         // Insert into defragmenter
-        self.defrag.insert_next(&mut prim.pdu, message.dltime);
+        self.defrag.insert_next(&mut prim.pdu, self.dltime);
     }
 
     fn rx_mac_end(&mut self, queue: &mut MessageQueue, message: &mut SapMsg) {
@@ -483,17 +482,17 @@ impl UmacMs {
         tracing::debug!("rx_mac_end: pdu_len_bits: {} fill_bits: {}", pdu_len_bits, num_fill_bits);
 
         // Decrypt if needed
-        if let Some(_aie_info) = self.defrag.buffers[(message.dltime.t - 1) as usize].aie_info {
+        if let Some(_aie_info) = self.defrag.buffers[(self.dltime.t - 1) as usize].aie_info {
             // TODO FIXME implement
             unimplemented!("rx_mac_end: Encryption not supported");
             // TODO FIXME Also re-parse chanalloc
         }
 
         // Insert into defragmenter
-        self.defrag.insert_last(&mut prim.pdu, message.dltime);
+        self.defrag.insert_last(&mut prim.pdu, self.dltime);
 
         // Fetch finalized block
-        let defragbuf = self.defrag.take_defragged_buf(message.dltime);
+        let defragbuf = self.defrag.take_defragged_buf(self.dltime);
         let Some(defragbuf) = defragbuf else {
             tracing::warn!("rx_mac_end: could not obtain defragged buf");
             return;
@@ -506,8 +505,6 @@ impl UmacMs {
             sap: Sap::TmaSap,
             src: TetraEntity::Umac,
             dest: TetraEntity::Llc,
-            dltime: message.dltime,
-
             msg: SapMsgInner::TmaUnitdataInd(TmaUnitdataInd {
                 pdu: Some(defragbuf.buffer),
                 main_address: defragbuf.addr,
@@ -559,7 +556,7 @@ impl UmacMs {
             panic!()
         };
 
-        let is_traffic = if message.dltime.f != 18 {
+        let is_traffic = if self.dltime.f != 18 {
             let pdu = match AccessAssign::from_bitbuf(&mut prim.pdu) {
                 Ok(pdu) => {
                     tracing::debug!("<- {:?}", pdu);
@@ -591,7 +588,6 @@ impl UmacMs {
             sap: Sap::TmvSap,
             src: TetraEntity::Umac,
             dest: TetraEntity::Lmac,
-            dltime: message.dltime,
             msg: SapMsgInner::TmvConfigureReq(TmvConfigureReq {
                 is_traffic: Some(is_traffic),
                 ..Default::default()
@@ -712,7 +708,7 @@ impl UmacMs {
         unimplemented!();
     }
 
-    fn update_scrambing_and_submit_to_lmac(&mut self, queue: &mut MessageQueue, message: &SapMsg) {
+    fn update_scrambing_and_submit_to_lmac(&mut self, queue: &mut MessageQueue) {
         if let (Some(mcc), Some(mnc), Some(cc)) = (self.mcc, self.mnc, self.cc) {
             self.scrambling_code = Some((((cc as u32) | ((mnc as u32) << 6) | ((mcc as u32) << 20)) << 2) | 3);
 
@@ -728,7 +724,6 @@ impl UmacMs {
                 sap: Sap::TmvSap,
                 src: self.self_component,
                 dest: TetraEntity::Lmac,
-                dltime: message.dltime,
                 msg: SapMsgInner::TmvConfigureReq(TmvConfigureReq {
                     scrambling_code: self.scrambling_code,
                     ..Default::default()
@@ -751,7 +746,7 @@ impl UmacMs {
             self.mnc = Some(valid_addresses.mnc);
 
             // Attempt to update scrambling code (if cc is also known)
-            self.update_scrambing_and_submit_to_lmac(queue, &message);
+            self.update_scrambing_and_submit_to_lmac(queue);
         } else {
             tracing::warn!("rx_tlmc_configure_req: No valid addresses provided");
         }

@@ -261,8 +261,7 @@ mod tests {
             random_access_flag: false,
             length_ind: 0,
             addr: Some(TetraAddress {
-                encrypted: false,
-                ssi_type: SsiType::Ssi,
+                ssi_type: SsiType::Issi,
                 ssi: 1234,
             }),
             event_label: None,

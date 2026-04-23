@@ -43,9 +43,8 @@ impl MacAccess {
         let (addr, event_label) = match addr_type {
             0 => {
                 let address = TetraAddress {
-                    ssi_type: SsiType::Ssi,
+                    ssi_type: SsiType::Issi, // Uplink, always ISSI
                     ssi: buf.read_field(24, "ssi")? as u32,
-                    encrypted,
                 };
                 (Some(address), None)
             }
@@ -57,7 +56,6 @@ impl MacAccess {
                 let address = TetraAddress {
                     ssi_type: SsiType::Ussi,
                     ssi: buf.read_field(24, "ussi")? as u32,
-                    encrypted,
                 };
                 (Some(address), None)
             }
@@ -65,7 +63,6 @@ impl MacAccess {
                 let address = TetraAddress {
                     ssi_type: SsiType::Smi,
                     ssi: buf.read_field(24, "smi")? as u32,
-                    encrypted,
                 };
                 (Some(address), None)
             }
@@ -109,9 +106,9 @@ impl MacAccess {
 
         // Derive addr_type from addr and write type and field
         if let Some(addr) = self.addr {
-            assert!(addr.encrypted == self.encrypted, "pdu and addr need same encryption status");
+            assert!((addr.ssi_type == SsiType::Esi) == self.encrypted);
             match addr.ssi_type {
-                SsiType::Ssi => {
+                SsiType::Ssi | SsiType::Issi | SsiType::Gssi => {
                     buf.write_bits(0, 2);
                     buf.write_bits(addr.ssi as u64, 24);
                 }

@@ -174,7 +174,6 @@ mod tests {
         let addr = TetraAddress {
             ssi,
             ssi_type: SsiType::Issi,
-            encrypted: false,
         };
         defragger.insert_first(&mut buf1, t1, addr, None);
         defragger.insert_next(&mut buf2, ssi, t2);

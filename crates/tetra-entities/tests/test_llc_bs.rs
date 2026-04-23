@@ -15,13 +15,11 @@ fn test_udata_with_broken_mm_payload() {
     // FIXME make proper vec here that can be passed onwards
     let test_vec = "00011001011100111000000011111100001000010000000000000000"; // INCOMPLETE
     let dltime_vec = TdmaTime::default().add_timeslots(2); // Downlink time: 0/1/1/3
-    let ultime_vec = dltime_vec.add_timeslots(-2); // Uplink time: 0/1/1/1
     let test_prim = TmaUnitdataInd {
         pdu: Some(BitBuffer::from_bitstr(test_vec)),
         main_address: TetraAddress {
             ssi: 2065022,
             ssi_type: SsiType::Issi,
-            encrypted: false,
         },
         scrambling_code: 864282631,
         endpoint_id: 0,
@@ -36,7 +34,6 @@ fn test_udata_with_broken_mm_payload() {
         sap: Sap::TmaSap,
         src: TetraEntity::Umac,
         dest: TetraEntity::Llc,
-        dltime: ultime_vec,
         msg: SapMsgInner::TmaUnitdataInd(test_prim),
     };
 

@@ -1,5 +1,4 @@
 use crate::mle::components::broadcast::MleBroadcast;
-use crate::mle::components::mle_router::MleRouter;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
@@ -15,7 +14,6 @@ use tetra_pdus::mle::enums::mle_protocol_discriminator::MleProtocolDiscriminator
 
 pub struct MleBs {
     config: SharedConfig,
-    router: MleRouter,
     broadcast: MleBroadcast,
 }
 
@@ -28,11 +26,7 @@ const MLE_BROADCAST_FRAME: u8 = 1;
 impl MleBs {
     pub fn new(config: SharedConfig) -> Self {
         let broadcast = MleBroadcast::new(config.clone());
-        Self {
-            config,
-            router: MleRouter::new(),
-            broadcast,
-        }
+        Self { config, broadcast }
     }
 
     fn rx_tla_mle_pdu(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
@@ -125,30 +119,23 @@ impl MleBs {
         // Dispatch to appropriate component (or to self if for MLE)
         match pdu_type {
             MleProtocolDiscriminator::Mm => {
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LmmMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0,
                     received_address: prim.main_address,
                 };
                 let msg = SapMsg {
                     sap: Sap::LmmSap,
                     src: TetraEntity::Mle,
                     dest: TetraEntity::Mm,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LmmMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
             }
             MleProtocolDiscriminator::Cmce => {
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LcmcMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0,
                     received_tetra_address: prim.main_address,
                     endpoint_id: prim.endpoint_id,
                     link_id: prim.link_id,
@@ -159,7 +146,6 @@ impl MleBs {
                     sap: Sap::LcmcSap,
                     src: TetraEntity::Mle,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LcmcMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -177,7 +163,6 @@ impl MleBs {
                     sap: Sap::LcmcSap,
                     src: TetraEntity::Mle,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LtpdMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -191,108 +176,9 @@ impl MleBs {
         }
     }
 
-    // fn rx_tla_unitdata_ind_bl(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
-    //     // TODO FIXME NOTE: This function is the same as the rx_tla_data_ind_bl.
-    //     // A cursory glance at the spec does not make clear the difference, except for the relation with
-    //     // either udata or data at the llc.
-    //     // It seems only the SNDCP uses unacknowledged TL-UNITDATA.
-    //     // We should investigate the exact differences and account for them
-
-    //     // Take ownership of bitbuf and read protocol discriminator
-    //     let SapMsgInner::TlaTlUnitdataIndBl(prim) = &mut message.msg else {
-    //         panic!()
-    //     };
-    //     let Some(mut sdu) = prim.tl_sdu.take() else { panic!("no tl_sdu") };
-    //     assert!(sdu.get_pos() == 0); // We should be at the start of the MAC PDU
-
-    //     let Some(bits) = sdu.read_bits(3) else {
-    //         tracing::warn!("insufficient bits: {}", sdu.dump_bin());
-    //         return;
-    //     };
-    //     let Ok(pdu_type) = MleProtocolDiscriminator::try_from(bits) else {
-    //         tracing::warn!("invalid pdu type: {} in {}", bits, sdu.dump_bin());
-    //         return;
-    //     };
-
-    //     // Dispatch to appropriate component (or to self if for MLE)
-    //     match pdu_type {
-    //         MleProtocolDiscriminator::Mm => {
-    //             tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-    //             let handle = self
-    //                 .router
-    //                 .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
-    //             let m = LmmMleUnitdataInd {
-    //                 sdu,
-    //                 handle,
-    //                 received_address: prim.main_address,
-    //             };
-    //             let msg = SapMsg {
-    //                 sap: Sap::LmmSap,
-    //                 src: TetraEntity::Mle,
-    //                 dest: TetraEntity::Mm,
-    //                 dltime: message.dltime,
-    //                 msg: SapMsgInner::LmmMleUnitdataInd(m),
-    //             };
-    //             queue.push_back(msg);
-    //         }
-    //         MleProtocolDiscriminator::Cmce => {
-    //             tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-    //             let handle = self
-    //                 .router
-    //                 .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
-    //             let m = LcmcMleUnitdataInd {
-    //                 sdu,
-    //                 handle,
-    //                 endpoint_id: prim.endpoint_id,
-    //                 link_id: prim.link_id,
-    //                 received_tetra_address: prim.main_address,
-    //                 chan_change_resp_req: false, // TODO FIXME
-    //                 chan_change_handle: None,    // TODO FIXME
-    //             };
-    //             let msg = SapMsg {
-    //                 sap: Sap::LcmcSap,
-    //                 src: TetraEntity::Mle,
-    //                 dest: TetraEntity::Cmce,
-    //                 dltime: message.dltime,
-    //                 msg: SapMsgInner::LcmcMleUnitdataInd(m),
-    //             };
-    //             queue.push_back(msg);
-    //         }
-    //         MleProtocolDiscriminator::Sndcp => {
-    //             let m = LtpdMleUnitdataInd {
-    //                 sdu,
-    //                 endpoint_id: prim.endpoint_id,
-    //                 link_id: prim.link_id,
-    //                 received_tetra_address: prim.main_address,
-    //                 chan_change_resp_req: false, // TODO FIXME
-    //                 chan_change_handle: None,    // TODO FIXME
-    //             };
-    //             let msg = SapMsg {
-    //                 sap: Sap::LcmcSap,
-    //                 src: TetraEntity::Mle,
-    //                 dest: TetraEntity::Cmce,
-    //                 dltime: message.dltime,
-    //                 msg: SapMsgInner::LtpdMleUnitdataInd(m),
-    //             };
-    //             queue.push_back(msg);
-    //         }
-    //         MleProtocolDiscriminator::Mle => {
-    //             self.rx_tla_mle_pdu(queue, message);
-    //         }
-    //         MleProtocolDiscriminator::TetraManagementEntity => {
-    //             unimplemented_log!("MleProtocolDiscriminator::TetraManagementEntity");
-    //         }
-    //     }
-    // }
-
     fn rx_tlmc_prim(&mut self, _queue: &mut MessageQueue, _message: SapMsg) {
         tracing::trace!("rx_tlmc_prim");
         unimplemented!("rx_tlmc_prim");
-        // match &message.msg {
-        //     _ => {
-        //         panic!();
-        //     }
-        // }
     }
 
     fn rx_lmm_mle_unitdata_req(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -316,7 +202,6 @@ impl MleBs {
             sap: Sap::TlaSap,
             src: TetraEntity::Mle,
             dest: TetraEntity::Llc,
-            dltime: message.dltime,
             msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
                 main_address: prim.address,
                 link_id: 0,
@@ -382,7 +267,6 @@ impl MleBs {
                 sap: Sap::TlaSap,
                 src: TetraEntity::Mle,
                 dest: TetraEntity::Llc,
-                dltime: message.dltime,
                 msg: SapMsgInner::TlaTlUnitdataReqBl(TlaTlUnitdataReqBl {
                     main_address: prim.main_address,
                     link_id: prim.link_id,
@@ -407,7 +291,6 @@ impl MleBs {
                 sap: Sap::TlaSap,
                 src: TetraEntity::Mle,
                 dest: TetraEntity::Llc,
-                dltime: message.dltime,
                 msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
                     main_address: prim.main_address,
                     link_id: prim.link_id,
@@ -451,7 +334,7 @@ impl TetraEntityTrait for MleBs {
         // Use a constant multiframe/frame offset to avoid congestion with other
         // hyperframe-triggered events.
         if ts.m == MLE_BROADCAST_MULTIFRAME && ts.f == MLE_BROADCAST_FRAME && ts.t == 1 {
-            self.broadcast.send_broadcast(queue, ts);
+            self.broadcast.send_broadcast(queue);
         }
     }
 

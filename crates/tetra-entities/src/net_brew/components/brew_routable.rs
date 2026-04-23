@@ -14,10 +14,11 @@ pub fn feature_sds_enabled(config: &SharedConfig) -> bool {
 
 /// Returns true if the configured Brew server is TetraPack (core.tetrapack.online)
 fn is_tetrapack(config: &SharedConfig) -> bool {
-    let Some(brew_config) = &config.config().brew else {
-        return false;
-    };
-    brew_config.host == "core.tetrapack.online"
+    if let Some(brew_config) = &config.config().brew {
+        brew_config.host == "core.tetrapack.online"
+    } else {
+        false
+    }
 }
 
 /// Determine if a given GSSI should be routed over Brew, or is restricted to local handling
@@ -26,10 +27,6 @@ pub fn is_brew_gssi_routable(config: &SharedConfig, ssi: u32) -> bool {
         // Brew not configured, so no routing to Brew
         return false;
     };
-    if is_tetrapack(config) && ssi <= 90 {
-        // TetraPack doesn't route 0..=90
-        return false;
-    }
     if config.config().cell.local_ssi_ranges.contains(ssi) {
         // Range overridden as local
         return false;
@@ -61,11 +58,4 @@ pub fn is_brew_issi_routable(config: &SharedConfig, issi: u32) -> bool {
     } else {
         true
     }
-}
-
-/// Check if an ISSI is a known TetraPack service destination for SDS.
-/// FIXME: move to config-based whitelist instead of hardcoding
-pub fn is_tetrapack_sds_service_issi(config: &SharedConfig, issi: u32) -> bool {
-    const TETRAPACK_SERVICE_ISSI: &[u32] = &[200999, 262993];
-    is_tetrapack(config) && TETRAPACK_SERVICE_ISSI.contains(&issi)
 }

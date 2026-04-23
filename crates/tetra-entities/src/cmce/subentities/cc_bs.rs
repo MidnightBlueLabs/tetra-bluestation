@@ -121,7 +121,6 @@ impl CcBsSubentity {
     fn build_sapmsg(
         sdu: BitBuffer,
         chan_alloc: Option<CmceChanAllocReq>,
-        dltime: TdmaTime,
         address: TetraAddress,
         layer2service: Layer2Service,
         reporter: Option<TxReporter>,
@@ -131,7 +130,6 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                 sdu,
                 handle: 0,
@@ -149,7 +147,7 @@ impl CcBsSubentity {
         }
     }
 
-    fn build_sapmsg_stealing(sdu: BitBuffer, dltime: TdmaTime, address: TetraAddress, ts: u8) -> SapMsg {
+    fn build_sapmsg_stealing(sdu: BitBuffer, address: TetraAddress, ts: u8) -> SapMsg {
         // For FACCH stealing on traffic channel, must specify target timeslot
         let mut timeslots = [false; 4];
         timeslots[(ts - 1) as usize] = true;
@@ -165,7 +163,6 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                 sdu,
                 handle: 0,
@@ -239,7 +236,6 @@ impl CcBsSubentity {
                         sap: Sap::Control,
                         src: TetraEntity::Cmce,
                         dest: TetraEntity::Brew,
-                        dltime: self.dltime,
                         msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
                     });
                 };
@@ -346,7 +342,6 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime: message.dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                 sdu,
                 handle: prim.handle,
@@ -366,7 +361,7 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
-    fn signal_umac_circuit_open(queue: &mut MessageQueue, call: &CmceCircuit, dltime: TdmaTime) {
+    fn signal_umac_circuit_open(queue: &mut MessageQueue, call: &CmceCircuit) {
         let circuit = Circuit {
             direction: call.direction,
             ts: call.ts,
@@ -379,18 +374,16 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::Open(circuit)),
         };
         queue.push_back(cmd);
     }
 
-    fn signal_umac_circuit_close(queue: &mut MessageQueue, circuit: CmceCircuit, dltime: TdmaTime) {
+    fn signal_umac_circuit_close(queue: &mut MessageQueue, circuit: CmceCircuit) {
         let cmd = SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::Close(circuit.direction, circuit.ts)),
         };
         queue.push_back(cmd);
@@ -464,7 +457,7 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL+UL circuits
-        Self::signal_umac_circuit_open(queue, &circuit, message.dltime);
+        Self::signal_umac_circuit_open(queue, &circuit);
 
         // Build channel allocation timeslot mask for this call
         let mut timeslots = [false; 4];
@@ -513,7 +506,6 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime: message.dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                 sdu: connect_sdu,
                 handle: ul_handle,
@@ -565,14 +557,7 @@ impl CcBsSubentity {
         let (d_setup_ref, _, _) = self.cached_setups.get(&circuit.call_id).unwrap();
 
         let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, circuit.usage, circuit.ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(
-            setup_sdu,
-            Some(setup_chan_alloc),
-            message.dltime,
-            dest_addr,
-            Layer2Service::Unacknowledged,
-            None,
-        );
+        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
         queue.push_back(setup_msg);
 
         // Track the active local call — caller is granted the floor, so tx_active = true
@@ -599,7 +584,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: message.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                     call_id: circuit.call_id,
                     source_issi: calling_party.ssi,
@@ -702,14 +686,7 @@ impl CcBsSubentity {
                         // Create a fresh txreporter for this re-send
                         let reporter = TxReporter::new();
 
-                        let prim = Self::build_sapmsg(
-                            sdu,
-                            Some(chan_alloc),
-                            self.dltime,
-                            dest_addr,
-                            Layer2Service::Unacknowledged,
-                            Some(reporter),
-                        );
+                        let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, Some(reporter));
                         queue.push_back(prim);
                     }
 
@@ -720,7 +697,7 @@ impl CcBsSubentity {
                         if let Some((pdu, dest_addr, _)) = self.cached_setups.get(&call_id) {
                             let dest_addr = *dest_addr;
                             let sdu = Self::build_d_release_from_d_setup(pdu, DisconnectCause::ExpiryOfTimer);
-                            let prim = Self::build_sapmsg(sdu, None, self.dltime, dest_addr, Layer2Service::Unacknowledged, None);
+                            let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
                             queue.push_back(prim);
                         } else {
                             tracing::error!("No cached D-SETUP for call id {}", call_id);
@@ -731,7 +708,7 @@ impl CcBsSubentity {
                         self.active_calls.remove(&call_id);
 
                         // Signal UMAC to release the circuit
-                        Self::signal_umac_circuit_close(queue, circuit, self.dltime);
+                        Self::signal_umac_circuit_close(queue, circuit);
                         self.release_timeslot(ts);
                     }
                 }
@@ -780,7 +757,15 @@ impl CcBsSubentity {
 
         // Send D-RELEASE to group
         let sdu = Self::build_d_release_from_d_setup(pdu, disconnect_cause);
-        let prim = Self::build_sapmsg(sdu, None, self.dltime, dest_addr, Layer2Service::Unacknowledged, None);
+        let prim = if let Some(ts) = self.active_calls.get(&call_id).map(|c| c.ts) {
+            Self::build_sapmsg_stealing(sdu, dest_addr, ts)
+        } else {
+            tracing::warn!(
+                "release_call: no active call state for call_id={}, sending D-RELEASE on MCCH",
+                call_id
+            );
+            Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None)
+        };
         queue.push_back(prim);
 
         // Close the circuit in CircuitMgr and notify Brew
@@ -790,7 +775,7 @@ impl CcBsSubentity {
             let is_local = matches!(call.origin, CallOrigin::Local { .. });
 
             if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
-                Self::signal_umac_circuit_close(queue, circuit, self.dltime);
+                Self::signal_umac_circuit_close(queue, circuit);
             }
 
             // Ensure UMAC clears hangtime even if the CMCE circuit was already closed above.
@@ -798,7 +783,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Umac,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
             });
 
@@ -811,7 +795,6 @@ impl CcBsSubentity {
                         sap: Sap::Control,
                         src: TetraEntity::Cmce,
                         dest: TetraEntity::Brew,
-                        dltime: self.dltime,
                         msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
                     };
                     queue.push_back(notify);
@@ -931,7 +914,7 @@ impl CcBsSubentity {
         tracing::info!("-> {:?} sdu {}", d_tx_ceased, sdu.dump_bin());
 
         // Send via FACCH (stealing channel) so radios on the traffic channel hear the beep
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
+        let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts);
         queue.push_back(msg);
 
         // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
@@ -939,7 +922,6 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
         });
 
@@ -949,7 +931,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
             });
         }
@@ -1035,7 +1016,7 @@ impl CcBsSubentity {
         tracing::info!("-> {:?} sdu {}", d_tx_granted_individual, sdu.dump_bin());
 
         let requesting_addr = TetraAddress::new(requesting_party.ssi, SsiType::Issi);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, requesting_addr, ts);
+        let msg = Self::build_sapmsg_stealing(sdu, requesting_addr, ts);
         queue.push_back(msg);
 
         // ETSI 14.5.2.2.1 b): Send group D-TX GRANTED (GrantedToOtherUser) to GSSI
@@ -1046,7 +1027,6 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                 call_id,
                 source_issi: requesting_party.ssi,
@@ -1064,7 +1044,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                     call_id,
                     source_issi: requesting_party.ssi,
@@ -1162,7 +1141,6 @@ impl CcBsSubentity {
                 sap: Sap::LcmcSap,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Mle,
-                dltime: self.dltime,
                 msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                     sdu,
                     handle: ul_handle,
@@ -1226,7 +1204,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
             });
             return;
@@ -1245,7 +1222,6 @@ impl CcBsSubentity {
                     sap: Sap::Control,
                     src: TetraEntity::Cmce,
                     dest: TetraEntity::Brew,
-                    dltime: self.dltime,
                     msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
                 });
                 return;
@@ -1288,7 +1264,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Umac,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                     call_id: call_id_val,
                     source_issi,
@@ -1302,7 +1277,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                     brew_uuid,
                     call_id: call_id_val,
@@ -1344,7 +1318,7 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL and UL circuits
-        Self::signal_umac_circuit_open(queue, &circuit, self.dltime);
+        Self::signal_umac_circuit_open(queue, &circuit);
 
         tracing::debug!(
             "CMCE: sending D-SETUP for NEW call call_id={} gssi={} (network-initiated)",
@@ -1386,14 +1360,7 @@ impl CcBsSubentity {
         let (d_setup_ref, _, _) = self.cached_setups.get(&call_id).unwrap();
 
         let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(
-            setup_sdu,
-            Some(setup_chan_alloc),
-            self.dltime,
-            dest_addr,
-            Layer2Service::Unacknowledged,
-            None,
-        );
+        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
         queue.push_back(setup_msg);
 
         // Send D-CONNECT to group
@@ -1421,7 +1388,6 @@ impl CcBsSubentity {
             sap: Sap::LcmcSap,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Mle,
-            dltime: self.dltime,
             msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
                 sdu: connect_sdu,
                 handle: 0, // Broadcast to group, no specific handle
@@ -1459,7 +1425,6 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Brew,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
                 brew_uuid,
                 call_id,
@@ -1508,7 +1473,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Umac,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
             });
         } else {
@@ -1541,7 +1505,7 @@ impl CcBsSubentity {
         tracing::info!("-> FACCH {:?} sdu {}", pdu, sdu.dump_bin());
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
+        let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts);
         queue.push_back(msg);
     }
 
@@ -1575,7 +1539,6 @@ impl CcBsSubentity {
             sap: Sap::Control,
             src: TetraEntity::Cmce,
             dest: TetraEntity::Umac,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
         });
 
@@ -1585,7 +1548,6 @@ impl CcBsSubentity {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
                 dest: TetraEntity::Brew,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
             });
         }
@@ -1608,7 +1570,7 @@ impl CcBsSubentity {
         tracing::info!("-> FACCH {:?} sdu {}", pdu, sdu.dump_bin());
 
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
-        let msg = Self::build_sapmsg_stealing(sdu, self.dltime, dest_addr, ts);
+        let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts);
         queue.push_back(msg);
     }
 }

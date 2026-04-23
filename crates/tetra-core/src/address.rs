@@ -10,6 +10,10 @@ pub enum SsiType {
     Gssi,
     Ussi,
     Smi,
+
+    /// Any type of encrypted SSI
+    Esi,
+
     /// Only usable in Umac, needs to be replaced with true SSI
     EventLabel,
 }
@@ -23,6 +27,7 @@ impl core::fmt::Display for SsiType {
             SsiType::Gssi => write!(f, "GSSI"),
             SsiType::Ussi => write!(f, "USSI"),
             SsiType::Smi => write!(f, "SMI"),
+            SsiType::Esi => write!(f, "ESI"),
             SsiType::EventLabel => write!(f, "EventLabel"),
         }
     }
@@ -32,18 +37,11 @@ impl core::fmt::Display for SsiType {
 pub struct TetraAddress {
     pub ssi: u32,
     pub ssi_type: SsiType,
-    /// Set to true if the address is an ESI (Encrypted Subscriber Identity)
-    /// We maintain this field to allow us to pass still-encrypted SSIs up the stack if we want to
-    pub encrypted: bool,
 }
 
 impl TetraAddress {
     pub fn new(ssi: u32, ssi_type: SsiType) -> Self {
-        Self {
-            ssi,
-            ssi_type,
-            encrypted: false,
-        }
+        Self { ssi, ssi_type }
     }
 
     /// Convenience constructor to create ISSI type address
@@ -54,10 +52,6 @@ impl TetraAddress {
 
 impl core::fmt::Display for TetraAddress {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if self.encrypted {
-            write!(f, "E_{}:{}", self.ssi_type, self.ssi)
-        } else {
-            write!(f, "{}:{}", self.ssi_type, self.ssi)
-        }
+        write!(f, "{}:{}", self.ssi_type, self.ssi)
     }
 }

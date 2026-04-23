@@ -63,8 +63,8 @@ pub struct ScheduledOutAck {
 }
 
 pub struct Llc {
-    dltime: TdmaTime,
     config: SharedConfig,
+    dltime: TdmaTime,
 
     /// When we receive a message, and it needs to be acknowledged, we store it here for later
     /// integration into a response message, or we will make a separate BL-ACK for it.
@@ -102,10 +102,17 @@ impl Llc {
         });
     }
 
-    /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number
-    fn get_out_ack_seq_if_any(&mut self, tn: u8, addr: TetraAddress) -> Option<u8> {
+    /// Returns details for outstanding to-be-sent ACK, if any. Returned u8 is the sequence number.
+    /// ETSI 22.3.2.3 case d: when a waiting ACK and outgoing TL-DATA exist for the same link, the
+    /// LLC shall emit a combined BL-ADATA PDU. Matching by SSI alone is correct today because all
+    /// downlink signalling funnels to ts1 (see dl_enqueue_tma in bs_sched), so any pending ACK
+    /// for this SSI will ride the same slot as the outgoing data.
+    /// TODO: once bs_sched's identify_timeslots_for_ssi is implemented and DL signalling can
+    /// land on non-ts1 slots, also match on the target timeslot to avoid bundling an ACK onto a
+    /// BL-DATA heading to a different slot than where the ACK was scheduled.
+    fn get_out_ack_seq_if_any(&mut self, addr: TetraAddress) -> Option<u8> {
         for i in 0..self.scheduled_out_acks.len() {
-            if self.scheduled_out_acks[i].t_start.t == tn && self.scheduled_out_acks[i].addr.ssi == addr.ssi {
+            if self.scheduled_out_acks[i].addr.ssi == addr.ssi {
                 let n = self.scheduled_out_acks[i].nr;
                 self.scheduled_out_acks.remove(i);
                 return Some(n);
@@ -211,7 +218,6 @@ impl Llc {
             sap: Sap::TmaSap,
             src: self.entity(),
             dest: TetraEntity::Umac,
-            dltime: message.dltime,
             msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
                 req_handle: prim.req_handle,
                 pdu: pdu_buf,
@@ -233,11 +239,8 @@ impl Llc {
 
     /// Schedules a message that was not acked in time for a retransmission
     fn submit_for_acknowledged_transmission(queue: &mut MessageQueue, ack: &mut ExpectedInAck, dltime: TdmaTime) {
-        // Clone the sapmsg, with update dltime
-        let mut sapmsg = ack.retransmission_buf.clone();
-        sapmsg.dltime = dltime;
-
-        // Make sure we set (or for retransmission: reset) timers properly
+        // Clone the sapmsg. Make sure we set (or for retransmission: reset) timers properly
+        let sapmsg = ack.retransmission_buf.clone();
         ack.t_submitted_to_umac = Some(dltime);
         ack.t_umac_done = None;
         ack.tx_reporter.reset();
@@ -261,7 +264,7 @@ impl Llc {
         }
 
         // If an ack still needs to be sent, get the relevant expected sequence number
-        let out_ack_n = self.get_out_ack_seq_if_any(message.dltime.t, prim.main_address);
+        let out_ack_n = self.get_out_ack_seq_if_any(prim.main_address);
 
         // Get per-link send sequence number N(S) = V(S), then toggle V(S)
         let ns = self.get_next_send_seq(&prim.main_address);
@@ -304,7 +307,6 @@ impl Llc {
             sap: Sap::TmaSap,
             src: self.entity(),
             dest: TetraEntity::Umac,
-            dltime: message.dltime,
             msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
                 req_handle: prim.req_handle,
                 pdu: pdu_buf,
@@ -321,13 +323,14 @@ impl Llc {
         };
 
         // Register that we expect an ACK for this message
+        tracing::warn!("setting expected ack for ts1, but that's not neccessarily correct");
         self.outbound_messages.push_back(ExpectedInAck {
             ns,
             addr: prim.main_address,
-            ts: sapmsg.dltime.t, // TODO FIXME
+            ts: 1,
             bl_type: Layer2Service::Acknowledged,
             tx_reporter,
-            t_first: sapmsg.dltime,
+            t_first: self.dltime,
             t_submitted_to_umac: None,
             t_umac_done: None,
             retransmission_buf: sapmsg, // Clone the message to keep a copy for potential retransmission
@@ -483,9 +486,10 @@ impl Llc {
         }
 
         // If ns is present, we need to send an ACK
+        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
         if let Some(ns) = ns {
             // Send ACK
-            self.schedule_outgoing_ack(message.dltime, prim.main_address, ns);
+            self.schedule_outgoing_ack(msg_dltime, prim.main_address, ns);
         }
 
         // if nr is present, we have received an ACK on a previous message
@@ -509,7 +513,7 @@ impl Llc {
             let m = TlaTlUnitdataIndBl {
                 // address_type: 0, // TODO FIXME
                 main_address: prim.main_address,
-                link_id: message.dltime.add_timeslots(-2).t as u32,
+                link_id: 0,
                 endpoint_id: prim.endpoint_id,
                 new_endpoint_id: prim.new_endpoint_id,
                 css_endpoint_id: prim.css_endpoint_id,
@@ -526,7 +530,6 @@ impl Llc {
                 sap: Sap::TlaSap,
                 src: TetraEntity::Llc,
                 dest: TetraEntity::Mle,
-                dltime: message.dltime,
                 msg: SapMsgInner::TlaTlUnitdataIndBl(m),
             }
         } else {
@@ -534,7 +537,7 @@ impl Llc {
             let m = TlaTlDataIndBl {
                 // address_type: 0, // TODO FIXME
                 main_address: prim.main_address,
-                link_id: message.dltime.add_timeslots(-2).t as u32,
+                link_id: 0,
                 endpoint_id: prim.endpoint_id,
                 new_endpoint_id: prim.new_endpoint_id,
                 css_endpoint_id: prim.css_endpoint_id,
@@ -551,7 +554,6 @@ impl Llc {
                 sap: Sap::TlaSap,
                 src: TetraEntity::Llc,
                 dest: TetraEntity::Mle,
-                dltime: message.dltime,
                 msg: SapMsgInner::TlaTlDataIndBl(m),
             }
         };
@@ -681,7 +683,6 @@ impl Llc {
             // We're sending an ACK for a received uplink message, however, we don't have that message here
             // Since DL is two slots ahead of UL, we will correct that. We now have the dltime for reception
             // of the original message.
-            let dltime = self.dltime.add_timeslots(-2);
             let chan_alloc = match steal {
                 true => {
                     let mut timeslots = [false; 4];
@@ -700,7 +701,6 @@ impl Llc {
                 sap: Sap::TmaSap,
                 src: TetraEntity::Llc,
                 dest: TetraEntity::Umac,
-                dltime,
                 msg: SapMsgInner::TmaUnitdataReq(TmaUnitdataReq {
                     req_handle: 0, // TODO FIXME
                     pdu: pdu_buf,

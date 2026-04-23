@@ -40,6 +40,9 @@ pub const SCH_HD_CAP: usize = 124;
 pub const SCH_F_CAP: usize = 268;
 pub const TCH_S_CAP: usize = 274;
 
+/// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
+pub const NUM_TIMESLOTS: usize = 4;
+
 #[derive(Debug)]
 pub struct PrecomputedUmacPdus {
     pub mac_sysinfo1: MacSysinfo,
@@ -415,16 +418,39 @@ impl BsChannelScheduler {
         self.dltx_queues[ts as usize - 1].push(elem);
     }
 
-    pub fn dl_enqueue_tma(&mut self, ts: u8, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
-        tracing::debug!(
-            "dl_enqueue_tma: ts {} enqueueing {} PDU {:?} SDU {}",
-            if tx_reporter.is_some() { "reported" } else { "" },
-            ts,
-            pdu,
-            sdu.dump_bin(),
-        );
-        let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
-        self.dltx_queues[ts as usize - 1].push(elem);
+    pub fn dl_enqueue_tma(&mut self, pdu: MacResource, sdu: BitBuffer, tx_reporter: Option<TxReporter>) {
+        // Get all timeslots on which a relevant MS is listening
+        // let timeslots: [u8; NUM_TIMESLOTS] = self.identify_timeslots_for_ssi(pdu.addr);
+        tracing::warn!("identify_timeslots_for_ssi not implemented yet, defaulting to ts1");
+        let timeslots: [u8; NUM_TIMESLOTS] = [1, 0, 0, 0];
+
+        // Queue the message for all timeslots on which we should transmit this message.
+        // The loop basically prevents cloning the last element.
+        for i in 0..NUM_TIMESLOTS {
+            let ts = timeslots[i];
+            let next_ts = if i < NUM_TIMESLOTS - 1 { timeslots[i + 1] } else { 0 };
+            assert!(ts > 0);
+
+            tracing::debug!(
+                "dl_enqueue_tma: ts {} enqueueing {} PDU {:?} SDU {}",
+                if tx_reporter.is_some() { "reported" } else { "" },
+                ts,
+                pdu,
+                sdu.dump_bin(),
+            );
+
+            if next_ts > 0 {
+                // There is another ts for which we need to transmit this message.
+                // Clone the message now and push it to the current ts.
+                let elem = DlSchedElem::Resource(pdu.clone(), sdu.clone(), tx_reporter.clone());
+                self.dltx_queues[ts as usize - 1].push(elem);
+            } else {
+                // This is the last ts on which we need to transmit this message
+                let elem = DlSchedElem::Resource(pdu, sdu, tx_reporter);
+                self.dltx_queues[ts as usize - 1].push(elem);
+                break;
+            }
+        }
     }
 
     /// Consumes and returns true if a pending random access ack exists for the given SSI on
@@ -1390,7 +1416,6 @@ mod tests {
         let mut sched = get_testing_slotter();
         let resreq = ReservationRequirement::Req1Subslot;
         let addr = TetraAddress {
-            encrypted: false,
             ssi_type: SsiType::Issi,
             ssi: 1234,
         };
@@ -1438,7 +1463,6 @@ mod tests {
         let mut sched = get_testing_slotter();
         let resreq1 = ReservationRequirement::Req1Subslot;
         let addr = TetraAddress {
-            encrypted: false,
             ssi_type: SsiType::Issi,
             ssi: 1234,
         };
@@ -1478,13 +1502,12 @@ mod tests {
         let mut sched = get_testing_slotter();
         let ts = TdmaTime::default();
         let addr = TetraAddress {
-            encrypted: false,
             ssi_type: SsiType::Issi,
             ssi: 1234,
         };
         let pdu = BsChannelScheduler::dl_make_minimal_resource(&addr, None, false);
         let sdu = BitBuffer::new(0);
-        sched.dl_enqueue_tma(ts.t, pdu, sdu, None);
+        sched.dl_enqueue_tma(pdu, sdu, None);
 
         let grant = BasicSlotgrant {
             capacity_allocation: BasicSlotgrantCapAlloc::FirstSubslotGranted,

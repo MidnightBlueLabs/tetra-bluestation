@@ -109,7 +109,7 @@ impl MacResource {
             MacResourceAddrType::Ssi => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
                 });
             }
@@ -119,21 +119,21 @@ impl MacResource {
             MacResourceAddrType::Ussi => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ussi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ussi,
                 });
             }
             MacResourceAddrType::Smi => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "smi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Smi,
                 });
             }
             MacResourceAddrType::SsiAndEventLabel => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
                 });
                 s.event_label = Some(buf.read_field(10, "event_label")? as u16);
@@ -141,7 +141,7 @@ impl MacResource {
             MacResourceAddrType::SsiAndUsageMarker => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "ssi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Ssi,
                 });
                 s.usage_marker = Some(buf.read_field(6, "usage_marker")? as u8);
@@ -149,7 +149,7 @@ impl MacResource {
             MacResourceAddrType::SmiAndEventLabel => {
                 s.addr = Some(TetraAddress {
                     ssi: buf.read_field(24, "smi")? as u32,
-                    encrypted: s.encryption_mode != 0,
+                    // encrypted: s.encryption_mode != 0,
                     ssi_type: SsiType::Smi,
                 });
                 s.event_label = Some(buf.read_field(10, "event_label")? as u16);
@@ -237,19 +237,19 @@ impl MacResource {
         match addr_type {
             MacResourceAddrType::NullPdu => {}
             MacResourceAddrType::Ssi | MacResourceAddrType::Ussi | MacResourceAddrType::Smi => {
-                assert!(self.addr.unwrap().encrypted == (self.encryption_mode != 0));
+                assert!((self.addr.unwrap().ssi_type == SsiType::Esi) == (self.encryption_mode != 0));
                 buf.write_bits(self.addr.unwrap().ssi as u64, 24);
             }
             MacResourceAddrType::EventLabel => {
                 buf.write_bits(self.event_label.unwrap() as u64, 10);
             }
             MacResourceAddrType::SsiAndEventLabel | MacResourceAddrType::SmiAndEventLabel => {
-                assert!(self.addr.unwrap().encrypted == (self.encryption_mode != 0));
+                assert!((self.addr.unwrap().ssi_type == SsiType::Esi) == (self.encryption_mode != 0));
                 buf.write_bits(self.addr.unwrap().ssi as u64, 24);
                 buf.write_bits(self.event_label.unwrap() as u64, 10);
             }
             MacResourceAddrType::SsiAndUsageMarker => {
-                assert!(self.addr.unwrap().encrypted == (self.encryption_mode != 0));
+                assert!((self.addr.unwrap().ssi_type == SsiType::Esi) == (self.encryption_mode != 0));
                 buf.write_bits(self.addr.unwrap().ssi as u64, 24);
                 buf.write_bits(self.usage_marker.unwrap() as u64, 6);
             }

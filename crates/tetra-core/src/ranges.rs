@@ -2,8 +2,14 @@
 pub struct SsiRange {
     /// Inclusive start of the range
     pub start: u32,
-    /// Exclusive end of the range. E.g. if end is 200, the last valid address in the range is 199.
+    /// Inclusive end of the range. E.g. if end is 199, it is considered part of the range
     pub end: u32,
+}
+
+impl SsiRange {
+    pub fn new(start: u32, end: u32) -> Self {
+        Self { start, end }
+    }
 }
 
 /// A sorted, non-overlapping (disjoint) list of SSI ranges.
@@ -22,7 +28,7 @@ impl SortedDisjointSsiRanges {
         for range in &ranges {
             assert!(range.start <= range.end, "Invalid SSI range: {:?}", range);
             assert!(range.start >= lower_bound, "SSI ranges overlap: {:?}", range);
-            lower_bound = range.end;
+            lower_bound = range.end + 1;
         }
         Self(ranges)
     }
@@ -40,12 +46,12 @@ impl SortedDisjointSsiRanges {
     }
 
     /// Checks if the given address falls within any of the ranges.
-    /// Note that range.end is exclusive, so if an address is exactly equal to range.end, it is not considered local.
+    /// Note that range.end is inclusive, so if an address is exactly equal to range.end, it is considered in the range.
     pub fn contains(&self, addr: u32) -> bool {
         // TODO FIXME this could technically be even faster by starting mid-list and doing binary search
         // Probably fine until we encounter tens of ranges
         for range in self.as_slice() {
-            if addr >= range.start && addr < range.end {
+            if addr >= range.start && addr <= range.end {
                 return true;
             }
             if range.end > addr {
@@ -84,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_adjacent_ranges() {
-        let ssi_ranges = vec![SsiRange { start: 100, end: 200 }, SsiRange { start: 200, end: 300 }];
+        let ssi_ranges = vec![SsiRange { start: 100, end: 199 }, SsiRange { start: 200, end: 300 }];
         SortedDisjointSsiRanges::from_vec_ssirange(ssi_ranges);
     }
 
@@ -93,7 +99,8 @@ mod tests {
         let ranges = SortedDisjointSsiRanges::from_vec_ssirange(vec![SsiRange { start: 100, end: 200 }, SsiRange { start: 400, end: 500 }]);
         assert!(ranges.contains(100));
         assert!(ranges.contains(150));
-        assert!(!ranges.contains(200));
+        assert!(ranges.contains(200));
+        assert!(!ranges.contains(201));
         assert!(!ranges.contains(250));
         assert!(ranges.contains(450));
     }

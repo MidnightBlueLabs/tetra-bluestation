@@ -1,5 +1,5 @@
 use tetra_config::bluestation::SharedConfig;
-use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity};
+use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity};
 use tetra_pdus::mle::{enums::mle_protocol_discriminator::MleProtocolDiscriminator, pdus::d_nwrk_broadcast::DNwrkBroadcast};
 use tetra_saps::{SapMsg, SapMsgInner, tla::TlaTlUnitdataReqBl};
 
@@ -29,13 +29,13 @@ impl MleBroadcast {
     }
 
     /// Send the next broadcast message based on the configured broadcast types and internal state.
-    pub fn send_broadcast(&mut self, queue: &mut MessageQueue, ts: TdmaTime) {
+    pub fn send_broadcast(&mut self, queue: &mut MessageQueue) {
         let broadcast_type = self.determine_next_broadcast_type();
         self.last_broadcast_type = broadcast_type;
 
         match broadcast_type {
             BroadcastType::NetworkTime => {
-                self.send_d_nwrk_broadcast(queue, ts);
+                self.send_d_nwrk_broadcast(queue);
             }
             BroadcastType::None => {
                 // No broadcast to send
@@ -57,7 +57,7 @@ impl MleBroadcast {
         }
     }
 
-    fn send_d_nwrk_broadcast(&self, queue: &mut MessageQueue, ts: TdmaTime) {
+    fn send_d_nwrk_broadcast(&self, queue: &mut MessageQueue) {
         // Timezone is validated at config parse time, so encode cannot fail here
         let tz = self.time_broadcast.as_deref().unwrap();
         let time_value = network_time::encode_tetra_network_time(tz).unwrap();
@@ -89,12 +89,10 @@ impl MleBroadcast {
             sap: Sap::TlaSap,
             src: TetraEntity::Mle,
             dest: TetraEntity::Llc,
-            dltime: ts,
             msg: SapMsgInner::TlaTlUnitdataReqBl(TlaTlUnitdataReqBl {
                 main_address: TetraAddress {
                     ssi: 0xFFFFFF,
                     ssi_type: SsiType::Gssi, // TODO FIXME is this actually the SMI?
-                    encrypted: false,
                 },
                 link_id: 0,
                 endpoint_id: 0,

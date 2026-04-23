@@ -203,7 +203,7 @@ fn main() {
     let stack_cfg = load_config_from_toml(&args.config);
     let mut cfg = SharedConfig::from_parts(stack_cfg, None);
 
-    let _log_guard = debug::setup_logging_default(cfg.config().debug_log.clone());
+    let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
     let (mut router, tsource, cdispatchers) = build_bs_stack(&mut cfg);
 
     // Start Telemetry and Control threads, if enabled

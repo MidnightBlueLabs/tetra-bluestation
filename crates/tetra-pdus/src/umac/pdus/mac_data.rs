@@ -39,9 +39,8 @@ impl MacData {
                 let ssi = buf.read_field(24, "ssi")? as u32;
                 let addr = TetraAddress {
                     ssi,
-                    ssi_type: SsiType::Ssi,
-                    encrypted,
-                }; // Either ISSI or GSSI
+                    ssi_type: SsiType::Issi, // Uplink, always ISSI
+                };
                 (Some(addr), None)
             }
             1 => {
@@ -53,7 +52,6 @@ impl MacData {
                 let addr = TetraAddress {
                     ssi,
                     ssi_type: SsiType::Ussi,
-                    encrypted,
                 };
                 (Some(addr), None)
             }
@@ -62,7 +60,6 @@ impl MacData {
                 let addr = TetraAddress {
                     ssi,
                     ssi_type: SsiType::Smi,
-                    encrypted,
                 };
                 (Some(addr), None)
             }
@@ -110,7 +107,7 @@ impl MacData {
 
         // If addr is given; we write one of three address types followed by the 24-bit addr
         if let Some(addr) = &self.addr {
-            assert!(addr.encrypted == self.encrypted);
+            assert!((addr.ssi_type == SsiType::Esi) == self.encrypted);
             match addr.ssi_type {
                 SsiType::Ssi | SsiType::Issi | SsiType::Gssi => {
                     buf.write_bits(0, 2);

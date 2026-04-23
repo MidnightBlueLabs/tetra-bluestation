@@ -207,6 +207,19 @@ where
 
 static INIT_LOG: Once = Once::new();
 
+/// Keep non-blocking tracing workers alive for the lifetime of the process.
+/// The contained guards are intentionally opaque; callers only need to hold
+/// the value so background log draining continues working.
+pub struct LogGuards {
+    _guards: Vec<WorkerGuard>,
+}
+
+impl LogGuards {
+    fn new(guards: Vec<WorkerGuard>) -> Option<Self> {
+        if guards.is_empty() { None } else { Some(Self { _guards: guards }) }
+    }
+}
+
 /// Sets up logging with maximum verbosity (trace level)
 /// Mainly for unit tests
 pub fn setup_logging_verbose() {
@@ -218,8 +231,8 @@ pub fn setup_logging_verbose() {
 }
 
 /// Sets up default logging to stdout and optionally, a verbose log file
-/// Returns a guard, that needs to be kept alive for logging to file to work
-pub fn setup_logging_default(verbose_logfile: Option<String>) -> Option<WorkerGuard> {
+/// Returns guards that must be kept alive for logging to continue working
+pub fn setup_logging_default(verbose_logfile: Option<String>) -> Option<LogGuards> {
     let stdout_filter = get_default_stdout_filter();
     let logfile_and_filter = if let Some(file) = verbose_logfile {
         Some((file, get_default_logfile_filter()))
@@ -268,10 +281,10 @@ fn get_default_logfile_filter() -> EnvFilter {
     EnvFilter::new("debug")
 }
 
-/// Sets up logging to stdout and optionally, a verbose log file
-/// If an output file  is requested, returns Some<WorkerGuard>. Keep this value alive
-/// or logging to file may cease working. If no output file is provided, returns None.
-fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>) -> Option<WorkerGuard> {
+/// Sets up logging to stdout and optionally, a verbose log file.
+/// Returns guards that must be kept alive for background log draining to continue.
+fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>) -> Option<LogGuards> {
+    let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
     if let Some((outfile, outfile_filter)) = outfile {
         // Setup logging with a verbose log file
         let file = OpenOptions::new()
@@ -279,7 +292,7 @@ fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>)
             .write(true)
             .open(outfile)
             .expect("Failed to open log file");
-        let (file_writer, guard) = tracing_appender::non_blocking(file);
+        let (file_writer, file_guard) = tracing_appender::non_blocking(file);
 
         // Setup once
         INIT_LOG.call_once(|| {
@@ -288,8 +301,7 @@ fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>)
                 .with_writer(file_writer)
                 .with_ansi(false);
 
-            // Change both here and below in the non-logfile variant.
-            let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter);
+            let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter).with_writer(stdout_writer);
 
             tracing_subscriber::registry()
                 .with(file_layer.with_filter(outfile_filter))
@@ -297,15 +309,14 @@ fn setup_logging(stdout_filter: EnvFilter, outfile: Option<(String, EnvFilter)>)
                 .init();
         });
 
-        Some(guard)
+        LogGuards::new(vec![stdout_guard, file_guard])
     } else {
         // Setup once
         INIT_LOG.call_once(|| {
-            // Change both here and below in the non-logfile variant.
-            let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter);
+            let stdout_layer = tracingfmt::layer().event_format(AlignedFormatter).with_writer(stdout_writer);
 
             tracing_subscriber::registry().with(stdout_layer.with_filter(stdout_filter)).init();
         });
-        None
+        LogGuards::new(vec![stdout_guard])
     }
 }

@@ -18,12 +18,11 @@ const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
 
 /// Helper: register a subscriber on a GSSI so CMCE accepts calls for that group.
-fn register_subscriber(test: &mut ComponentTest, dltime: TdmaTime, issi: u32, gssi: u32) {
+fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
     let register = SapMsg {
         sap: Sap::Control,
         src: TetraEntity::Mm,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
             issi,
             groups: vec![],
@@ -37,7 +36,6 @@ fn register_subscriber(test: &mut ComponentTest, dltime: TdmaTime, issi: u32, gs
         sap: Sap::Control,
         src: TetraEntity::Mm,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
             issi,
             groups: vec![gssi],
@@ -50,7 +48,7 @@ fn register_subscriber(test: &mut ComponentTest, dltime: TdmaTime, issi: u32, gs
 }
 
 /// Helper: build a U-SETUP SAP message for a group call.
-fn build_u_setup_msg(dltime: TdmaTime, calling_issi: u32, dest_gssi: u32) -> SapMsg {
+fn build_u_setup_msg(calling_issi: u32, dest_gssi: u32) -> SapMsg {
     let u_setup = USetup {
         area_selection: 0,
         hook_method_selection: false,
@@ -83,7 +81,6 @@ fn build_u_setup_msg(dltime: TdmaTime, calling_issi: u32, dest_gssi: u32) -> Sap
         sap: Sap::LcmcSap,
         src: TetraEntity::Mle,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
             sdu,
             handle: 1,
@@ -140,10 +137,10 @@ fn test_dsetup_late_entry_throttle() {
     let sinks = vec![TetraEntity::Mle, TetraEntity::Umac, TetraEntity::Brew];
     test.populate_entities(components, sinks);
 
-    register_subscriber(&mut test, dltime, TEST_ISSI, TEST_GSSI);
+    register_subscriber(&mut test, TEST_ISSI, TEST_GSSI);
 
     // Send U-SETUP to start a group call
-    let u_setup_msg = build_u_setup_msg(dltime, TEST_ISSI, TEST_GSSI);
+    let u_setup_msg = build_u_setup_msg(TEST_ISSI, TEST_GSSI);
     test.submit_message(u_setup_msg);
     test.run_stack(Some(1));
 

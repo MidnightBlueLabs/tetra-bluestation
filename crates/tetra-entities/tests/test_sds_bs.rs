@@ -27,7 +27,7 @@ fn affiliate_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
 }
 
 /// Helper: build a U-SDS-DATA message from a source ISSI to a dest SSI with 16-bit payload
-fn build_u_sds_data_msg(dltime: TdmaTime, source_issi: u32, dest_ssi: u32, payload: u16) -> SapMsg {
+fn build_u_sds_data_msg(source_issi: u32, dest_ssi: u32, payload: u16) -> SapMsg {
     let u_sds = USdsData {
         area_selection: 0,
         called_party_type_identifier: PartyTypeIdentifier::Ssi,
@@ -47,7 +47,6 @@ fn build_u_sds_data_msg(dltime: TdmaTime, source_issi: u32, dest_ssi: u32, paylo
         sap: Sap::LcmcSap,
         src: TetraEntity::Mle,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
             sdu,
             handle: 1,
@@ -89,7 +88,7 @@ fn test_sds_local_delivery() {
     register_subscriber(&mut test, 2000001);
 
     // Send U-SDS-DATA from source ISSI to registered dest ISSI
-    let msg = build_u_sds_data_msg(dltime, 1000001, 2000001, 0xABCD);
+    let msg = build_u_sds_data_msg(1000001, 2000001, 0xABCD);
     test.submit_message(msg);
     test.run_stack(Some(1));
 
@@ -132,7 +131,7 @@ fn test_sds_brew_forward() {
     test.populate_entities(components, sinks);
 
     // Do NOT register dest ISSI — should forward to Brew
-    let msg = build_u_sds_data_msg(dltime, 1000001, 5000001, 0x1234);
+    let msg = build_u_sds_data_msg(1000001, 5000001, 0x1234);
     test.submit_message(msg);
     test.run_stack(Some(1));
 
@@ -163,7 +162,6 @@ fn test_sds_from_brew_to_local() {
         sap: Sap::Control,
         src: TetraEntity::Brew,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::CmceSdsData(CmceSdsData {
             source_issi: 3000001,
             dest_issi: 2000001,
@@ -194,7 +192,6 @@ fn test_sds_from_brew_unregistered() {
         sap: Sap::Control,
         src: TetraEntity::Brew,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::CmceSdsData(CmceSdsData {
             source_issi: 3000001,
             dest_issi: 9999999,
@@ -229,7 +226,7 @@ fn test_sds_group_delivery() {
     }
 
     // Send U-SDS-DATA to the GSSI
-    let msg = build_u_sds_data_msg(dltime, 1000001, gssi, 0xBEEF);
+    let msg = build_u_sds_data_msg(1000001, gssi, 0xBEEF);
     test.submit_message(msg);
     test.run_stack(Some(1));
 
@@ -283,7 +280,6 @@ fn test_u_status_forwarded_as_d_status() {
         sap: Sap::LcmcSap,
         src: TetraEntity::Mle,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
             sdu,
             handle: 1,
@@ -358,7 +354,6 @@ fn test_u_status_brew_forward() {
         sap: Sap::LcmcSap,
         src: TetraEntity::Mle,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
             sdu,
             handle: 1,
@@ -426,7 +421,6 @@ fn test_u_status_unregistered_dest_dropped() {
         sap: Sap::LcmcSap,
         src: TetraEntity::Mle,
         dest: TetraEntity::Cmce,
-        dltime,
         msg: SapMsgInner::LcmcMleUnitdataInd(LcmcMleUnitdataInd {
             sdu,
             handle: 1,

@@ -25,8 +25,7 @@ impl DefragBuffer {
             state: DefragBufferState::Inactive,
             addr: TetraAddress {
                 ssi: 0,
-                ssi_type: SsiType::Unknown,
-                encrypted: false,
+                ssi_type: SsiType::Issi,
             },
             t_first: TdmaTime::default(),
             t_last: TdmaTime::default(),
@@ -40,8 +39,7 @@ impl DefragBuffer {
         self.state = DefragBufferState::Inactive;
         self.addr = TetraAddress {
             ssi: 0,
-            ssi_type: SsiType::Unknown,
-            encrypted: false,
+            ssi_type: SsiType::Issi,
         };
         self.t_first = TdmaTime::default();
         self.t_last = TdmaTime::default();

@@ -34,6 +34,8 @@ impl Default for LmacTrafficChan {
 // }
 
 pub struct LmacBs {
+    /// Timeslot time, provided by upper layer and then maintained in sync here
+    dltime: TdmaTime,
     config: SharedConfig,
 
     /// Cached from global config
@@ -43,9 +45,6 @@ pub struct LmacBs {
     /// Traffic channels and associated state
     // ul_circuits: [Option<LmacTrafficChan>; 4],
     // dl_circuits: [Option<LmacTrafficChan>; 4],
-
-    /// Timeslot time, provided by upper layer and then maintained in sync here
-    dltime: TdmaTime,
 
     /// Per-timeslot UL physical channel indicator from UMAC.
     /// UL bursts arrive 2 timeslots after the corresponding DL slot, so we must
@@ -206,13 +205,12 @@ impl LmacBs {
             sap: Sap::TmdSap,
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
-            dltime: ul_time,
             msg: SapMsgInner::TmdCircuitDataInd(tetra_saps::tmd::TmdCircuitDataInd { ts: ul_time.t, data }),
         };
         queue.push_back(msg);
     }
 
-    fn rx_blk_control(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel, ul_time: TdmaTime) {
+    fn rx_blk_control(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel) {
         assert!(
             lchan.is_control_channel(),
             "rx_blk_cp: lchan {:?} is not a signalling channel",
@@ -241,7 +239,6 @@ impl LmacBs {
             sap: Sap::TmvSap,
             src: TetraEntity::Lmac,
             dest: TetraEntity::Umac,
-            dltime: ul_time,
             msg: SapMsgInner::TmvUnitdataInd(TmvUnitdataInd {
                 pdu: type1bits,
                 logical_channel: lchan,
@@ -260,11 +257,10 @@ impl LmacBs {
     fn rx_tp_prim(&mut self, queue: &mut MessageQueue, message: SapMsg) {
         tracing::debug!("rx_tp_prim: msg {:?}", message);
 
-        let ul_time = message.dltime;
         let SapMsgInner::TpUnitdataInd(prim) = message.msg else { panic!() };
 
-        // let pchan = self.determine_phy_chan_ul();
-        let ts_idx = ul_time.t as usize - 1;
+        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
+        let ts_idx = msg_dltime.t as usize - 1;
         let pchan = self.uplink_phy_chan[ts_idx];
         let lchan = Self::determine_logical_channel_ul(&prim, pchan == PhysicalChannel::Tp, self.blk2_stolen);
 
@@ -281,10 +277,10 @@ impl LmacBs {
         match lchan {
             LogicalChannel::Clch => {}
             LogicalChannel::TchS | LogicalChannel::Tch24 | LogicalChannel::Tch48 | LogicalChannel::Tch72 => {
-                self.rx_blk_traffic(queue, prim, lchan, ul_time)
+                self.rx_blk_traffic(queue, prim, lchan, msg_dltime)
             }
             LogicalChannel::SchF | LogicalChannel::SchHu | LogicalChannel::Stch => {
-                self.rx_blk_control(queue, prim, lchan, ul_time);
+                self.rx_blk_control(queue, prim, lchan);
             }
             _ => {
                 panic!()
@@ -375,7 +371,6 @@ impl LmacBs {
             sap: Sap::TpSap,
             src: TetraEntity::Lmac,
             dest: TetraEntity::Phy,
-            dltime: self.dltime,
             msg: SapMsgInner::TpUnitdataReq(prim_phy),
         };
         queue.push_back(m);

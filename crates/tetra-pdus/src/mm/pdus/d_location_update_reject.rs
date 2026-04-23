@@ -4,6 +4,7 @@ use tetra_core::expect_pdu_type;
 use tetra_core::typed_pdu_fields::*;
 use tetra_core::{BitBuffer, pdu_parse_error::PduParseErr};
 
+use crate::mm::enums::location_update_type::LocationUpdateType;
 use crate::mm::enums::mm_pdu_type_dl::MmPduTypeDl;
 use crate::mm::enums::type34_elem_id_dl::MmType34ElemIdDl;
 
@@ -17,7 +18,7 @@ use crate::mm::enums::type34_elem_id_dl::MmType34ElemIdDl;
 #[derive(Debug)]
 pub struct DLocationUpdateReject {
     /// Type1, 3 bits, Location update type
-    pub location_update_type: u8,
+    pub location_update_type: LocationUpdateType,
     /// Type1, 5 bits, Reject cause
     pub reject_cause: u8,
     /// Type1, 1 bits, Cipher control
@@ -41,7 +42,8 @@ impl DLocationUpdateReject {
         expect_pdu_type!(pdu_type, MmPduTypeDl::DLocationUpdateReject)?;
 
         // Type1
-        let location_update_type = buffer.read_field(3, "location_update_type")? as u8;
+        let location_update_type = buffer.read_field(3, "location_update_type")?;
+        let location_update_type = LocationUpdateType::try_from(location_update_type).unwrap(); // never fails
         // Type1
         let reject_cause = buffer.read_field(5, "reject_cause")? as u8;
         // Type1

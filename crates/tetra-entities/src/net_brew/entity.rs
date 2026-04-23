@@ -347,7 +347,6 @@ impl BrewEntity {
                     sap: Sap::Control,
                     src: TetraEntity::Brew,
                     dest: TetraEntity::Cmce,
-                    dltime: self.dltime,
                     msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
                         brew_uuid: uuid,
                         source_issi,
@@ -391,7 +390,6 @@ impl BrewEntity {
                 sap: Sap::Control,
                 src: TetraEntity::Brew,
                 dest: TetraEntity::Cmce,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
                     brew_uuid: uuid,
                     source_issi,
@@ -429,7 +427,6 @@ impl BrewEntity {
             sap: Sap::Control,
             src: TetraEntity::Brew,
             dest: TetraEntity::Cmce,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
                 brew_uuid: uuid,
                 source_issi,
@@ -460,7 +457,6 @@ impl BrewEntity {
             sap: Sap::Control,
             src: TetraEntity::Brew,
             dest: TetraEntity::Cmce,
-            dltime: self.dltime,
             msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: uuid }),
         });
 
@@ -582,7 +578,6 @@ impl BrewEntity {
                 sap: Sap::TmdSap,
                 src: TetraEntity::Brew,
                 dest: TetraEntity::Umac,
-                dltime: self.dltime,
                 msg: SapMsgInner::TmdCircuitDataReq(TmdCircuitDataReq {
                     ts,
                     data: frame.acelp_data,
@@ -601,7 +596,6 @@ impl BrewEntity {
                 sap: Sap::Control,
                 src: TetraEntity::Brew,
                 dest: TetraEntity::Cmce,
-                dltime: self.dltime,
                 msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: uuid }),
             });
         }
@@ -741,16 +735,6 @@ impl BrewEntity {
             );
             return;
         }
-        // TODO: Check if local
-        // if dest_gssi == 9 {
-        //     tracing::debug!(
-        //         "BrewEntity: suppressing local call forwarding for TG 9 (call_id={} src={} ts={})",
-        //         call_id,
-        //         source_issi,
-        //         ts
-        //     );
-        //     return;
-        // }
 
         // If we're already forwarding on this timeslot, treat as a talker change/update
         if let Some(fwd) = self.ul_forwarded.get_mut(&ts) {
@@ -953,7 +937,6 @@ impl BrewEntity {
             sap: Sap::Control,
             src: TetraEntity::Brew,
             dest: TetraEntity::Cmce,
-            dltime: self.dltime.forward_to_timeslot(1),
             msg: SapMsgInner::CmceSdsData(CmceSdsData {
                 source_issi: source,
                 dest_issi: destination,
