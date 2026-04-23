@@ -315,6 +315,7 @@ impl CircuitMgr {
                     // Send D-SETUP for the initial frame + 1 backup frame after circuit creation.
                     // Matches ETSI Annex D Figure D.2: 1 initial + 1 back-up on MCCH.
                     if age < frames!(D_SETUP_REPEATS) {
+                        tracing::debug!("CircuitMgr: Sending initial D-SETUP backup for circuit {:?} (age {} frames)", circuit, age);
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
@@ -323,6 +324,7 @@ impl CircuitMgr {
                     // Compare in frames (age/4) since tick_start only fires on t==1
                     // but ts_created may have any timeslot value.
                     else if (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0 {
+                        tracing::debug!("CircuitMgr: Sending late-entry D-SETUP for circuit {:?} (age {} frames)", circuit, age);
                         tasks
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));

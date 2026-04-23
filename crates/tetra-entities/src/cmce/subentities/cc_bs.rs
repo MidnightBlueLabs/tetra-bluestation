@@ -684,7 +684,10 @@ impl CcBsSubentity {
                         let (sdu, chan_alloc) = Self::build_d_setup_prim(pdu, usage, ts, UlDlAssignment::Both);
 
                         // Create a fresh txreporter for this re-send
-                        let reporter = TxReporter::new();
+                        let reporter = TxReporter::new_unacked();
+
+                        // Cache the setup in cached_setups with the reporter so we can check its state on the next tick and throttle if it's still pending in UMAC
+                        *receipt = Some(reporter.clone());
 
                         let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, Some(reporter));
                         queue.push_back(prim);
