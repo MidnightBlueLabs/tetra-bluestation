@@ -1012,7 +1012,7 @@ impl BsChannelScheduler {
 
         // Populate blk1 if empty: BSCH on frame 18, SCH/HD on other frames
         if elem.blk1.is_none() {
-            elem.blk1 = Some(self.generate_default_blk1(ts));
+            elem.blk1 = Some(self.generate_default_blks(ts));
         };
 
         // Check if second block may still be populated (blk1 is half-slot and blk2 is None)
@@ -1214,63 +1214,46 @@ impl BsChannelScheduler {
         }
     }
 
-    /// Generate a default block 1 for the given timeslot, if no traffic or signalling blocks are scheduled.
-    /// Block 2 will be automatically populated (for half-slot block 1) or left empty (for full-slot block 1) by the caller.
-    fn generate_default_blk1(&self, ts: TdmaTime) -> TmvUnitdataReq {
+    fn generate_default_blks(&self, ts: TdmaTime) -> TmvUnitdataReq {
         match (ts.f, ts.t) {
-
-            // On the MCCH, every frame except frame 18...
             (1..=17, 1) => {
-                // Full-slot Null PDU
-                let mut buf = BitBuffer::new(SCH_F_CAP);
-                let blk = MacResource::null_pdu();
-                blk.to_bitbuf(&mut buf);
-                TmvUnitdataReq {
-                    logical_channel: LogicalChannel::SchF,
-                    mac_block: buf,
-                    scrambling_code: self.scrambling_code,
+                // Two options: [Blk1: SCH/HD Null | Blk2: BNCH SYSINFO] or [Both: SCH/F Null]
+                // Alternate every frame
+                match ts.f % 2 {
+                    0 => {
+                        // Half-slot Null PDU on SCH/HD, SYSINFO gets added later as BNCH blk2
+                        let mut buf1 = BitBuffer::new(SCH_HD_CAP);
+                        let blk1 = MacResource::null_pdu();
+                        blk1.to_bitbuf(&mut buf1);
+                        TmvUnitdataReq {
+                            logical_channel: LogicalChannel::SchHd,
+                            mac_block: buf1,
+                            scrambling_code: self.scrambling_code,
+                        }
+                    }
+                    1 => {
+                        // Full-slot Null PDU
+                        let mut buf = BitBuffer::new(SCH_F_CAP);
+                        let blk = MacResource::null_pdu();
+                        blk.to_bitbuf(&mut buf);
+                        TmvUnitdataReq {
+                            logical_channel: LogicalChannel::SchF,
+                            mac_block: buf,
+                            scrambling_code: self.scrambling_code,
+                        }
+                    }
+                    _ => panic!(), // never happens
                 }
             }
-
-            // On all other slots in frames 1-17, and in every slot on frame 18...
             (1..=17, 2..=4) | (18, _) => {
-
-                // Mandatory BSCH (which will only be in Frame 18)?
-                if ts.is_mandatory_bsch() {
-                    // SYNC + (SYSINFO added later)
-                    let mut buf = BitBuffer::new(60);
-                    self.precomps.mac_sync.to_bitbuf(&mut buf);
-                    self.precomps.mle_sync.to_bitbuf(&mut buf);
-                    return TmvUnitdataReq {
-                        logical_channel: LogicalChannel::Bsch,
-                        mac_block: buf,
-                        scrambling_code: scrambler::SCRAMB_INIT,
-                    };
-                }
-
-                // Mandatory BNCH (which will only be in Frame 18)?
-                if ts.is_mandatory_bnch() {
-                    // SCH/HD + (SYSINFO added later)
-                    let mut buf1 = BitBuffer::new(SCH_HD_CAP);
-                    let blk1 = MacResource::null_pdu();
-                    blk1.to_bitbuf(&mut buf1);
-                    return TmvUnitdataReq {
-                        logical_channel: LogicalChannel::SchHd,
-                        mac_block: buf1,
-                        scrambling_code: self.scrambling_code,
-                    };
-                }
-
-                // Otherwise, a full-slot Null PDU
-                // TODO FIXME: Seem to remember two half-slots are the standard, but currently
-                // TODO FIXME: finalize_ts_for_tick() will stick a SYSINFO in the second half...
-                let mut buf = BitBuffer::new(SCH_F_CAP);
-                let blk = MacResource::null_pdu();
-                blk.to_bitbuf(&mut buf);
+                // SYNC + SYSINFO (added later)
+                let mut buf = BitBuffer::new(60);
+                self.precomps.mac_sync.to_bitbuf(&mut buf);
+                self.precomps.mle_sync.to_bitbuf(&mut buf);
                 TmvUnitdataReq {
-                    logical_channel: LogicalChannel::SchF,
+                    logical_channel: LogicalChannel::Bsch,
                     mac_block: buf,
-                    scrambling_code: self.scrambling_code,
+                    scrambling_code: scrambler::SCRAMB_INIT,
                 }
             }
             _ => panic!(), // never happens
