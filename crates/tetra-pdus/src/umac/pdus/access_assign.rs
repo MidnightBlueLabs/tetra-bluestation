@@ -49,11 +49,11 @@ impl Default for AccessAssign {
         AccessAssign::DownlinkCommonControlUplinkCommonOnly {
             access_field_1: AccessField {
                 access_code: AccessCode::AccessCodeA,
-                base_frame_len: BaseFrameLength::Subslots10
+                base_frame_len: BaseFrameLength::Subslots1
             },
             access_field_2: AccessField {
                 access_code: AccessCode::AccessCodeA,
-                base_frame_len: BaseFrameLength::Subslots10
+                base_frame_len: BaseFrameLength::Subslots1
              }
         }
     }

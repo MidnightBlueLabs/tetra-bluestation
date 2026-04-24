@@ -12,6 +12,8 @@ pub enum BaseFrameLength {
     /// Ongoing Frame, a continuation of the ongoing random access frame
     OngoingFrame,
 
+    // The following options indicate the start of a new random access frame, which continues for
+    // the specified number of subslots.
     Subslots1,
     Subslots2,
     Subslots3,

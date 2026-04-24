@@ -1096,49 +1096,65 @@ impl BsChannelScheduler {
 
             let aach = match ts.t {
 
+                // MCCH (TS1)
                 1 => {
-                    // TODO FIXME check spec to confirm
-                    // TODO FIXME AFAIK, in Normal Control Mode (I.e. not Minimum Control Mode), MCCH is *always* signalling
-                    assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
-                    assert!(ul_traffic_usage.is_none(), "UL ts 1 can't be traffic (is this allowed?");
 
-                    // Always CommonOnly on TS1 (MCCH). Per ETSI 23.5.2.2.2, the MS
-                    // with a grant transmits in granted slots without checking the AACH.
+                    // 23.3.1.1.2
+                    // "During normal mode operation, it shall always be assumed that slot 1 on the
+                    // downlink is for common control as part of the MCCH."
+                    assert!(dl_traffic_usage.is_none(), "DL ts 1 can't be traffic");
+
+                    // TODO FIXME: It *is* possible for UL TS1 to carry traffic.
+                    //
+                    // 23.3.4 Independent allocation of uplink and downlink
+                    // "A BS may allocate uplink and downlink channels for different purposes. Some examples are listed below:"
+                    // "[...] common control on downlink MCCH (slot 1); uplink slot 1 of main carrier allocated for a circuit mode call;"
+                    //
+                    // That said, it's not something that tetra-bluestation does right now, so this assert is still sensible.
+                    assert!(ul_traffic_usage.is_none(), "UL TS 1 can't currently be traffic");
+
+                    // Indicate any reserved slots in the uplink with base_frame_len=ReservedSubslot
                     AccessAssign::DownlinkCommonControlUplinkCommonOnly {
                         access_field_1: AccessField {
                             access_code: AccessCode::AccessCodeA,
-                            base_frame_len: BaseFrameLength::Subslots10,
+                            base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block1).is_some() {
+                                BaseFrameLength::ReservedSubslot
+                            } else {
+                                BaseFrameLength::Subslots1
+                            }
                         },
                         access_field_2: AccessField {
                             access_code: AccessCode::AccessCodeA,
-                            base_frame_len: BaseFrameLength::Subslots10,
+                            base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
+                                BaseFrameLength::ReservedSubslot
+                            } else {
+                                BaseFrameLength::Subslots1
+                            }
                         },
                     }
 
                 },
 
+                // Additional channels (TS2..TS4)
                 2..=4 => {
 
-                    // Additional channels (TS2..TS4).
-                    // Normal operation: Traffic(usage) when a circuit is active, else Unallocated.
-                    // Hangtime: immediately switch AACH to AssignedControl so radios
-                    // detect the end of traffic in the same frame as D-TX CEASED.
-                    // The timeslot may still be in traffic mode (for STCH delivery) but
-                    // the AACH reflects the new channel state.
-                    let in_hangtime = (2..=4).contains(&ts.t) && self.hangtime[ts.t as usize - 1];
+                    if self.is_hangtime(ts.t) && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
 
-                    if in_hangtime && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
-
+                        // Hangtime: immediately switch AACH to AssignedControl so radios
+                        // detect the end of traffic in the same frame as D-TX CEASED.
+                        // The timeslot may still be in traffic mode (for STCH delivery) but
+                        // the AACH reflects the new channel state.
                         AccessAssign::DownlinkDefinedUplinkAssignedOnly {
                             downlink_usage_marker: AccessAssignDlUsage::AssignedControl,
                             access_field: AccessField {
                                 access_code: AccessCode::AccessCodeA,
-                                base_frame_len: BaseFrameLength::Subslots10,
+                                base_frame_len: BaseFrameLength::Subslots1,
                             },
                         }
 
                     } else {
 
+                        // Normal operation: Traffic(usage) when a circuit is active, else Unallocated
                         AccessAssign::DownlinkDefinedUplinkDefined {
                             downlink_usage_marker: if let Some(usage) = dl_traffic_usage {
                                 AccessAssignDlUsage::Traffic(usage)
@@ -1165,24 +1181,26 @@ impl BsChannelScheduler {
             // Frame 18 is the Control Frame, which cannot contain traffic
             assert!(ul_traffic_usage.is_none() && dl_traffic_usage.is_none());
 
-            // Mark CLCH opportunities as required
-            // 23.4.5.1 "The MS may linearize during these subslots without checking the
-            // ACCESS-ASSIGN PDU contents but the BS should set the ACCESS-ASSIGN PDU appropriately
-            // to indicate a CLCH opportunity."
-            let base_frame_len = if ts.is_mandatory_clch() {
-                BaseFrameLength::CLCHSubslot
-            } else {
-                BaseFrameLength::Subslots10
-            };
-
             let aach = AccessAssignFr18::UplinkCommonOnly {
                 access_field_1: AccessField {
                     access_code: AccessCode::AccessCodeA,
-                    base_frame_len
+                    base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
+                        // Subslot is reserved in the uplink
+                        BaseFrameLength::ReservedSubslot
+                    } else if ts.is_mandatory_clch() {
+                        // CLCH opportunity (which is always in SSN1, see EN 300 392 §9.5.1 Table 9.27)
+                        BaseFrameLength::CLCHSubslot
+                    } else {
+                        BaseFrameLength::Subslots1
+                    }
                 },
                 access_field_2: AccessField {
                     access_code: AccessCode::AccessCodeA,
-                    base_frame_len
+                    base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
+                        BaseFrameLength::ReservedSubslot
+                     } else {
+                        BaseFrameLength::Subslots1
+                    }
                 },
             };
 
