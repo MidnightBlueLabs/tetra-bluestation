@@ -42,6 +42,9 @@ pub const SCH_HD_CAP: usize = 124;
 pub const SCH_F_CAP: usize = 268;
 pub const TCH_S_CAP: usize = 274;
 
+// The default access frame marker used in access fields
+const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots32;
+
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
 
@@ -1120,7 +1123,7 @@ impl BsChannelScheduler {
                             base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block1).is_some() {
                                 BaseFrameLength::ReservedSubslot
                             } else {
-                                BaseFrameLength::Subslots1
+                                DEFAULT_ACCESS_FRAME_MARKER
                             }
                         },
                         access_field_2: AccessField {
@@ -1128,7 +1131,7 @@ impl BsChannelScheduler {
                             base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
                                 BaseFrameLength::ReservedSubslot
                             } else {
-                                BaseFrameLength::Subslots1
+                                DEFAULT_ACCESS_FRAME_MARKER
                             }
                         },
                     }
@@ -1148,7 +1151,7 @@ impl BsChannelScheduler {
                             downlink_usage_marker: AccessAssignDlUsage::AssignedControl,
                             access_field: AccessField {
                                 access_code: AccessCode::AccessCodeA,
-                                base_frame_len: BaseFrameLength::Subslots1,
+                                base_frame_len: DEFAULT_ACCESS_FRAME_MARKER,
                             },
                         }
 
@@ -1191,7 +1194,7 @@ impl BsChannelScheduler {
                         // CLCH opportunity (which is always in SSN1, see EN 300 392 §9.5.1 Table 9.27)
                         BaseFrameLength::CLCHSubslot
                     } else {
-                        BaseFrameLength::Subslots1
+                        DEFAULT_ACCESS_FRAME_MARKER
                     }
                 },
                 access_field_2: AccessField {
@@ -1199,7 +1202,7 @@ impl BsChannelScheduler {
                     base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
                         BaseFrameLength::ReservedSubslot
                      } else {
-                        BaseFrameLength::Subslots1
+                        DEFAULT_ACCESS_FRAME_MARKER
                     }
                 },
             };
