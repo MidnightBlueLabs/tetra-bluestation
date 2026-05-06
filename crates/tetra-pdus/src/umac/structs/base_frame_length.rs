@@ -9,11 +9,10 @@ pub enum BaseFrameLength {
     /// CLCH opportunity - Access Code is meaningless in this Access Field (common access for linearisation only)
     CLCHSubslot,
 
-    /// Ongoing Frame, a continuation of the ongoing random access frame
+    /// Ongoing Frame, a continuation of the ongoing access frame
     OngoingFrame,
 
-    // The following options indicate the start of a new random access frame, which continues for
-    // the specified number of subslots.
+    // The following options indicate the start of a new access frame
     Subslots1,
     Subslots2,
     Subslots3,
