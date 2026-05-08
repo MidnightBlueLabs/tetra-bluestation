@@ -1187,7 +1187,7 @@ impl BsChannelScheduler {
             let aach = AccessAssignFr18::UplinkCommonOnly {
                 access_field_1: AccessField {
                     access_code: AccessCode::AccessCodeA,
-                    base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
+                    base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block1).is_some() {
                         // Subslot is reserved in the uplink
                         BaseFrameLength::ReservedSubslot
                     } else if ts.is_mandatory_clch() {
@@ -1577,4 +1577,101 @@ mod tests {
 
         assert!(sched.dltx_queues[ts.t as usize - 1].len() == 1);
     }
+
+    #[test]
+    fn test_dl_indicates_reserved_subslots() {
+
+        let mut sched = get_testing_slotter();
+        let mut ts = TdmaTime::default();
+
+        // Add a reservation for TS1, both subslots in the third occurrence of TS1
+        sched.ulsched[0][2] = TimeslotSchedule {
+            ul1: Some(1),
+            ul2: Some(1),
+        };
+
+        // Generate the next 4 frames to see how the reserved subslots are indicated in the BBK block
+        for i in 0..4 {
+            let bbk = sched.generate_bbk_block(ts);
+            let mut aach_buf = bbk.mac_block.clone();
+            aach_buf.seek(0);
+
+            // Decode the AACH (which in this test will always be the F1-17 format)
+            let access_assign = AccessAssign::from_bitbuf(&mut aach_buf)
+                .expect("Failed to decode AACH block");
+            tracing::debug!("Decoded AACH: {:?}", access_assign);
+
+            // Third occurrence should have both slots reserved
+            let expected_subslot_bfl = if i == 2 {
+                BaseFrameLength::ReservedSubslot
+            } else {
+                DEFAULT_ACCESS_FRAME_MARKER
+            };
+
+            match access_assign {
+                AccessAssign::DownlinkCommonControlUplinkCommonOnly { access_field_1, access_field_2 } => {
+                    assert_eq!(
+                        access_field_1.base_frame_len, expected_subslot_bfl,
+                        "Unexpected base frame length for access field 1 on TS1 occurrence {}",
+                        i + 1
+                    );
+                    assert_eq!(
+                        access_field_2.base_frame_len, expected_subslot_bfl,
+                        "Unexpected base frame length for access field 2 on TS1 occurrence {}",
+                        i + 1
+                    );
+                },
+                _ => panic!("Expected DownlinkCommonControlUplinkCommonOnly format for TS1"),
+            }
+
+            // Move on to the next occurrence of TS1
+            ts = ts.add_timeslots(4);
+        }
+    }
+
+    #[test]
+    fn test_dl_indicates_clch_opportunities() {
+        let sched = get_testing_slotter();
+
+        // Frame 18
+        let mut ts = TdmaTime {
+            t: 1,
+            f: 18,
+            m: 1,
+            h: 0,
+        };
+
+        // Generate the next 4 frames to make sure CLCH is correctly indicated
+        for _ in 0..4 {
+
+            let bbk = sched.generate_bbk_block(ts);
+            let mut aach_buf = bbk.mac_block.clone();
+            aach_buf.seek(0);
+
+            // Decode the AACH (which in this test will always be the frame 18 format)
+            let access_assign = AccessAssignFr18::from_bitbuf(&mut aach_buf)
+                .expect("Failed to decode AACH block");
+            tracing::debug!("Decoded AACH: {:?}", access_assign);
+
+            // For MN=1, F=18, T=2, SSN1 should be CLCH (when F == 18 and T == 4 - ((M + 1) % 4), otherwise default
+            let expected_subslot_bfl = if ts.t == 2 {
+                BaseFrameLength::CLCHSubslot
+            } else {
+                DEFAULT_ACCESS_FRAME_MARKER
+            };
+
+            match access_assign {
+                AccessAssignFr18::UplinkCommonOnly { access_field_1, .. } => {
+                    assert_eq!(
+                        access_field_1.base_frame_len, expected_subslot_bfl,
+                        "Unexpected base frame length for access field 1 on frame 18"
+                    );
+                },
+                _ => panic!("Expected AccessAssignFr18::UplinkCommonOnly format for frame 18"),
+            }
+
+            ts = ts.add_timeslots(1);
+        }
+    }
+
 }

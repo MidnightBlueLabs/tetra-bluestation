@@ -1,6 +1,6 @@
 use core::fmt;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaseFrameLength {
 
     /// Essentially "already assigned" - Access Code is meaningless in this Access Field
