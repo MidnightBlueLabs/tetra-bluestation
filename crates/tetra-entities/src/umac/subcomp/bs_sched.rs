@@ -43,7 +43,7 @@ pub const SCH_F_CAP: usize = 268;
 pub const TCH_S_CAP: usize = 274;
 
 // The default access frame marker used in access fields
-const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots32;
+const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots2;
 
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
