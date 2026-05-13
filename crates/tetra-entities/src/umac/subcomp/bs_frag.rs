@@ -1,7 +1,7 @@
 use std::cmp::min;
 
 use tetra_core::{BitBuffer, TxReporter};
-
+use tetra_pdus::umac::fields::channel_allocation::ChanAllocElement;
 use tetra_pdus::umac::pdus::{mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource};
 
 use crate::umac::subcomp::fillbits;
@@ -9,6 +9,7 @@ use crate::umac::subcomp::fillbits;
 #[derive(Debug)]
 pub struct BsFragger {
     resource: MacResource,
+    chan_alloc: Option<ChanAllocElement>,
     mac_hdr_is_written: bool,
     is_fully_transmitted: bool,
     sdu: BitBuffer,
@@ -28,6 +29,7 @@ impl BsFragger {
         // resource.update_len_and_fill_ind(sdu.get_len());
         BsFragger {
             resource,
+            chan_alloc: None,
             mac_hdr_is_written: false,
             is_fully_transmitted: false,
             sdu,
@@ -111,6 +113,17 @@ impl BsFragger {
                     .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_bits)
             );
 
+            // If there is a channel allocation element, this needs to be delayed until the last fragment.
+            // 23.5.4.1 - "The channel allocation is generally sent in a MAC-RESOURCE PDU. However, if the BS wishes to send channel
+            // allocation information with a fragmented message then that information shall be included within the MAC-END PDU
+            // and shall not be included within the MAC-RESOURCE PDU."
+            if self.resource.chan_alloc_element.is_some() {
+                // Move the chan_alloc element out of the resource and into the fragger state
+                tracing::debug!("Deferring channel allocation element to MAC-END");
+                self.chan_alloc = self.resource.chan_alloc_element.clone();
+                self.resource.chan_alloc_element = None;
+            }
+
             self.resource.to_bitbuf(mac_block);
             mac_block.copy_bits(&mut self.sdu, sdu_bits);
             fillbits::addition::write(mac_block, None);
@@ -125,14 +138,13 @@ impl BsFragger {
     /// next chunks. Based on capacity, will determine whether to make a MAC-FRAG or
     /// MAC-END.
     /// Returns true when MAC-END (DL) was created and no further fragments are needed
-    /// TODO FIXME: support adding ChanAlloc element in MAC-END
     fn get_frag_or_end_chunk(&mut self, mac_block: &mut BitBuffer) -> bool {
         // Some sanity checks
         assert!(self.mac_hdr_is_written, "MAC header should be previously written");
 
         // Check if we can fit all in a MAC-END message
         let sdu_bits = self.sdu.get_len_remaining();
-        let macend_len_bits = MacEndDl::compute_hdr_len(false, false) + sdu_bits;
+        let macend_len_bits = MacEndDl::compute_hdr_len(None, self.chan_alloc.clone()) + sdu_bits;
         let macend_len_bytes = (macend_len_bits + 7) / 8;
         let slot_cap_bits = mac_block.get_len_remaining();
 
@@ -141,13 +153,18 @@ impl BsFragger {
         if macend_len_bytes * 8 <= slot_cap_bits {
             // Fits in single MAC-END
             let num_fill_bits = fillbits::addition::compute_required(macend_len_bits, slot_cap_bits);
-            let pdu = MacEndDl {
+            let mut pdu = MacEndDl {
                 fill_bits: num_fill_bits > 0,
                 pos_of_grant: 0,
                 length_ind: macend_len_bytes as u8,
                 slot_granting_element: None,
                 chan_alloc_element: None,
             };
+
+            if let Some(chan_alloc) = self.chan_alloc.take() {
+                tracing::debug!("Placing deferred channel allocation element in MAC-END");
+                pdu.chan_alloc_element = Some(chan_alloc);
+            }
 
             tracing::debug!(
                 "-> {:?} sdu {}",
@@ -249,7 +266,8 @@ mod tests {
         address::{SsiType, TetraAddress},
         debug,
     };
-
+    use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
+    use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
     use crate::umac::subcomp::bs_sched::{SCH_F_CAP, SCH_HD_CAP};
 
     use super::*;
@@ -419,5 +437,58 @@ mod tests {
         assert_eq!(reporter.get_state(), TxState::Discarded);
         assert!(reporter.is_in_final_state());
         assert!(!reporter.is_transmitted());
+    }
+
+    #[test]
+    fn test_defers_chan_alloc_to_last_fragment() {
+
+        debug::setup_logging_verbose();
+
+        let mut resource = get_default_resource();
+        resource.chan_alloc_element = Some(ChanAllocElement {
+            alloc_type: ChanAllocType::Replace,
+            ts_assigned: [false, true, false, false],
+            ul_dl_assigned: UlDlAssignment::Both,
+            clch_permission: false,
+            cell_change_flag: false,
+            carrier_num: 0,
+            ext: None,
+            mon_pattern: 0,
+            frame18_mon_pattern: Some(0),
+        });
+
+        let sdu = BitBuffer::from_bitstr(&"10101010".repeat(100));
+
+        let mut fragger = BsFragger::new(resource, sdu, None);
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let mut done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+
+        // Decode this chunk as a MacResource and check that the chan_alloc_element is not present
+        let pdu = MacResource::from_bitbuf(&mut mac_block).unwrap();
+        assert!(pdu.chan_alloc_element.is_none(), "Channel allocation element should be moved to last fragment");
+
+        // Consume all fragments until the end
+        while !done {
+            mac_block = BitBuffer::new(SCH_HD_CAP);
+            done = fragger.get_next_chunk(&mut mac_block);
+            mac_block.seek(0);
+        }
+
+        // Final chunk should be a MacEndDl with the chan_alloc_element present
+        let pdu = MacEndDl::from_bitbuf(&mut mac_block).unwrap();
+        assert!(pdu.chan_alloc_element.is_some(), "Channel allocation element should be present in last fragment");
+
+        // Fields should match those on the original MAC-RESOURCE
+        let chan_alloc = pdu.chan_alloc_element.clone().unwrap();
+        assert_eq!(chan_alloc.alloc_type, ChanAllocType::Replace);
+        assert_eq!(chan_alloc.ts_assigned, [false, true, false, false]);
+        assert_eq!(chan_alloc.ul_dl_assigned, UlDlAssignment::Both);
+        assert_eq!(chan_alloc.clch_permission, false);
+        assert_eq!(chan_alloc.cell_change_flag, false);
+        assert_eq!(chan_alloc.carrier_num, 0);
+        assert_eq!(chan_alloc.mon_pattern, 0);
+        assert_eq!(chan_alloc.frame18_mon_pattern, Some(0));
     }
 }

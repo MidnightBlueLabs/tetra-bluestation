@@ -57,9 +57,16 @@ impl MacEndDl {
         Ok(s)
     }
 
-    pub fn compute_hdr_len(has_slotgrant: bool, has_chanalloc: bool) -> usize {
-        assert!(!has_chanalloc, "unimplemented");
-        2 + 1 + 1 + 1 + 6 + 1 + (if has_slotgrant { 6 } else { 0 }) + 1
+    pub fn compute_hdr_len(slot_grant: Option<BasicSlotgrant>, chan_alloc: Option<ChanAllocElement>) -> usize {
+            2 + // MAC PDU type
+            1 + // MAC PDU subtype
+            1 + // Fill bit indication
+            1 + // Position of grant
+            6 + // Length indication
+            1 + // Slot granting flag
+            (if slot_grant.is_some() { 8 } else { 0 }) + // Slot granting element TODO: Confirm length? 6?
+            1 + // Channel allocation flag
+            (if chan_alloc.is_some() { chan_alloc.unwrap().compute_len() } else { 0 }) // Channel allocation element
     }
 
     pub fn to_bitbuf(&self, buf: &mut BitBuffer) {
