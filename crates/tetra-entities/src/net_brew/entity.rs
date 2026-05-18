@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
 use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
@@ -634,6 +635,14 @@ impl BrewEntity {
             );
             self.dl_jitter.remove(&brew_uuid);
             self.hanging_calls.remove(&call.dest_gssi);
+
+            // Tell upstream the session is over so it stops sending GROUP_TX for this uuid.
+            // Backend keeps the session alive otherwise, which loops back as fresh GROUP_TX
+            // on the next burst. ETSI EN 300 392-2 clause 14.8.18 defines the cause value.
+            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
+                uuid: brew_uuid,
+                cause: DisconnectCause::ExpiryOfTimer as u8,
+            });
             return;
         }
 
@@ -642,6 +651,7 @@ impl BrewEntity {
             .iter()
             .find_map(|(gssi, hanging)| if hanging.uuid == brew_uuid { Some(*gssi) } else { None });
         if let Some(gssi) = hanging_gssi {
+            // Hanging entry only: backend already sent GROUP_IDLE, no upstream notify needed.
             tracing::info!("BrewEntity: dropping hanging call uuid={} gssi={} (CMCE request)", brew_uuid, gssi);
             self.hanging_calls.remove(&gssi);
         } else {
