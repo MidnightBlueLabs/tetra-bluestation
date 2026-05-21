@@ -4,6 +4,13 @@ use tetra_saps::{
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
 };
 
+use crate::{
+    lmac::components::scrambler,
+    umac::subcomp::{bs_frag::BsFragger, circuit_mgr::CircuitMgr},
+};
+use tetra_pdus::umac::enums::access_code::AccessCode;
+use tetra_pdus::umac::structs::access_field::AccessField;
+use tetra_pdus::umac::structs::base_frame_length::BaseFrameLength;
 use tetra_pdus::{
     mle::pdus::{d_mle_sync::DMleSync, d_mle_sysinfo::DMleSysinfo},
     umac::{
@@ -14,20 +21,10 @@ use tetra_pdus::{
         },
         fields::basic_slotgrant::BasicSlotgrant,
         pdus::{
-            access_assign::{AccessAssign},
-            access_assign_fr18::AccessAssignFr18,
-            mac_resource::MacResource,
-            mac_sync::MacSync,
+            access_assign::AccessAssign, access_assign_fr18::AccessAssignFr18, mac_resource::MacResource, mac_sync::MacSync,
             mac_sysinfo::MacSysinfo,
         },
     },
-};
-use tetra_pdus::umac::enums::access_code::AccessCode;
-use tetra_pdus::umac::structs::access_field::AccessField;
-use tetra_pdus::umac::structs::base_frame_length::BaseFrameLength;
-use crate::{
-    lmac::components::scrambler,
-    umac::subcomp::{bs_frag::BsFragger, circuit_mgr::CircuitMgr},
 };
 
 /// We submit this many TX timeslots ahead of the current time
@@ -161,6 +158,10 @@ impl BsChannelScheduler {
     }
 
     pub fn is_hangtime(&self, ts: u8) -> bool {
+        if !(1..=4).contains(&ts) {
+            tracing::warn!("BsChannelScheduler::is_hangtime: invalid ts {}", ts);
+            return false;
+        }
         self.hangtime[ts as usize - 1]
     }
 
@@ -624,10 +625,10 @@ impl BsChannelScheduler {
                 i += 1;
             } else {
                 // Found a to-be-discarded element.
-                // Remove, warn, and call tx_reporter::mark_discarded() if appliccable
+                // Remove, log, and call tx_reporter::mark_discarded() if applicable
                 let elem = queue.remove(i);
                 item_was_discarded = true;
-                tracing::warn!("dl_drop_all_except_stolen: discarding scheduled {:?} on ts {}", elem, timeslot);
+                tracing::debug!("dl_drop_all_except_stolen: discarding scheduled {:?} on ts {}", elem, timeslot);
 
                 match elem {
                     DlSchedElem::Resource(_, _, tx_reporter) => {
@@ -1082,7 +1083,6 @@ impl BsChannelScheduler {
     }
 
     fn generate_bbk_block(&self, ts: TdmaTime) -> TmvUnitdataReq {
-
         let (ul_traffic_usage, dl_traffic_usage) = if ts.f == 18 {
             (None, None)
         } else {
@@ -1096,12 +1096,9 @@ impl BsChannelScheduler {
         let mut aach_bb = BitBuffer::new(14);
 
         if ts.f != 18 {
-
             let aach = match ts.t {
-
                 // MCCH (TS1)
                 1 => {
-
                     // 23.3.1.1.2
                     // "During normal mode operation, it shall always be assumed that slot 1 on the
                     // downlink is for common control as part of the MCCH."
@@ -1124,7 +1121,7 @@ impl BsChannelScheduler {
                                 BaseFrameLength::ReservedSubslot
                             } else {
                                 DEFAULT_ACCESS_FRAME_MARKER
-                            }
+                            },
                         },
                         access_field_2: AccessField {
                             access_code: AccessCode::AccessCodeA,
@@ -1132,17 +1129,14 @@ impl BsChannelScheduler {
                                 BaseFrameLength::ReservedSubslot
                             } else {
                                 DEFAULT_ACCESS_FRAME_MARKER
-                            }
+                            },
                         },
                     }
-
-                },
+                }
 
                 // Additional channels (TS2..TS4)
                 2..=4 => {
-
                     if self.is_hangtime(ts.t) && (dl_traffic_usage.is_some() || ul_traffic_usage.is_some()) {
-
                         // Hangtime: immediately switch AACH to AssignedControl so radios
                         // detect the end of traffic in the same frame as D-TX CEASED.
                         // The timeslot may still be in traffic mode (for STCH delivery) but
@@ -1154,9 +1148,7 @@ impl BsChannelScheduler {
                                 base_frame_len: DEFAULT_ACCESS_FRAME_MARKER,
                             },
                         }
-
                     } else {
-
                         // Normal operation: Traffic(usage) when a circuit is active, else Unallocated
                         AccessAssign::DownlinkDefinedUplinkDefined {
                             downlink_usage_marker: if let Some(usage) = dl_traffic_usage {
@@ -1168,19 +1160,16 @@ impl BsChannelScheduler {
                                 AccessAssignUlUsage::Traffic(usage)
                             } else {
                                 AccessAssignUlUsage::Unallocated
-                            }
+                            },
                         }
-
                     }
-                },
+                }
 
-                _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t)
+                _ => panic!("finalize_ts_for_tick: invalid timeslot {}", ts.t),
             };
 
             aach.to_bitbuf(&mut aach_bb);
-
         } else {
-
             // Frame 18 is the Control Frame, which cannot contain traffic
             assert!(ul_traffic_usage.is_none() && dl_traffic_usage.is_none());
 
@@ -1195,15 +1184,15 @@ impl BsChannelScheduler {
                         BaseFrameLength::CLCHSubslot
                     } else {
                         DEFAULT_ACCESS_FRAME_MARKER
-                    }
+                    },
                 },
                 access_field_2: AccessField {
                     access_code: AccessCode::AccessCodeA,
                     base_frame_len: if self.ul_get_slot_owner(ts, PhyBlockNum::Block2).is_some() {
                         BaseFrameLength::ReservedSubslot
-                     } else {
+                    } else {
                         DEFAULT_ACCESS_FRAME_MARKER
-                    }
+                    },
                 },
             };
 
@@ -1580,7 +1569,6 @@ mod tests {
 
     #[test]
     fn test_dl_indicates_reserved_subslots() {
-
         let mut sched = get_testing_slotter();
         let mut ts = TdmaTime::default();
 
@@ -1597,8 +1585,7 @@ mod tests {
             aach_buf.seek(0);
 
             // Decode the AACH (which in this test will always be the F1-17 format)
-            let access_assign = AccessAssign::from_bitbuf(&mut aach_buf)
-                .expect("Failed to decode AACH block");
+            let access_assign = AccessAssign::from_bitbuf(&mut aach_buf).expect("Failed to decode AACH block");
             tracing::debug!("Decoded AACH: {:?}", access_assign);
 
             // Third occurrence should have both slots reserved
@@ -1609,18 +1596,23 @@ mod tests {
             };
 
             match access_assign {
-                AccessAssign::DownlinkCommonControlUplinkCommonOnly { access_field_1, access_field_2 } => {
+                AccessAssign::DownlinkCommonControlUplinkCommonOnly {
+                    access_field_1,
+                    access_field_2,
+                } => {
                     assert_eq!(
-                        access_field_1.base_frame_len, expected_subslot_bfl,
+                        access_field_1.base_frame_len,
+                        expected_subslot_bfl,
                         "Unexpected base frame length for access field 1 on TS1 occurrence {}",
                         i + 1
                     );
                     assert_eq!(
-                        access_field_2.base_frame_len, expected_subslot_bfl,
+                        access_field_2.base_frame_len,
+                        expected_subslot_bfl,
                         "Unexpected base frame length for access field 2 on TS1 occurrence {}",
                         i + 1
                     );
-                },
+                }
                 _ => panic!("Expected DownlinkCommonControlUplinkCommonOnly format for TS1"),
             }
 
@@ -1634,23 +1626,16 @@ mod tests {
         let sched = get_testing_slotter();
 
         // Frame 18
-        let mut ts = TdmaTime {
-            t: 1,
-            f: 18,
-            m: 1,
-            h: 0,
-        };
+        let mut ts = TdmaTime { t: 1, f: 18, m: 1, h: 0 };
 
         // Generate the next 4 frames to make sure CLCH is correctly indicated
         for _ in 0..4 {
-
             let bbk = sched.generate_bbk_block(ts);
             let mut aach_buf = bbk.mac_block.clone();
             aach_buf.seek(0);
 
             // Decode the AACH (which in this test will always be the frame 18 format)
-            let access_assign = AccessAssignFr18::from_bitbuf(&mut aach_buf)
-                .expect("Failed to decode AACH block");
+            let access_assign = AccessAssignFr18::from_bitbuf(&mut aach_buf).expect("Failed to decode AACH block");
             tracing::debug!("Decoded AACH: {:?}", access_assign);
 
             // For MN=1, F=18, T=2, SSN1 should be CLCH (when F == 18 and T == 4 - ((M + 1) % 4), otherwise default
@@ -1666,12 +1651,11 @@ mod tests {
                         access_field_1.base_frame_len, expected_subslot_bfl,
                         "Unexpected base frame length for access field 1 on frame 18"
                     );
-                },
+                }
                 _ => panic!("Expected AccessAssignFr18::UplinkCommonOnly format for frame 18"),
             }
 
             ts = ts.add_timeslots(1);
         }
     }
-
 }
