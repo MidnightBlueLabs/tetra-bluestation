@@ -568,7 +568,8 @@ impl UmacMs {
                 }
             };
 
-            pdu.dl_usage.is_traffic()
+            pdu.dl_is_traffic()
+
         } else {
             let _pdu = match AccessAssignFr18::from_bitbuf(&mut prim.pdu) {
                 Ok(pdu) => {
