@@ -56,7 +56,7 @@ rx_freq = 433025000
 # Check valid gain names with SoapySDRUtil --probe
 # For example, to increase transmit power on a LimeSDR:
 # tx_gain_pad = 50.0
-# To adjust LNA gain to optimize RX performance on a LimeSDR or SXceiver:
+# To adjust LNA gain to optimize RX performance on a LimeSDR, SXceiver, or µCell:
 # rx_gain_lna = 30.0
 
 ###############################################################################

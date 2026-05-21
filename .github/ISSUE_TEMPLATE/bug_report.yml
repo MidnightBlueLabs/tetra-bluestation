@@ -69,6 +69,7 @@ body:
         - LimeSDR
         - USRP
         - SXCeiver
+        - µCell
         - Other
     validations:
       required: true

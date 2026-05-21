@@ -6,6 +6,7 @@ use tetra_config::bluestation::{StackMode, sec_phy_soapy::*};
 pub enum SupportedDevice {
     LimeSdr(LimeSdrModel),
     SXceiver,
+    MuCell,
     PlutoSdr,
     Usrp(UsrpModel),
 }
@@ -41,6 +42,7 @@ impl SupportedDevice {
             ("FT601", _) => Some(Self::LimeSdr(LimeSdrModel::OtherFt601)),
 
             ("sx", _) => Some(Self::SXceiver),
+            ("mucell", _) => Some(Self::MuCell),
 
             ("PlutoSDR", _) => Some(Self::PlutoSdr),
 
@@ -150,6 +152,8 @@ impl SdrSettings {
 
             SupportedDevice::SXceiver => Self::settings_sxceiver(mode, cfg.fs),
 
+            SupportedDevice::MuCell => Self::settings_mucell(mode, cfg.fs),
+
             SupportedDevice::PlutoSdr => Self::settings_pluto(mode),
 
             SupportedDevice::Usrp(model) => Self::settings_usrp(mode, model),
@@ -242,6 +246,27 @@ impl SdrSettings {
         let fs = fs_override.unwrap_or(600e3);
         Self {
             name: "SXceiver".to_string(),
+            fs,
+
+            rx_ant: Some("RX".to_string()),
+            tx_ant: Some("TX".to_string()),
+
+            rx_gain: vec![("LNA".to_string(), 42.0), ("PGA".to_string(), 16.0)],
+            tx_gain: vec![("DAC".to_string(), 9.0), ("MIXER".to_string(), 30.0)],
+
+            rx_args: vec![("period".to_string(), block_size(fs).to_string())],
+            tx_args: vec![("period".to_string(), block_size(fs).to_string())],
+
+            ..Self::default(mode)
+        }
+    }
+
+    fn settings_mucell(mode: StackMode, fs_override: Option<f64>) -> Self {
+        // Similar to SXCeiver for now
+        // Might be adapted lated for PA gain and other settings.
+        let fs = fs_override.unwrap_or(600e3);
+        Self {
+            name: "µCell".to_string(),
             fs,
 
             rx_ant: Some("RX".to_string()),
