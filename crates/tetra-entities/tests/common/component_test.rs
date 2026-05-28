@@ -16,6 +16,7 @@ use tetra_entities::umac::umac_bs::UmacBs;
 
 // MS imports
 use tetra_entities::lmac::lmac_ms::LmacMs;
+use tetra_entities::mle::mle_ms::MleMs;
 use tetra_entities::umac::umac_ms::UmacMs;
 
 use crate::common::default_stack;
@@ -149,7 +150,7 @@ impl ComponentTest {
                     self.router.register_entity(Box::new(llc));
                 }
                 TetraEntity::Mle => {
-                    let mle = MleBs::new(self.config.clone());
+                    let mle = MleMs::new(self.config.clone());
                     self.router.register_entity(Box::new(mle));
                 }
                 TetraEntity::Cmce => {

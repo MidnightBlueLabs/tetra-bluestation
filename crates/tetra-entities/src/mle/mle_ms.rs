@@ -1,9 +1,7 @@
-use crate::mle::components::mle_router::MleRouter;
-use crate::mle::components::network_time::encode_tetra_network_time;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::SharedConfig;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, unimplemented_log};
+use tetra_core::{BitBuffer, Sap, unimplemented_log};
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::lmm::LmmMleUnitdataInd;
 use tetra_saps::ltpd::LtpdMleUnitdataInd;
@@ -14,18 +12,17 @@ use tetra_pdus::mle::enums::mle_pdu_type_dl::MlePduTypeDl;
 use tetra_pdus::mle::enums::mle_protocol_discriminator::MleProtocolDiscriminator;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
-use tetra_pdus::mle::pdus::d_nwrk_broadcast::DNwrkBroadcast;
 
 pub struct MleMs {
+    self_component: TetraEntity,
     config: SharedConfig,
-    router: MleRouter,
 }
 
 impl MleMs {
     pub fn new(config: SharedConfig) -> Self {
         Self {
+            self_component: TetraEntity::Mle,
             config,
-            router: MleRouter::new(),
         }
     }
 
@@ -118,30 +115,29 @@ impl MleMs {
         // Dispatch to appropriate component (or to self if for MLE)
         match pdu_type {
             MleProtocolDiscriminator::Mm => {
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
+                // let handle = self
+                //     .router
+                //     .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LmmMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0, // handle,
                     received_address: prim.main_address,
                 };
                 let msg = SapMsg {
                     sap: Sap::LmmSap,
                     src: self.self_component,
                     dest: TetraEntity::Mm,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LmmMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
             }
             MleProtocolDiscriminator::Cmce => {
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
+                // let handle = self
+                //     .router
+                //     .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LcmcMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0, // handle,
                     received_tetra_address: prim.main_address,
                     endpoint_id: prim.endpoint_id,
                     link_id: prim.link_id,
@@ -152,7 +148,6 @@ impl MleMs {
                     sap: Sap::LcmcSap,
                     src: self.self_component,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LcmcMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -170,7 +165,6 @@ impl MleMs {
                     sap: Sap::LcmcSap,
                     src: self.self_component,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LtpdMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -211,31 +205,30 @@ impl MleMs {
         match pdu_type {
             MleProtocolDiscriminator::Mm => {
                 tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
+                // let handle = self
+                //     .router
+                //     .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LmmMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0, // handle,
                     received_address: prim.main_address,
                 };
                 let msg = SapMsg {
                     sap: Sap::LmmSap,
                     src: self.self_component,
                     dest: TetraEntity::Mm,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LmmMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
             }
             MleProtocolDiscriminator::Cmce => {
                 tracing::warn!("TM-UNITDATA for MM?"); // todo fixme find if ever used
-                let handle = self
-                    .router
-                    .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
+                    // let handle = self
+                    //     .router
+                    //     .create_handle(prim.main_address, prim.link_id, prim.endpoint_id, message.dltime);
                 let m = LcmcMleUnitdataInd {
                     sdu,
-                    handle,
+                    handle: 0, // handle,
                     endpoint_id: prim.endpoint_id,
                     link_id: prim.link_id,
                     received_tetra_address: prim.main_address,
@@ -246,7 +239,6 @@ impl MleMs {
                     sap: Sap::LcmcSap,
                     src: self.self_component,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LcmcMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -264,7 +256,6 @@ impl MleMs {
                     sap: Sap::LcmcSap,
                     src: self.self_component,
                     dest: TetraEntity::Cmce,
-                    dltime: message.dltime,
                     msg: SapMsgInner::LtpdMleUnitdataInd(m),
                 };
                 queue.push_back(msg);
@@ -443,7 +434,6 @@ impl MleMs {
             sap: Sap::TlaSap,
             src: self.self_component,
             dest: TetraEntity::Llc,
-            dltime: message.dltime,
             msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
                 main_address: prim.address,
                 link_id: 0,
@@ -507,7 +497,6 @@ impl MleMs {
             sap: Sap::TlaSap,
             src: self.self_component,
             dest: TetraEntity::Llc,
-            dltime: message.dltime,
             msg: SapMsgInner::TlaTlDataReqBl(TlaTlDataReqBl {
                 main_address: prim.main_address,
                 link_id: prim.link_id,
