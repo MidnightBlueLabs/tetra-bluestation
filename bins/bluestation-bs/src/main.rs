@@ -65,6 +65,7 @@ fn start_telemetry_worker(cfg: SharedConfig, telemetry_source: TelemetrySource) 
         heartbeat_interval: TELEMETRY_HEARTBEAT_INTERVAL,
         heartbeat_timeout: TELEMETRY_HEARTBEAT_TIMEOUT,
         custom_root_certs,
+        extra_headers: Vec::new(),
     };
 
     thread::spawn(move || {
@@ -98,6 +99,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
         heartbeat_interval: CONTROL_HEARTBEAT_INTERVAL,
         heartbeat_timeout: CONTROL_HEARTBEAT_TIMEOUT,
         custom_root_certs,
+        extra_headers: Vec::new(),
     };
 
     thread::spawn(move || {

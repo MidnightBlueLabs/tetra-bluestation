@@ -1491,6 +1491,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crossbeam-channel",
+ "httparse",
  "md5",
  "num",
  "num-complex",

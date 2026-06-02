@@ -25,6 +25,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rustls-native-certs = "0.7"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 tungstenite = { workspace = true }
+httparse = { workspace = true }
 uuid = { workspace = true }
 md5 = "0.7"
 base64 = "0.22"

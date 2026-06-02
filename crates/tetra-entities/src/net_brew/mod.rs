@@ -38,6 +38,12 @@ pub fn websocket_transport_config(cfg: &CfgBrew) -> WebSocketTransportConfig {
         endpoint_path: "/brew/".to_string(),
         subprotocol: Some(BREW_PROTOCOL_VERSION.to_string()),
         user_agent: format!("BlueStation/{}", tetra_core::STACK_VERSION),
+        // Version 0 until SS-TPI mnemonic parsing lands.
+        // Mode Basestation, we want server-pushed registration updates.
+        extra_headers: vec![
+            ("X-Brew-Version".to_string(), "0".to_string()),
+            ("X-Brew-Mode".to_string(), "Basestation".to_string()),
+        ],
         heartbeat_interval: Duration::from_secs(10),
         heartbeat_timeout: Duration::from_secs(30),
         custom_root_certs: None,

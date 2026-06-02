@@ -51,6 +51,9 @@ pub struct WebSocketTransportConfig {
     pub subprotocol: Option<String>,
     /// User-Agent header value
     pub user_agent: String,
+    /// Extra HTTP headers sent on the auth-discovery GET requests
+    /// (e.g. Brew's `X-Brew-Version` / `X-Brew-Mode`).
+    pub extra_headers: Vec<(String, String)>,
     /// Interval between heartbeat pings
     pub heartbeat_interval: Duration,
     /// Timeout for heartbeat (disconnect if no activity within this duration)
@@ -152,6 +155,56 @@ fn connect_auth_stream(
     } else {
         Ok(AuthStream::Plain(tcp))
     }
+}
+
+/// Read a complete HTTP response from the stream.
+fn read_http_response(stream: &mut AuthStream) -> Result<String, NetworkError> {
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+
+    loop {
+        // A single read() may return a partial reply when TCP/TLS splits the
+        // response across packets. Parse what we have: once the headers are
+        // complete, read exactly Content-Length body bytes before returning.
+        let mut headers = [httparse::EMPTY_HEADER; 32];
+        let mut resp = httparse::Response::new(&mut headers);
+        match resp.parse(&buf) {
+            Ok(httparse::Status::Complete(body_offset)) => {
+                let content_length = resp
+                    .headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("content-length"))
+                    .and_then(|h| std::str::from_utf8(h.value).ok())
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if buf.len() >= body_offset.saturating_add(content_length) {
+                    return Ok(String::from_utf8_lossy(&buf).to_string());
+                }
+            }
+            Ok(httparse::Status::Partial) => {}
+            Err(e) => return Err(NetworkError::ConnectionFailed(format!("malformed HTTP response: {}", e))),
+        }
+
+        let n = stream
+            .read(&mut chunk)
+            .map_err(|e| NetworkError::ConnectionFailed(format!("HTTP read failed: {}", e)))?;
+        if n == 0 {
+            return Err(NetworkError::ConnectionFailed(
+                "connection closed before full HTTP response".to_string(),
+            ));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+
+        // Bound memory on a misbehaving server.
+        if buf.len() > 64 * 1024 {
+            return Err(NetworkError::ConnectionFailed("HTTP response too large".to_string()));
+        }
+    }
+}
+
+/// Render extra headers as `Name: Value\r\n` lines (empty string if none).
+fn format_extra_headers(headers: &[(String, String)]) -> String {
+    headers.iter().map(|(k, v)| format!("{}: {}\r\n", k, v)).collect()
 }
 
 // ─── HTTP Digest Auth helpers ─────────────────────────────────────
@@ -259,23 +312,18 @@ impl WebSocketTransport {
             "GET {} HTTP/1.1\r\n\
              Host: {}\r\n\
              User-Agent: {}\r\n\
+             {}\
              \r\n",
-            endpoint_path, host, self.config.user_agent
+            endpoint_path,
+            host,
+            self.config.user_agent,
+            format_extra_headers(&self.config.extra_headers)
         );
         stream
             .write_all(request.as_bytes())
             .map_err(|e| NetworkError::ConnectionFailed(format!("HTTP write failed: {}", e)))?;
 
-        let mut response_buf = vec![0u8; 4096];
-        let n = stream
-            .read(&mut response_buf)
-            .map_err(|e| NetworkError::ConnectionFailed(format!("HTTP read failed: {}", e)))?;
-
-        if n == 0 {
-            return Err(NetworkError::ConnectionFailed("empty HTTP response".to_string()));
-        }
-
-        let response = String::from_utf8_lossy(&response_buf[..n]).to_string();
+        let response = read_http_response(&mut stream)?;
         tracing::debug!("WebSocketTransport: HTTP response:\n{}", response.trim());
 
         let lines: Vec<&str> = response.split("\r\n").collect();
@@ -338,23 +386,19 @@ impl WebSocketTransport {
                  Host: {}\r\n\
                  User-Agent: {}\r\n\
                  Authorization: {}\r\n\
+                 {}\
                  \r\n",
-                endpoint_path, host, self.config.user_agent, auth_header
+                endpoint_path,
+                host,
+                self.config.user_agent,
+                auth_header,
+                format_extra_headers(&self.config.extra_headers)
             );
             stream2
                 .write_all(auth_request.as_bytes())
                 .map_err(|e| NetworkError::ConnectionFailed(format!("auth HTTP write failed: {}", e)))?;
 
-            let mut auth_buf = vec![0u8; 4096];
-            let n2 = stream2
-                .read(&mut auth_buf)
-                .map_err(|e| NetworkError::ConnectionFailed(format!("auth HTTP read failed: {}", e)))?;
-
-            if n2 == 0 {
-                return Err(NetworkError::ConnectionFailed("empty auth HTTP response".to_string()));
-            }
-
-            let auth_response = String::from_utf8_lossy(&auth_buf[..n2]).to_string();
+            let auth_response = read_http_response(&mut stream2)?;
             tracing::debug!("WebSocketTransport: auth response:\n{}", auth_response.trim());
 
             let auth_status = auth_response.split("\r\n").next().unwrap_or("");

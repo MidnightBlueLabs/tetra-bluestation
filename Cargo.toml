@@ -46,6 +46,7 @@ tracing-appender = "0.2.4"
 crossbeam-channel = "0.5"
 bitcode = "0.6.9"
 tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+httparse = "1.10"
 uuid = { version = "1", features = ["v4"] }
 ctrlc = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
