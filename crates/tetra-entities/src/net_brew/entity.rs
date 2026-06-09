@@ -8,7 +8,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
 use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
@@ -636,13 +635,8 @@ impl BrewEntity {
             self.dl_jitter.remove(&brew_uuid);
             self.hanging_calls.remove(&call.dest_gssi);
 
-            // Tell upstream the session is over so it stops sending GROUP_TX for this uuid.
-            // Backend keeps the session alive otherwise, which loops back as fresh GROUP_TX
-            // on the next burst. ETSI EN 300 392-2 clause 14.8.18 defines the cause value.
-            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
-                uuid: brew_uuid,
-                cause: DisconnectCause::ExpiryOfTimer as u8,
-            });
+            // Downlink call owned by the server. It rejects a BS idle (type=1 RESTRICTED)
+            // and ends the session itself, so local cleanup is enough.
             return;
         }
 
