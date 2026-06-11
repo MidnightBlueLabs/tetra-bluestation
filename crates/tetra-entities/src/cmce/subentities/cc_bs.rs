@@ -50,6 +50,9 @@ pub struct CcBsSubentity {
     subscriber_groups: HashMap<u32, HashSet<u32>>,
     /// Listener counts per GSSI
     group_listeners: HashMap<u32, usize>,
+    /// Calls whose D-RELEASE has been sent and whose circuit teardown is deferred a few
+    /// frames so the stolen D-RELEASE transmits. These are no longer in active_calls.
+    releasing_calls: Vec<ReleasingCall>,
 }
 
 /// Origin of a group call
@@ -63,6 +66,20 @@ enum CallOrigin {
     Network {
         brew_uuid: uuid::Uuid, // For Brew tracking
     },
+}
+
+/// A call being released. The call is removed from active_calls when this is created, so
+/// it cannot be re-keyed or reused. D-RELEASE is stolen onto the traffic channel (it only
+/// transmits while the slot is in traffic mode) at sent_at, then the circuit is closed a
+/// couple frames later. Carries everything teardown needs, since the active_calls entry is
+/// already gone.
+struct ReleasingCall {
+    call_id: u16,
+    ts: u8,
+    dest_gssi: u32,
+    is_local: bool,
+    brew_uuid: Option<uuid::Uuid>,
+    sent_at: TdmaTime,
 }
 
 /// Tracks an active group call (local or network-initiated)
@@ -92,6 +109,7 @@ impl CcBsSubentity {
             active_calls: HashMap::new(),
             subscriber_groups: HashMap::new(),
             group_listeners: HashMap::new(),
+            releasing_calls: Vec::new(),
         }
     }
 
@@ -636,6 +654,9 @@ impl CcBsSubentity {
         // Check hangtime expiry for active local calls
         self.check_hangtime_expiry(queue);
 
+        // Drive deferred D-RELEASE teardown
+        self.process_releasing_calls(queue);
+
         if let Some(tasks) = self.circuits.tick_start(dltime) {
             for task in tasks {
                 match task {
@@ -750,82 +771,113 @@ impl CcBsSubentity {
         }
     }
 
-    /// Release a call: send D-RELEASE, close circuits, clean up state
+    /// Release a call. Removes it from active state immediately so it cannot be re-keyed
+    /// or reused, steals one D-RELEASE onto the traffic channel, and parks the teardown in
+    /// releasing_calls. The circuit and timeslot stay allocated until process_releasing_calls
+    /// tears them down, which lets the stolen D-RELEASE transmit before the slot leaves
+    /// traffic mode. With no cached D-SETUP there is no D-RELEASE to send, so it tears down
+    /// at once.
     fn release_call(&mut self, queue: &mut MessageQueue, call_id: u16, disconnect_cause: DisconnectCause) {
-        // Build D-RELEASE if we still have the cached setup. Missing cache must not
-        // skip the cleanup below, otherwise hangtime expiry refires release_call every tick.
-        if let Some((pdu, dest_addr, _)) = self.cached_setups.get(&call_id) {
-            let dest_addr = *dest_addr;
-            let sdu = Self::build_d_release_from_d_setup(pdu, disconnect_cause);
-            let prim = if let Some(ts) = self.active_calls.get(&call_id).map(|c| c.ts) {
-                Self::build_sapmsg_stealing(sdu, dest_addr, ts)
+        let Some(call) = self.active_calls.remove(&call_id) else {
+            return;
+        };
+        let ts = call.ts;
+        let dest_gssi = call.dest_gssi;
+        let is_local = matches!(call.origin, CallOrigin::Local { .. });
+        // Prefer the live brew_uuid (current network speaker). Fall back to the origin uuid
+        // for a Network call in hangtime, where rx_network_call_end cleared the field.
+        let brew_uuid = call.brew_uuid.or(match call.origin {
+            CallOrigin::Network { brew_uuid } => Some(brew_uuid),
+            CallOrigin::Local { .. } => None,
+        });
+
+        match self.cached_setups.remove(&call_id) {
+            Some((d_setup, dest_addr, _)) => {
+                let sdu = Self::build_d_release_from_d_setup(&d_setup, disconnect_cause);
+                queue.push_back(Self::build_sapmsg_stealing(sdu, dest_addr, ts));
+                self.releasing_calls.push(ReleasingCall {
+                    call_id,
+                    ts,
+                    dest_gssi,
+                    is_local,
+                    brew_uuid,
+                    sent_at: self.dltime,
+                });
+            }
+            None => {
+                tracing::warn!("No cached D-SETUP for call_id={}, cleaning up without D-RELEASE", call_id);
+                self.finalize_release(queue, call_id, ts, dest_gssi, is_local, brew_uuid);
+            }
+        }
+    }
+
+    /// Close a releasing call's circuit once enough frames have passed since the D-RELEASE
+    /// was stolen for it to transmit. Driven once per tick.
+    fn process_releasing_calls(&mut self, queue: &mut MessageQueue) {
+        // Two TDMA frames: the stolen D-RELEASE drains over the next frame while the slot
+        // is still in traffic mode, then teardown one frame later.
+        const CLOSE_AFTER_SEND_TS: i32 = 8;
+
+        let now = self.dltime;
+        let mut i = 0;
+        while i < self.releasing_calls.len() {
+            if self.releasing_calls[i].sent_at.age(now) >= CLOSE_AFTER_SEND_TS {
+                let rc = self.releasing_calls.remove(i);
+                self.finalize_release(queue, rc.call_id, rc.ts, rc.dest_gssi, rc.is_local, rc.brew_uuid);
             } else {
-                tracing::warn!(
-                    "release_call: no active call state for call_id={}, sending D-RELEASE on MCCH",
-                    call_id
-                );
-                Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None)
-            };
-            queue.push_back(prim);
-        } else {
-            tracing::warn!("No cached D-SETUP for call_id={}, cleaning up anyway", call_id);
-        }
-
-        // Close the circuit in CircuitMgr and notify Brew
-        if let Some(call) = self.active_calls.get(&call_id) {
-            let ts = call.ts;
-            let dest_ssi = call.dest_gssi;
-            let is_local = matches!(call.origin, CallOrigin::Local { .. });
-            // Prefer the live brew_uuid field (tracks current network speaker on both
-            // Local and Network origins). Fall back to the origin uuid for a Network call
-            // sitting in hangtime, where rx_network_call_end has cleared the field.
-            let brew_uuid = call.brew_uuid.or(match call.origin {
-                CallOrigin::Network { brew_uuid } => Some(brew_uuid),
-                CallOrigin::Local { .. } => None,
-            });
-
-            if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
-                Self::signal_umac_circuit_close(queue, circuit);
-            }
-
-            // Ensure UMAC clears hangtime even if the CMCE circuit was already closed above.
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
-            });
-
-            self.release_timeslot(ts);
-
-            // Tell Brew the call is gone. Local-origin calls get CallEnded so Brew clears
-            // ul_forwarded[ts] from any earlier UL forwarding. If a network speaker was
-            // ever involved (active or in hangtime), also send NetworkCallEnd so Brew
-            // tears down the upstream session. Without the latter, hangtime expiry leaves
-            // Brew thinking the circuit is still reusable and the backend keeps streaming.
-            if net_brew::is_brew_gssi_routable(&self.config, dest_ssi) {
-                if is_local {
-                    queue.push_back(SapMsg {
-                        sap: Sap::Control,
-                        src: TetraEntity::Cmce,
-                        dest: TetraEntity::Brew,
-                        msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
-                    });
-                }
-                if let Some(brew_uuid) = brew_uuid {
-                    queue.push_back(SapMsg {
-                        sap: Sap::Control,
-                        src: TetraEntity::Cmce,
-                        dest: TetraEntity::Brew,
-                        msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
-                    });
-                }
+                i += 1;
             }
         }
+    }
 
-        // Always clean up. See note above about the per-tick loop.
-        self.cached_setups.remove(&call_id);
-        self.active_calls.remove(&call_id);
+    /// Tear down a released call: close the circuit, free the timeslot, notify Brew.
+    /// The active_calls and cached_setups entries were already removed in release_call.
+    fn finalize_release(
+        &mut self,
+        queue: &mut MessageQueue,
+        call_id: u16,
+        ts: u8,
+        dest_gssi: u32,
+        is_local: bool,
+        brew_uuid: Option<uuid::Uuid>,
+    ) {
+        if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
+            Self::signal_umac_circuit_close(queue, circuit);
+        }
+
+        // Ensure UMAC clears hangtime even if the CMCE circuit was already closed above.
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
+        });
+
+        self.release_timeslot(ts);
+
+        // Tell Brew the call is gone. Local-origin calls get CallEnded so Brew clears
+        // ul_forwarded[ts] from any earlier UL forwarding. If a network speaker was
+        // ever involved (active or in hangtime), also send NetworkCallEnd so Brew
+        // tears down the upstream session. Without the latter, hangtime expiry leaves
+        // Brew thinking the circuit is still reusable and the backend keeps streaming.
+        if net_brew::is_brew_gssi_routable(&self.config, dest_gssi) {
+            if is_local {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
+                });
+            }
+            if let Some(brew_uuid) = brew_uuid {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }),
+                });
+            }
+        }
     }
 
     fn feature_check_u_setup(pdu: &USetup) -> bool {
