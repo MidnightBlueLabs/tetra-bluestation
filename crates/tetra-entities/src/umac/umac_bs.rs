@@ -651,10 +651,16 @@ impl UmacBs {
             return;
         }
 
-        // Schedule acknowledgement of this message
-        // let ul_time = message.dltime.add_timeslots(-2);
-        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
-        self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
+        // Acknowledge the access, unless it is on a timeslot in an active over. During
+        // traffic the uplink is reserved (ETSI 23.5.1.3), so the talker is not on random
+        // access and acking it would steal an extra MAC-RESOURCE onto the traffic channel.
+        // Hangtime and control-channel access (floor requests) are still acked.
+        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
+        let in_active_over =
+            self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
+        if !in_active_over {
+            self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
+        }
 
         // Decrypt if needed
         if pdu.encrypted {
