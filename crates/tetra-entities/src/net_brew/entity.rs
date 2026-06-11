@@ -361,6 +361,26 @@ impl BrewEntity {
             return;
         }
 
+        // New UUID on a GSSI that still has an active call. Backend started a new
+        // session without idling the old one. Evict the stale entry so active_calls
+        // and dl_jitter do not leak. Local cleanup only. Backend owns downlink
+        // teardown and CMCE reuses the existing circuit for that GSSI.
+        if let Some(stale_uuid) = self
+            .active_calls
+            .iter()
+            .find(|(u, c)| c.dest_gssi == dest_gssi && **u != uuid)
+            .map(|(u, _)| *u)
+        {
+            tracing::warn!(
+                "BrewEntity: backend started uuid={} on gssi={} without idling old uuid={}, evicting stale entry",
+                uuid,
+                dest_gssi,
+                stale_uuid
+            );
+            self.active_calls.remove(&stale_uuid);
+            self.dl_jitter.remove(&stale_uuid);
+        }
+
         // Check if there's a hanging call we can reuse
         if let Some(hanging) = self.hanging_calls.remove(&dest_gssi) {
             tracing::info!(
