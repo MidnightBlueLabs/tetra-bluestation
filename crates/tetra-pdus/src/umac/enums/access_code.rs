@@ -6,7 +6,7 @@ pub enum AccessCode {
     AccessCodeA,
     AccessCodeB,
     AccessCodeC,
-    AccessCodeD
+    AccessCodeD,
 }
 
 impl TryFrom<u64> for AccessCode {
