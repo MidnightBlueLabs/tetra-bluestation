@@ -22,7 +22,7 @@ use tetra_pdus::umac::pdus::mac_sync::MacSync;
 use tetra_pdus::umac::pdus::mac_sysinfo::MacSysinfo;
 use tetra_pdus::umac::pdus::mac_u_blck::MacUBlck;
 use tetra_pdus::umac::pdus::mac_u_signal::MacUSignal;
-use tetra_saps::control::call_control::{CallControl, Circuit};
+use tetra_saps::control::call_control::{CallControl, Circuit, CircuitDlMediaSource};
 use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
 use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
@@ -1296,8 +1296,17 @@ impl UmacBs {
 
                 // Loopback to the downlink. For a duplex call the listener sits on the peer
                 // timeslot, so route there. For simplex (no peer) it loops on the same slot.
+                // A network (Brew) circuit renders audio fed from the backend, so suppress the
+                // local loopback there or the caller would hear itself doubled with the echo.
                 let dl_ts = self.channel_scheduler.ul_peer_ts(ts).unwrap_or(ts);
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, dl_ts) {
+                let network_media = self.channel_scheduler.dl_media_source(dl_ts) == Some(CircuitDlMediaSource::Network);
+                if network_media {
+                    tracing::trace!(
+                        "rx_tmd_prim: network media on dl ts={}, suppressing local loopback from ts={}",
+                        dl_ts,
+                        ts
+                    );
+                } else if self.channel_scheduler.circuit_is_active(Direction::Dl, dl_ts) {
                     tracing::trace!("rx_tmd_prim: loopback UL voice ts={} -> dl ts={}", ts, dl_ts);
                     if let Some(packed) = pack_ul_acelp_bits(&data) {
                         self.channel_scheduler.dl_schedule_tmd(dl_ts, packed);
@@ -1417,6 +1426,7 @@ impl UmacBs {
                 circuit_mode: circuit.circuit_mode,
                 speech_service: circuit.speech_service,
                 etee_encrypted: circuit.etee_encrypted,
+                dl_media_source: circuit.dl_media_source,
             };
             self.channel_scheduler.create_circuit(d, c);
 
@@ -1526,6 +1536,14 @@ impl UmacBs {
                     self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
                 }
             }
+            // Network speaker: leave hangtime but do not arm local stuck-uplink detection,
+            // the uplink is silent because the audio comes from the backend.
+            CallControl::RemoteFloorGranted { ts, .. } => {
+                self.channel_scheduler.set_hangtime(ts, false);
+                if (1..=4).contains(&ts) {
+                    self.last_ul_voice[ts as usize - 1] = None;
+                }
+            }
             CallControl::CallEnded { ts, .. } => {
                 self.channel_scheduler.set_hangtime(ts, false);
                 if (1..=4).contains(&ts) {
@@ -1536,8 +1554,8 @@ impl UmacBs {
             // UlInactivityTimeout is UMAC→CMCE only, UMAC won't receive it back
             CallControl::UlInactivityTimeout { .. } => {}
 
-            // NetworkCall* are for CMCE ↔ Brew, not UMAC (for now)
-            CallControl::NetworkCallStart { .. } | CallControl::NetworkCallReady { .. } | CallControl::NetworkCallEnd { .. } => {
+            // The NetworkCall* and NetworkCircuit* messages are CMCE <-> Brew, not for UMAC.
+            _ => {
                 tracing::trace!("rx_control: ignoring CMCE-Brew notification (not for UMAC)");
             }
         }

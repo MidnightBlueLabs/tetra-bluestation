@@ -2,6 +2,14 @@ use tetra_core::Direction;
 
 use crate::control::enums::circuit_mode_type::CircuitModeType;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitDlMediaSource {
+    /// Downlink media comes from local uplink loopback (classic on-cell behaviour).
+    LocalLoopback,
+    /// Downlink media is supplied by the network over the Brew bridge.
+    Network,
+}
+
 #[derive(Debug, Clone)]
 pub struct Circuit {
     /// Direction
@@ -30,6 +38,44 @@ pub struct Circuit {
     pub speech_service: Option<u8>,
     /// Whether end-to-end encryption is enabled on this circuit
     pub etee_encrypted: bool,
+    /// Where the downlink audio for this circuit comes from. Local calls loop the
+    /// uplink back; network (Brew) calls render audio fed from the backend, so the
+    /// local loopback is suppressed.
+    pub dl_media_source: CircuitDlMediaSource,
+}
+
+/// An individual/circuit call routed over Brew (off-cell ISSI or PBX/phone number).
+/// Mirror of the BrewCircularCall wire struct.
+#[derive(Debug, Clone)]
+pub struct NetworkCircuitCall {
+    /// Calling party ISSI
+    pub source_issi: u32,
+    /// Called party ISSI when known (0 for a number-dialed call)
+    pub destination: u32,
+    /// External number for PBX/phone calls (ASCII, may be empty)
+    pub number: String,
+    /// Call priority
+    pub priority: u8,
+    /// Speech service (Table 14.79)
+    pub service: u8,
+    /// Circuit mode (Table 14.52)
+    pub mode: u8,
+    /// Duplex flag (0 = simplex, 1 = duplex)
+    pub duplex: u8,
+    /// Hook method (Table 14.62)
+    pub method: u8,
+    /// Communication type (Table 14.54)
+    pub communication: u8,
+    /// Transmission grant (Table 14.80)
+    pub grant: u8,
+    /// Transmission request permission (Table 14.81)
+    pub permission: u8,
+    /// Call timeout (Table 14.50)
+    pub timeout: u8,
+    /// Call ownership (Table 14.38)
+    pub ownership: u8,
+    /// Call queued (Table 14.48)
+    pub queued: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +97,9 @@ pub enum CallControl {
         dest_gssi: u32,
         ts: u8,
     },
+    /// Remote (network/Brew) speaker granted. Sent to UMAC to exit hangtime without arming
+    /// the local stuck-uplink detection, since the uplink is silent on a network call.
+    RemoteFloorGranted { call_id: u16, ts: u8 },
     /// Floor released: speaker stopped transmitting (entering hangtime).
     /// Sent to UMAC to enter hangtime signalling mode and to Brew to stop forwarding audio.
     FloorReleased { call_id: u16, ts: u8 },
@@ -78,7 +127,33 @@ pub enum CallControl {
     NetworkCallEnd {
         brew_uuid: uuid::Uuid, // Identifies the call to end
     },
-    /// UL inactivity detected on a traffic timeslot — no voice frames received
+    /// UL inactivity detected on a traffic timeslot: no voice frames received
     /// for the timeout period. Sent by UMAC to CMCE.
     UlInactivityTimeout { ts: u8 },
+    /// Circuit-call setup request over Brew (individual/PBX/phone), CMCE to Brew.
+    NetworkCircuitSetupRequest { brew_uuid: uuid::Uuid, call: NetworkCircuitCall },
+    /// Circuit-call setup accepted by the backend, Brew to CMCE.
+    NetworkCircuitSetupAccept { brew_uuid: uuid::Uuid },
+    /// Circuit-call setup rejected by the backend, Brew to CMCE.
+    NetworkCircuitSetupReject { brew_uuid: uuid::Uuid, cause: u8 },
+    /// Circuit-call alerting (ringing) from the backend, Brew to CMCE.
+    NetworkCircuitAlert { brew_uuid: uuid::Uuid },
+    /// Circuit-call connect request from the backend, Brew to CMCE.
+    NetworkCircuitConnectRequest { brew_uuid: uuid::Uuid, call: NetworkCircuitCall },
+    /// Circuit-call connect confirm from the local side, CMCE to Brew.
+    NetworkCircuitConnectConfirm { brew_uuid: uuid::Uuid, grant: u8, permission: u8 },
+    /// Circuit-call simplex floor grant.
+    NetworkCircuitSimplexGranted { brew_uuid: uuid::Uuid, grant: u8, permission: u8 },
+    /// Circuit-call simplex floor idle/release.
+    NetworkCircuitSimplexIdle { brew_uuid: uuid::Uuid, grant: u8, permission: u8 },
+    /// Circuit-call media is active on this local timeslot, CMCE to Brew.
+    NetworkCircuitMediaReady { brew_uuid: uuid::Uuid, call_id: u16, ts: u8 },
+    /// Circuit-call DTMF payload from the MS toward the backend.
+    NetworkCircuitDtmf {
+        brew_uuid: uuid::Uuid,
+        length_bits: u16,
+        data: Vec<u8>,
+    },
+    /// Circuit-call release, either direction.
+    NetworkCircuitRelease { brew_uuid: uuid::Uuid, cause: u8 },
 }

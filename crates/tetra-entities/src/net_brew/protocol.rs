@@ -78,6 +78,32 @@ pub struct BrewGroupTransmission {
     pub service: u16, // Speech service
 }
 
+/// Circuit/PBX/phone call data, part of SETUP_REQUEST / CONNECT_REQUEST
+#[derive(Debug, Clone)]
+pub struct BrewCircularCall {
+    pub source: u32,
+    pub destination: u32,
+    pub number: String,
+    pub priority: u8,
+    pub service: u8,
+    pub mode: u8,
+    pub duplex: u8,
+    pub method: u8,
+    pub communication: u8,
+    pub grant: u8,
+    pub permission: u8,
+    pub timeout: u8,
+    pub ownership: u8,
+    pub queued: u8,
+}
+
+/// Circuit grant payload, part of CONNECT_CONFIRM / SIMPLEX_* states
+#[derive(Debug, Clone)]
+pub struct BrewCircularGrant {
+    pub grant: u8,
+    pub permission: u8,
+}
+
 /// Call control (0xf1)
 #[derive(Debug, Clone)]
 pub struct BrewCallControlMessage {
@@ -95,6 +121,10 @@ pub enum BrewCallPayload {
     Cause(u8),
     /// CALL_STATE_SETUP_ACCEPT, CALL_STATE_CALL_ALERT — no extra payload
     Empty,
+    /// CALL_STATE_SETUP_REQUEST, CALL_STATE_CONNECT_REQUEST
+    CircularCall(BrewCircularCall),
+    /// CALL_STATE_CONNECT_CONFIRM, CALL_STATE_SIMPLEX_GRANTED, CALL_STATE_SIMPLEX_IDLE
+    CircularGrant(BrewCircularGrant),
     /// CALL_STATE_SHORT_TRANSFER (SDS header)
     ShortTransfer { source: u32, destination: u32 },
     /// Unknown/unhandled call state
@@ -185,6 +215,25 @@ fn write_u64_le(buf: &mut Vec<u8>, val: u64) {
     buf.extend_from_slice(&val.to_le_bytes());
 }
 
+const CIRCULAR_NUMBER_LEN: usize = 32;
+const CIRCULAR_CALL_LEN: usize = 4 + 4 + CIRCULAR_NUMBER_LEN + 11;
+
+/// Read a NUL-terminated fixed-width ASCII field.
+fn parse_fixed_ascii(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    bytes[..end].iter().copied().filter(|b| b.is_ascii()).map(char::from).collect()
+}
+
+/// Write an ASCII string into a fixed-width zero-padded field.
+fn write_fixed_ascii(buf: &mut Vec<u8>, value: &str, width: usize) {
+    let bytes = value.as_bytes();
+    let copy_len = bytes.len().min(width);
+    buf.extend_from_slice(&bytes[..copy_len]);
+    if width > copy_len {
+        buf.resize(buf.len() + (width - copy_len), 0);
+    }
+}
+
 /// Parse a raw binary Brew message into a typed BrewMessage
 pub fn parse_brew_message(data: &[u8]) -> Result<BrewMessage, BrewParseError> {
     if data.len() < 2 {
@@ -257,6 +306,28 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
             })
         }
 
+        CALL_STATE_SETUP_REQUEST | CALL_STATE_CONNECT_REQUEST => {
+            if payload_data.len() < CIRCULAR_CALL_LEN {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::CircularCall(BrewCircularCall {
+                source: read_u32_le(payload_data, 0),
+                destination: read_u32_le(payload_data, 4),
+                number: parse_fixed_ascii(&payload_data[8..8 + CIRCULAR_NUMBER_LEN]),
+                priority: payload_data[40],
+                service: payload_data[41],
+                mode: payload_data[42],
+                duplex: payload_data[43],
+                method: payload_data[44],
+                communication: payload_data[45],
+                grant: payload_data[46],
+                permission: payload_data[47],
+                timeout: payload_data[48],
+                ownership: payload_data[49],
+                queued: payload_data[50],
+            })
+        }
+
         CALL_STATE_GROUP_IDLE | CALL_STATE_SETUP_REJECT | CALL_STATE_CALL_RELEASE => {
             // Single byte cause
             if payload_data.is_empty() {
@@ -268,6 +339,16 @@ fn parse_call_control(call_state: u8, data: &[u8]) -> Result<BrewMessage, BrewPa
         CALL_STATE_SETUP_ACCEPT | CALL_STATE_CALL_ALERT => {
             // No extra payload
             BrewCallPayload::Empty
+        }
+
+        CALL_STATE_CONNECT_CONFIRM | CALL_STATE_SIMPLEX_GRANTED | CALL_STATE_SIMPLEX_IDLE => {
+            if payload_data.len() < 2 {
+                return Err(BrewParseError::TooShort(data.len()));
+            }
+            BrewCallPayload::CircularGrant(BrewCircularGrant {
+                grant: payload_data[0],
+                permission: payload_data[1],
+            })
         }
 
         CALL_STATE_SHORT_TRANSFER => {
@@ -430,6 +511,112 @@ pub fn build_group_tx(session_uuid: &Uuid, source_issi: u32, dest_gssi: u32, pri
     buf.push(priority);
     buf.push(0); // access = 0 (normal)
     write_u16_le(&mut buf, service);
+    buf
+}
+
+fn build_circular_call(call_state: u8, session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2 + 16 + CIRCULAR_CALL_LEN);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(call_state);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u32_le(&mut buf, call.source);
+    write_u32_le(&mut buf, call.destination);
+    write_fixed_ascii(&mut buf, &call.number, CIRCULAR_NUMBER_LEN);
+    buf.push(call.priority);
+    buf.push(call.service);
+    buf.push(call.mode);
+    buf.push(call.duplex);
+    buf.push(call.method);
+    buf.push(call.communication);
+    buf.push(call.grant);
+    buf.push(call.permission);
+    buf.push(call.timeout);
+    buf.push(call.ownership);
+    buf.push(call.queued);
+    buf
+}
+
+/// Build SETUP_REQUEST for circuit/PBX/phone calls.
+pub fn build_setup_request(session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    build_circular_call(CALL_STATE_SETUP_REQUEST, session_uuid, call)
+}
+
+/// Build CONNECT_REQUEST for circuit/PBX/phone calls.
+pub fn build_connect_request(session_uuid: &Uuid, call: &BrewCircularCall) -> Vec<u8> {
+    build_circular_call(CALL_STATE_CONNECT_REQUEST, session_uuid, call)
+}
+
+/// Build SETUP_ACCEPT with no payload.
+pub fn build_setup_accept(session_uuid: &Uuid) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SETUP_ACCEPT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf
+}
+
+/// Build CALL_ALERT with no payload.
+pub fn build_call_alert(session_uuid: &Uuid) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(18);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_CALL_ALERT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf
+}
+
+/// Build SETUP_REJECT with cause payload.
+pub fn build_setup_reject(session_uuid: &Uuid, cause: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_SETUP_REJECT);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(cause);
+    buf
+}
+
+fn build_circular_grant(call_state: u8, session_uuid: &Uuid, grant: u8, permission: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(20);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(call_state);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(grant);
+    buf.push(permission);
+    buf
+}
+
+/// Build CONNECT_CONFIRM with grant payload.
+pub fn build_connect_confirm(session_uuid: &Uuid, grant: u8, permission: u8) -> Vec<u8> {
+    build_circular_grant(CALL_STATE_CONNECT_CONFIRM, session_uuid, grant, permission)
+}
+
+/// Build SIMPLEX_GRANTED with grant payload.
+pub fn build_simplex_granted(session_uuid: &Uuid, grant: u8, permission: u8) -> Vec<u8> {
+    build_circular_grant(CALL_STATE_SIMPLEX_GRANTED, session_uuid, grant, permission)
+}
+
+/// Build SIMPLEX_IDLE with grant payload.
+pub fn build_simplex_idle(session_uuid: &Uuid, grant: u8, permission: u8) -> Vec<u8> {
+    build_circular_grant(CALL_STATE_SIMPLEX_IDLE, session_uuid, grant, permission)
+}
+
+/// Build CALL_RELEASE with cause payload.
+pub fn build_call_release(session_uuid: &Uuid, cause: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(BREW_CLASS_CALL_CONTROL);
+    buf.push(CALL_STATE_CALL_RELEASE);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    buf.push(cause);
+    buf
+}
+
+/// Build a DTMF data frame message.
+pub fn build_dtmf_frame(session_uuid: &Uuid, length_bits: u16, data: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(20 + data.len());
+    buf.push(BREW_CLASS_FRAME);
+    buf.push(FRAME_TYPE_DTMF_DATA);
+    buf.extend_from_slice(session_uuid.as_bytes());
+    write_u16_le(&mut buf, length_bits);
+    buf.extend_from_slice(data);
     buf
 }
 
@@ -641,6 +828,55 @@ mod tests {
         } else {
             panic!("Expected CallControl message");
         }
+    }
+
+    #[test]
+    fn test_parse_setup_request() {
+        let uuid = Uuid::new_v4();
+        let call = BrewCircularCall {
+            source: 1001001,
+            destination: 2002002,
+            number: "600".to_string(),
+            priority: 3,
+            service: 0,
+            mode: 0,
+            duplex: 1,
+            method: 0,
+            communication: 0,
+            grant: 1,
+            permission: 0,
+            timeout: 5,
+            ownership: 1,
+            queued: 0,
+        };
+        let data = build_setup_request(&uuid, &call);
+        let BrewMessage::CallControl(cc) = parse_brew_message(&data).unwrap() else {
+            panic!("Expected CallControl message");
+        };
+        assert_eq!(cc.call_state, CALL_STATE_SETUP_REQUEST);
+        assert_eq!(cc.identifier, uuid);
+        let BrewCallPayload::CircularCall(parsed) = cc.payload else {
+            panic!("Expected CircularCall payload");
+        };
+        assert_eq!(parsed.source, call.source);
+        assert_eq!(parsed.destination, call.destination);
+        assert_eq!(parsed.number, "600");
+        assert_eq!(parsed.duplex, 1);
+    }
+
+    #[test]
+    fn test_parse_connect_confirm() {
+        let uuid = Uuid::new_v4();
+        let data = build_connect_confirm(&uuid, 1, 0);
+        let BrewMessage::CallControl(cc) = parse_brew_message(&data).unwrap() else {
+            panic!("Expected CallControl message");
+        };
+        assert_eq!(cc.call_state, CALL_STATE_CONNECT_CONFIRM);
+        let BrewCallPayload::CircularGrant(grant) = cc.payload else {
+            panic!("Expected CircularGrant payload");
+        };
+        assert_eq!(grant.grant, 1);
+        assert_eq!(grant.permission, 0);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
 use tetra_saps::{
-    control::call_control::Circuit,
+    control::call_control::{Circuit, CircuitDlMediaSource},
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
 };
 
@@ -504,6 +504,11 @@ impl BsChannelScheduler {
     /// Duplex peer timeslot of the uplink circuit on this timeslot, if any.
     pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
         self.circuits.ul_peer_ts(ts)
+    }
+
+    /// Downlink media source of the circuit on this timeslot, if any.
+    pub fn dl_media_source(&self, ts: u8) -> Option<CircuitDlMediaSource> {
+        self.circuits.dl_media_source(ts)
     }
 
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
@@ -1585,7 +1590,7 @@ mod tests {
     /// ACCESS-ASSIGN PDUs, ETSI 23.8.2.3.2) would reset its count.
     #[test]
     fn test_hangtime_marker_does_not_flap_on_pending_stealing() {
-        use tetra_saps::control::call_control::Circuit;
+        use tetra_saps::control::call_control::{Circuit, CircuitDlMediaSource};
         use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 
         let mut sched = get_testing_slotter();
@@ -1601,6 +1606,7 @@ mod tests {
                 circuit_mode: CircuitModeType::TchS,
                 speech_service: Some(0),
                 etee_encrypted: false,
+                dl_media_source: CircuitDlMediaSource::LocalLoopback,
             },
         );
 
