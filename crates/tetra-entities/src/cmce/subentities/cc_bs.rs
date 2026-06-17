@@ -11,9 +11,9 @@ use tetra_pdus::cmce::{
     },
     fields::basic_service_information::BasicServiceInformation,
     pdus::{
-        d_call_proceeding::DCallProceeding, d_connect::DConnect, d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased,
-        d_tx_granted::DTxGranted, u_disconnect::UDisconnect, u_release::URelease, u_setup::USetup, u_tx_ceased::UTxCeased,
-        u_tx_demand::UTxDemand,
+        d_alert::DAlert, d_call_proceeding::DCallProceeding, d_connect::DConnect, d_connect_acknowledge::DConnectAcknowledge,
+        d_release::DRelease, d_setup::DSetup, d_tx_ceased::DTxCeased, d_tx_granted::DTxGranted, u_alert::UAlert, u_connect::UConnect,
+        u_disconnect::UDisconnect, u_release::URelease, u_setup::USetup, u_tx_ceased::UTxCeased, u_tx_demand::UTxDemand,
     },
     structs::cmce_circuit::CmceCircuit,
 };
@@ -53,6 +53,9 @@ pub struct CcBsSubentity {
     /// Calls whose D-RELEASE has been sent and whose circuit teardown is deferred a few
     /// frames so the stolen D-RELEASE transmits. These are no longer in active_calls.
     releasing_calls: Vec<ReleasingCall>,
+    /// Active individual (point-to-point ISSI-to-ISSI) calls: call_id -> call info.
+    /// Kept separate from active_calls (group) so group handling is untouched.
+    individual_calls: HashMap<u16, IndividualCall>,
 }
 
 /// Origin of a group call
@@ -80,6 +83,44 @@ struct ReleasingCall {
     is_local: bool,
     brew_uuid: Option<uuid::Uuid>,
     sent_at: TdmaTime,
+}
+
+/// State of an individual (point-to-point) call. An unexpected PDU for the current
+/// state is logged and ignored. ETSI EN 300 392-2 clause 14.5.1.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IndividualCallState {
+    /// D-SETUP sent to the called party, waiting for U-ALERT (on/off-hook) or U-CONNECT.
+    SetupSent,
+    /// Called party alerted (on/off-hook only), waiting for U-CONNECT.
+    Alerting,
+    /// Through-connected, traffic channel open.
+    Active,
+}
+
+/// An individual ISSI-to-ISSI call. ETSI EN 300 392-2 clause 14.5.1.
+/// The called party is addressed by its ISSI. The calling party keeps the MLE routing
+/// (handle, link_id, endpoint_id) from its U-SETUP so later PDUs reach it over the
+/// established LLC link.
+#[derive(Clone)]
+struct IndividualCall {
+    call_id: u16,
+    calling_addr: TetraAddress,
+    called_addr: TetraAddress,
+    calling_handle: u32,
+    calling_link_id: u32,
+    calling_endpoint_id: u32,
+    ts: u8,
+    usage: u8,
+    /// false = simplex (SwMI controls the floor), true = duplex (both granted).
+    /// P1 supports simplex only.
+    duplex: bool,
+    /// true = on/off-hook signalling with alerting, false = direct through-connect.
+    hook_on_off: bool,
+    state: IndividualCallState,
+    /// ISSI that currently holds the floor in a simplex call. None in duplex.
+    floor_holder: Option<u32>,
+    /// dltime the call entered its current phase, used for setup and no-answer timeouts.
+    phase_started: TdmaTime,
 }
 
 /// Tracks an active group call (local or network-initiated)
@@ -110,6 +151,7 @@ impl CcBsSubentity {
             subscriber_groups: HashMap::new(),
             group_listeners: HashMap::new(),
             releasing_calls: Vec::new(),
+            individual_calls: HashMap::new(),
         }
     }
 
@@ -425,6 +467,14 @@ impl CcBsSubentity {
             }
         };
 
+        // Individual (point-to-point) or group (point-to-multipoint), per the
+        // communication type the MS declares in the basic service information.
+        // Individual calls run their own path and state map (ETSI 14.5.1).
+        if pdu.basic_service_information.communication_type == CommunicationType::P2p {
+            self.setup_individual_call(queue, &message, pdu, calling_party);
+            return;
+        }
+
         // Check if we can satisfy this request
         if !Self::feature_check_u_setup(&pdu) {
             tracing::error!("Unsupported critical features in USetup");
@@ -613,6 +663,554 @@ impl CcBsSubentity {
         }
     }
 
+    /// True if the ISSI is registered on this cell, so we can reach it for a local call.
+    fn is_individual_registered(&self, issi: u32) -> bool {
+        self.subscriber_groups.contains_key(&issi)
+    }
+
+    /// True if the ISSI is already a party to an individual call.
+    fn issi_in_individual_call(&self, issi: u32) -> bool {
+        self.individual_calls
+            .values()
+            .any(|c| c.calling_addr.ssi == issi || c.called_addr.ssi == issi)
+    }
+
+    /// Send a downlink PDU to the calling party over its established LLC link.
+    fn send_to_caller(&self, queue: &mut MessageQueue, call: &IndividualCall, sdu: BitBuffer, chan_alloc: Option<CmceChanAllocReq>) {
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: call.calling_handle,
+                endpoint_id: call.calling_endpoint_id,
+                link_id: call.calling_link_id,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc,
+                main_address: call.calling_addr,
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    /// Set up an individual (point-to-point) call. ETSI EN 300 392-2 clause 14.5.1.
+    /// Local on-cell simplex call with either hook method, ISSI-addressed.
+    fn setup_individual_call(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu: USetup, calling_party: TetraAddress) {
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
+            panic!()
+        };
+        let (handle, link_id, endpoint_id) = (prim.handle, prim.link_id, prim.endpoint_id);
+
+        let Some(called_ssi) = pdu.called_party_ssi else {
+            tracing::warn!("individual U-SETUP without called_party_ssi, ignoring");
+            return;
+        };
+        let called_ssi = called_ssi as u32;
+        let calling_ssi = calling_party.ssi;
+
+        // Only ISSI-addressed targets are supported. SNA, external numbers and extensions
+        // address subscribers reached through a gateway, which is not handled here.
+        if pdu.called_party_short_number_address.is_some()
+            || pdu.called_party_extension.is_some()
+            || pdu.external_subscriber_number.is_some()
+        {
+            tracing::warn!("individual call to non-ISSI target not supported, rejecting");
+            self.reject_individual_setup(queue, message, DisconnectCause::RequestedServiceNotAvailable);
+            return;
+        }
+        if pdu.simplex_duplex_selection {
+            tracing::warn!("individual duplex call not supported, rejecting");
+            self.reject_individual_setup(queue, message, DisconnectCause::RequestedServiceNotAvailable);
+            return;
+        }
+        if !self.is_individual_registered(called_ssi) {
+            tracing::warn!("individual call to unregistered ISSI {}, rejecting", called_ssi);
+            self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyNotReachable);
+            return;
+        }
+        if self.issi_in_individual_call(calling_ssi) {
+            tracing::warn!("calling ISSI {} already in a call, rejecting", calling_ssi);
+            self.reject_individual_setup(queue, message, DisconnectCause::ConcurrentSetUpNotSupported);
+            return;
+        }
+        if self.issi_in_individual_call(called_ssi) {
+            tracing::warn!("called ISSI {} busy, rejecting", called_ssi);
+            self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyBusy);
+            return;
+        }
+
+        let circuit = match {
+            let mut state = self.config.state_write();
+            self.circuits.allocate_circuit_with_allocator(
+                Direction::Both,
+                pdu.basic_service_information.communication_type,
+                &mut state.timeslot_alloc,
+                TimeslotOwner::Cmce,
+            )
+        } {
+            Ok(circuit) => circuit.clone(),
+            Err(e) => {
+                tracing::error!("Failed to allocate circuit for individual U-SETUP: {:?}", e);
+                self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
+                return;
+            }
+        };
+
+        let calling_addr = calling_party;
+        let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
+        let hook_on_off = pdu.hook_method_selection;
+
+        tracing::info!(
+            "individual call ISSI {} to ISSI {} ts={} call_id={} hook_on_off={}",
+            calling_ssi,
+            called_ssi,
+            circuit.ts,
+            circuit.call_id,
+            hook_on_off
+        );
+
+        Self::signal_umac_circuit_open(queue, &circuit);
+
+        // D-CALL-PROCEEDING acknowledges the U-SETUP to the caller.
+        self.send_d_call_proceeding(queue, message, &pdu, circuit.call_id);
+
+        // Initial floor (simplex). The U-SETUP request to transmit bit (ETSI Table 14.74)
+        // names who speaks first. Value 0 is the caller, value 1 is the other party. The
+        // radio sets it per its mode, so for a hook call it asks for the called to speak
+        // first and we grant the called. The hook method itself only drives alerting.
+        let caller_first = !pdu.request_to_transmit_send_data;
+        let floor_holder = if caller_first { calling_ssi } else { called_ssi };
+        let called_grant = if caller_first {
+            TransmissionGrant::GrantedToOtherUser
+        } else {
+            TransmissionGrant::Granted
+        };
+
+        // D-SETUP to the called party. No channel allocation here: in a hangtime
+        // (quasi-transmission-trunked) call ETSI Table 14.1 does not allow early
+        // assignment, so the called MS stays on the control channel and answers there.
+        // The traffic channel is assigned later in the D-CONNECT ACKNOWLEDGE.
+        let d_setup = DSetup {
+            call_identifier: circuit.call_id,
+            call_time_out: CallTimeout::T5m,
+            hook_method_selection: hook_on_off,
+            simplex_duplex_selection: false,
+            basic_service_information: pdu.basic_service_information.clone(),
+            transmission_grant: called_grant,
+            transmission_request_permission: false,
+            call_priority: pdu.call_priority,
+            notification_indicator: None,
+            temporary_address: None,
+            calling_party_address_ssi: Some(calling_ssi),
+            calling_party_extension: None,
+            external_subscriber_number: None,
+            facility: None,
+            dm_ms_address: None,
+            proprietary: None,
+        };
+        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, circuit.usage, circuit.ts, UlDlAssignment::Both);
+        let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
+        queue.push_back(setup_msg);
+
+        self.individual_calls.insert(
+            circuit.call_id,
+            IndividualCall {
+                call_id: circuit.call_id,
+                calling_addr,
+                called_addr,
+                calling_handle: handle,
+                calling_link_id: link_id,
+                calling_endpoint_id: endpoint_id,
+                ts: circuit.ts,
+                usage: circuit.usage,
+                duplex: false,
+                hook_on_off,
+                state: IndividualCallState::SetupSent,
+                floor_holder: Some(floor_holder),
+                phase_started: self.dltime,
+            },
+        );
+    }
+
+    /// Reject an individual U-SETUP with a D-RELEASE to the caller (ETSI 14.5.1.3.2).
+    fn reject_individual_setup(&mut self, queue: &mut MessageQueue, message: &SapMsg, cause: DisconnectCause) {
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
+            panic!()
+        };
+        let calling_addr = prim.received_tetra_address;
+        let d_release = DRelease {
+            call_identifier: 0, // no call identifier assigned yet, dummy reference
+            disconnect_cause: cause,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(20);
+        d_release.to_bitbuf(&mut sdu).expect("Failed to serialize DRelease");
+        sdu.seek(0);
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: prim.handle,
+                endpoint_id: prim.endpoint_id,
+                link_id: prim.link_id,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc: None,
+                main_address: calling_addr,
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    /// U-ALERT: the called party is ringing (on/off-hook only). Relay a D-ALERT to the
+    /// caller so it can ring back. ETSI 14.5.1.1.1, 14.5.1.1.2.
+    fn rx_u_alert(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
+            panic!()
+        };
+        let pdu = match UAlert::from_bitbuf(&mut prim.sdu) {
+            Ok(pdu) => pdu,
+            Err(e) => {
+                tracing::warn!("Failed parsing U-ALERT: {:?}", e);
+                return;
+            }
+        };
+        let Some(call) = self.individual_calls.get_mut(&pdu.call_identifier) else {
+            tracing::warn!("U-ALERT for unknown individual call_id={}", pdu.call_identifier);
+            return;
+        };
+        if call.state != IndividualCallState::SetupSent || !call.hook_on_off {
+            tracing::warn!("U-ALERT ignored for call_id={} in state {:?}", call.call_id, call.state);
+            return;
+        }
+        call.state = IndividualCallState::Alerting;
+        call.phase_started = self.dltime;
+        let call = call.clone();
+
+        // D-ALERT to caller. The old hook field is now Reserved and shall be 1 (ETSI Table 14.4).
+        let d_alert = DAlert {
+            call_identifier: call.call_id,
+            call_time_out_set_up_phase: CallTimeoutSetupPhase::T60s as u8,
+            reserved: true,
+            simplex_duplex_selection: false,
+            call_queued: false,
+            basic_service_information: None,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(20);
+        d_alert.to_bitbuf(&mut sdu).expect("Failed to serialize DAlert");
+        sdu.seek(0);
+        self.send_to_caller(queue, &call, sdu, None);
+    }
+
+    /// U-CONNECT: the called party answered. Through-connect both legs. ETSI 14.5.1.1.
+    fn rx_u_connect(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
+        let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
+            panic!()
+        };
+        let pdu = match UConnect::from_bitbuf(&mut prim.sdu) {
+            Ok(pdu) => pdu,
+            Err(e) => {
+                tracing::warn!("Failed parsing U-CONNECT: {:?}", e);
+                return;
+            }
+        };
+        let Some(call) = self.individual_calls.get_mut(&pdu.call_identifier) else {
+            tracing::warn!("U-CONNECT for unknown individual call_id={}", pdu.call_identifier);
+            return;
+        };
+        if call.state == IndividualCallState::Active {
+            tracing::warn!("U-CONNECT for already-active call_id={}, ignoring", pdu.call_identifier);
+            return;
+        }
+        call.state = IndividualCallState::Active;
+        call.phase_started = self.dltime;
+        let call = call.clone();
+
+        let caller_has_floor = call.floor_holder == Some(call.calling_addr.ssi);
+
+        // D-CONNECT to the caller with the channel allocation. The caller owns the call.
+        let mut timeslots = [false; 4];
+        timeslots[call.ts as usize - 1] = true;
+        let chan_alloc = CmceChanAllocReq {
+            usage: Some(call.usage),
+            alloc_type: ChanAllocType::Replace,
+            carrier: None,
+            timeslots,
+            ul_dl_assigned: UlDlAssignment::Both,
+        };
+        let d_connect = DConnect {
+            call_identifier: call.call_id,
+            call_time_out: CallTimeout::T5m,
+            hook_method_selection: call.hook_on_off,
+            simplex_duplex_selection: false,
+            transmission_grant: if caller_has_floor {
+                TransmissionGrant::Granted
+            } else {
+                TransmissionGrant::GrantedToOtherUser
+            },
+            transmission_request_permission: false,
+            call_ownership: true,
+            call_priority: None,
+            basic_service_information: None,
+            temporary_address: None,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+        let mut connect_sdu = BitBuffer::new_autoexpand(30);
+        d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
+        connect_sdu.seek(0);
+        self.send_to_caller(queue, &call, connect_sdu, Some(chan_alloc.clone()));
+
+        // D-CONNECT ACKNOWLEDGE to the called party on the control channel, carrying the
+        // channel allocation. This is the PDU that moves the called MS to the traffic
+        // channel and switches its U-plane on (ETSI 14.5.1.4.1, late assignment), so it
+        // needs the allocation to know which channel to render.
+        let d_connect_ack = DConnectAcknowledge {
+            call_identifier: call.call_id,
+            call_time_out: CallTimeout::T5m as u8,
+            transmission_grant: if caller_has_floor {
+                TransmissionGrant::GrantedToOtherUser as u8
+            } else {
+                TransmissionGrant::Granted as u8
+            },
+            transmission_request_permission: false,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+        let mut ack_sdu = BitBuffer::new_autoexpand(20);
+        d_connect_ack
+            .to_bitbuf(&mut ack_sdu)
+            .expect("Failed to serialize DConnectAcknowledge");
+        ack_sdu.seek(0);
+        queue.push_back(Self::build_sapmsg(
+            ack_sdu,
+            Some(chan_alloc),
+            call.called_addr,
+            Layer2Service::Unacknowledged,
+            None,
+        ));
+
+        // Put the timeslot in traffic mode for the initial floor holder so its uplink
+        // voice is looped to the peer on the downlink.
+        if let Some(holder) = call.floor_holder {
+            let peer = if holder == call.calling_addr.ssi {
+                call.called_addr.ssi
+            } else {
+                call.calling_addr.ssi
+            };
+            queue.push_back(SapMsg {
+                sap: Sap::Control,
+                src: TetraEntity::Cmce,
+                dest: TetraEntity::Umac,
+                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                    call_id: call.call_id,
+                    source_issi: holder,
+                    dest_gssi: peer,
+                    ts: call.ts,
+                }),
+            });
+        }
+
+        tracing::info!("individual call_id={} active", call.call_id);
+    }
+
+    /// Release an individual call: D-RELEASE to both parties, then defer the circuit
+    /// teardown so the stolen D-RELEASE transmits (same as the group path).
+    fn release_individual_call(&mut self, queue: &mut MessageQueue, call_id: u16, cause: DisconnectCause) {
+        let Some(call) = self.individual_calls.remove(&call_id) else {
+            return;
+        };
+        // Once active both parties are on the traffic channel, so steal the D-RELEASE onto
+        // it. During setup or alerting they are still on the control channel, so send it
+        // there, otherwise a reject or caller cancel never reaches the other party.
+        let on_traffic = call.state == IndividualCallState::Active;
+        for addr in [call.calling_addr, call.called_addr] {
+            let d_release = DRelease {
+                call_identifier: call_id,
+                disconnect_cause: cause,
+                notification_indicator: None,
+                facility: None,
+                proprietary: None,
+            };
+            let mut sdu = BitBuffer::new_autoexpand(20);
+            d_release.to_bitbuf(&mut sdu).expect("Failed to serialize DRelease");
+            sdu.seek(0);
+            let msg = if on_traffic {
+                Self::build_sapmsg_stealing(sdu, addr, call.ts)
+            } else {
+                Self::build_sapmsg(sdu, None, addr, Layer2Service::Unacknowledged, None)
+            };
+            queue.push_back(msg);
+        }
+        // Defer teardown so the stolen D-RELEASE goes out. dest_gssi=0 keeps the Brew
+        // notifications in finalize_release inert for a local individual call.
+        self.releasing_calls.push(ReleasingCall {
+            call_id,
+            ts: call.ts,
+            dest_gssi: 0,
+            is_local: true,
+            brew_uuid: None,
+            sent_at: self.dltime,
+        });
+    }
+
+    /// Release individual calls that pass their setup/no-answer or call-length timeout.
+    fn process_individual_timeouts(&mut self, queue: &mut MessageQueue) {
+        // ETSI 14.6: T303 calling set-up timer 60 s, T310 call length min 30 s.
+        // Values in timeslots, since TdmaTime ages in timeslots (~14 ms each).
+        const SETUP_TIMEOUT_TS: i32 = 4235; // ~60 s
+        const ACTIVE_TIMEOUT_TS: i32 = 21176; // ~300 s
+
+        let now = self.dltime;
+        let expired: Vec<u16> = self
+            .individual_calls
+            .iter()
+            .filter_map(|(id, c)| {
+                let limit = if c.state == IndividualCallState::Active {
+                    ACTIVE_TIMEOUT_TS
+                } else {
+                    SETUP_TIMEOUT_TS
+                };
+                (c.phase_started.age(now) >= limit).then_some(*id)
+            })
+            .collect();
+        for id in expired {
+            tracing::info!("individual call_id={} timed out, releasing", id);
+            self.release_individual_call(queue, id, DisconnectCause::ExpiryOfTimer);
+        }
+    }
+
+    /// Floor holder of a simplex individual call released. Send D-TX CEASED to both
+    /// parties and put the timeslot into hangtime. ETSI 14.5.1.2.
+    fn individual_tx_ceased(&mut self, queue: &mut MessageQueue, call_id: u16) {
+        let Some(call) = self.individual_calls.get_mut(&call_id) else {
+            return;
+        };
+        let ts = call.ts;
+        let addrs = [call.calling_addr, call.called_addr];
+        call.floor_holder = None;
+
+        for addr in addrs {
+            let d_tx_ceased = DTxCeased {
+                call_identifier: call_id,
+                transmission_request_permission: false,
+                notification_indicator: None,
+                facility: None,
+                dm_ms_address: None,
+                proprietary: None,
+            };
+            let mut sdu = BitBuffer::new_autoexpand(25);
+            d_tx_ceased.to_bitbuf(&mut sdu).expect("Failed to serialize DTxCeased");
+            sdu.seek(0);
+            queue.push_back(Self::build_sapmsg_stealing(sdu, addr, ts));
+        }
+
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
+        });
+        tracing::info!("individual call_id={} floor released", call_id);
+    }
+
+    /// A party of a simplex individual call requests the floor. Grant it if free, send
+    /// D-TX GRANTED to the requester and the peer, and resume traffic. ETSI 14.5.1.2.
+    fn individual_tx_demand(&mut self, queue: &mut MessageQueue, call_id: u16, requester: u32) {
+        let Some(call) = self.individual_calls.get(&call_id) else {
+            return;
+        };
+        let (calling, called) = (call.calling_addr, call.called_addr);
+        if requester != calling.ssi && requester != called.ssi {
+            tracing::warn!("U-TX DEMAND from non-party ISSI {} on call_id={}", requester, call_id);
+            return;
+        }
+        // Wait for the current talker to cease before granting (ETSI 14.5.1.2.1 a).
+        if let Some(holder) = call.floor_holder {
+            if holder != requester {
+                tracing::warn!(
+                    "U-TX DEMAND from ISSI {} rejected, ISSI {} holds the floor on call_id={}",
+                    requester,
+                    holder,
+                    call_id
+                );
+                return;
+            }
+        }
+        let ts = call.ts;
+        let (requester_addr, peer) = if requester == calling.ssi {
+            (calling, called)
+        } else {
+            (called, calling)
+        };
+        self.individual_calls.get_mut(&call_id).unwrap().floor_holder = Some(requester);
+
+        self.send_individual_tx_granted(queue, call_id, requester, requester_addr, TransmissionGrant::Granted, ts);
+        self.send_individual_tx_granted(queue, call_id, requester, peer, TransmissionGrant::GrantedToOtherUser, ts);
+
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
+                call_id,
+                source_issi: requester,
+                dest_gssi: peer.ssi,
+                ts,
+            }),
+        });
+        tracing::info!("individual call_id={} floor granted to ISSI {}", call_id, requester);
+    }
+
+    /// Send a D-TX GRANTED stolen onto the traffic channel to one party of an
+    /// individual call, naming the current talker.
+    fn send_individual_tx_granted(
+        &self,
+        queue: &mut MessageQueue,
+        call_id: u16,
+        talker_ssi: u32,
+        target: TetraAddress,
+        grant: TransmissionGrant,
+        ts: u8,
+    ) {
+        let d_tx_granted = DTxGranted {
+            call_identifier: call_id,
+            transmission_grant: grant.into_raw() as u8,
+            transmission_request_permission: false,
+            encryption_control: false,
+            reserved: false,
+            notification_indicator: None,
+            transmitting_party_type_identifier: Some(1), // SSI
+            transmitting_party_address_ssi: Some(talker_ssi as u64),
+            transmitting_party_extension: None,
+            external_subscriber_number: None,
+            facility: None,
+            dm_ms_address: None,
+            proprietary: None,
+        };
+        let mut sdu = BitBuffer::new_autoexpand(50);
+        d_tx_granted.to_bitbuf(&mut sdu).expect("Failed to serialize DTxGranted");
+        sdu.seek(0);
+        queue.push_back(Self::build_sapmsg_stealing(sdu, target, ts));
+    }
+
     pub fn route_xx_deliver(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("route_xx_deliver");
 
@@ -635,11 +1233,9 @@ impl CcBsSubentity {
             CmcePduTypeUl::UTxDemand => self.rx_u_tx_demand(_queue, message),
             CmcePduTypeUl::URelease => self.rx_u_release(_queue, message),
             CmcePduTypeUl::UDisconnect => self.rx_u_disconnect(_queue, message),
-            CmcePduTypeUl::UAlert
-            | CmcePduTypeUl::UConnect
-            | CmcePduTypeUl::UInfo
-            | CmcePduTypeUl::UStatus
-            | CmcePduTypeUl::UCallRestore => {
+            CmcePduTypeUl::UAlert => self.rx_u_alert(_queue, message),
+            CmcePduTypeUl::UConnect => self.rx_u_connect(_queue, message),
+            CmcePduTypeUl::UInfo | CmcePduTypeUl::UStatus | CmcePduTypeUl::UCallRestore => {
                 unimplemented_log!("{}", pdu_type);
             }
             _ => {
@@ -657,10 +1253,18 @@ impl CcBsSubentity {
         // Drive deferred D-RELEASE teardown
         self.process_releasing_calls(queue);
 
+        // Release individual calls that pass their setup or call-length timeout
+        self.process_individual_timeouts(queue);
+
         if let Some(tasks) = self.circuits.tick_start(dltime) {
             for task in tasks {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
+                        // Individual calls are point-to-point, so there is no late entry and
+                        // no cached D-SETUP to resend.
+                        if self.individual_calls.contains_key(&call_id) {
+                            continue;
+                        }
                         // Skip late-entry D-SETUP during hangtime. The traffic channel is still
                         // allocated and sending D-SETUP with NotGranted can prevent floor requests.
                         if let Some(active) = self.active_calls.get(&call_id) {
@@ -945,6 +1549,15 @@ impl CcBsSubentity {
 
         let call_id = pdu.call_identifier;
 
+        // Individual call: the floor holder released. Duplex has no floor (ETSI 14.5.1.2.1),
+        // so it is ignored there.
+        if let Some(call) = self.individual_calls.get(&call_id) {
+            if !call.duplex {
+                self.individual_tx_ceased(queue, call_id);
+            }
+            return;
+        }
+
         // Look up the active call
         let Some(call) = self.active_calls.get_mut(&call_id) else {
             tracing::warn!("U-TX CEASED for unknown call_id={}", call_id);
@@ -1029,6 +1642,15 @@ impl CcBsSubentity {
         };
 
         let call_id = pdu.call_identifier;
+
+        // Individual call: hand the floor to the requesting party. Duplex has no floor
+        // (ETSI 14.5.1.2.1), so it is ignored there.
+        if let Some(call) = self.individual_calls.get(&call_id) {
+            if !call.duplex {
+                self.individual_tx_demand(queue, call_id, requesting_party.ssi);
+            }
+            return;
+        }
 
         let Some(call) = self.active_calls.get_mut(&call_id) else {
             tracing::warn!("U-TX DEMAND for unknown call_id={}", call_id);
@@ -1146,6 +1768,10 @@ impl CcBsSubentity {
 
         let call_id = pdu.call_identifier;
         tracing::info!("U-RELEASE: call_id={} cause={}", call_id, pdu.disconnect_cause);
+        if self.individual_calls.contains_key(&call_id) {
+            self.release_individual_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
+            return;
+        }
         self.release_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
     }
 
@@ -1174,6 +1800,14 @@ impl CcBsSubentity {
 
         let call_id = pdu.call_identifier;
         let disconnect_cause = pdu.disconnect_cause;
+
+        // Individual call: either party may disconnect (ETSI 14.5.1.3.1). The MS expects
+        // a D-RELEASE in response, which release_individual_call sends to both legs.
+        if self.individual_calls.contains_key(&call_id) {
+            tracing::info!("U-DISCONNECT: ISSI {} disconnecting individual call_id={}", sender.ssi, call_id);
+            self.release_individual_call(queue, call_id, DisconnectCause::UserRequestedDisconnection);
+            return;
+        }
 
         let Some(call) = self.active_calls.get(&call_id) else {
             tracing::debug!("U-DISCONNECT for unknown call_id={} (likely duplicate)", call_id);
@@ -1585,6 +2219,21 @@ impl CcBsSubentity {
     /// Handle UL inactivity timeout from UMAC: a radio disappeared mid-transmission.
     /// Treat identically to rx_u_tx_ceased — force TX ceased, enter hangtime.
     fn handle_ul_inactivity_timeout(&mut self, queue: &mut MessageQueue, ts: u8) {
+        // Individual call: the floor holder went silent. Release the floor and enter hangtime.
+        // Only for a connected call. During setup and alerting there is no floor on the air
+        // yet, so an inactivity timeout there is the ringing delay, not a silent talker. Ceasing
+        // then would clear the floor holder and leave the slot in hangtime at through-connect.
+        if let Some(id) = self
+            .individual_calls
+            .iter()
+            .find(|(_, c)| c.ts == ts && c.state == IndividualCallState::Active && c.floor_holder.is_some())
+            .map(|(id, _)| *id)
+        {
+            tracing::warn!("UL inactivity timeout on ts={}, releasing floor for individual call_id={}", ts, id);
+            self.individual_tx_ceased(queue, id);
+            return;
+        }
+
         // Find the active call on this timeslot with tx_active == true
         let call_entry = self
             .active_calls
