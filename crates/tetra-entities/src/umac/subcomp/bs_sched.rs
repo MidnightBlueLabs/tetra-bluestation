@@ -501,6 +501,11 @@ impl BsChannelScheduler {
         self.circuits.is_active(dir, ts)
     }
 
+    /// Duplex peer timeslot of the uplink circuit on this timeslot, if any.
+    pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
+        self.circuits.ul_peer_ts(ts)
+    }
+
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
         // Clearing hangtime here is safe: if the circuit is gone, this timeslot is no longer in use.
         if (1..=4).contains(&ts) {
@@ -1591,6 +1596,7 @@ mod tests {
             Circuit {
                 direction: Direction::Dl,
                 ts: 2,
+                peer_ts: None,
                 usage: 6,
                 circuit_mode: CircuitModeType::TchS,
                 speech_service: Some(0),

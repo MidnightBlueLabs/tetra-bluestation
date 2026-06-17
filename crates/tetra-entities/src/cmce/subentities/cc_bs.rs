@@ -79,6 +79,8 @@ enum CallOrigin {
 struct ReleasingCall {
     call_id: u16,
     ts: u8,
+    /// Second timeslot of a duplex individual call, freed alongside ts.
+    peer_ts: Option<u8>,
     dest_gssi: u32,
     is_local: bool,
     brew_uuid: Option<uuid::Uuid>,
@@ -109,10 +111,15 @@ struct IndividualCall {
     calling_handle: u32,
     calling_link_id: u32,
     calling_endpoint_id: u32,
+    /// Caller traffic timeslot and its usage marker.
     ts: u8,
     usage: u8,
-    /// false = simplex (SwMI controls the floor), true = duplex (both granted).
-    /// P1 supports simplex only.
+    /// Called party traffic timeslot and usage marker. Same as ts/usage for a simplex
+    /// call (one shared slot). A duplex call uses a second slot so both parties transmit
+    /// at once, and we cross-route each uplink to the other party's downlink.
+    called_ts: u8,
+    called_usage: u8,
+    /// false = simplex (we control the floor), true = duplex (both granted, no floor).
     duplex: bool,
     /// true = on/off-hook signalling with alerting, false = direct through-connect.
     hook_on_off: bool,
@@ -421,10 +428,11 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
-    fn signal_umac_circuit_open(queue: &mut MessageQueue, call: &CmceCircuit) {
+    fn signal_umac_circuit_open(queue: &mut MessageQueue, call: &CmceCircuit, peer_ts: Option<u8>) {
         let circuit = Circuit {
             direction: call.direction,
             ts: call.ts,
+            peer_ts,
             usage: call.usage,
             circuit_mode: call.circuit_mode,
             speech_service: call.speech_service,
@@ -525,7 +533,7 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL+UL circuits
-        Self::signal_umac_circuit_open(queue, &circuit);
+        Self::signal_umac_circuit_open(queue, &circuit, None);
 
         // Build channel allocation timeslot mask for this call
         let mut timeslots = [false; 4];
@@ -723,11 +731,7 @@ impl CcBsSubentity {
             self.reject_individual_setup(queue, message, DisconnectCause::RequestedServiceNotAvailable);
             return;
         }
-        if pdu.simplex_duplex_selection {
-            tracing::warn!("individual duplex call not supported, rejecting");
-            self.reject_individual_setup(queue, message, DisconnectCause::RequestedServiceNotAvailable);
-            return;
-        }
+        let duplex = pdu.simplex_duplex_selection;
         if !self.is_individual_registered(called_ssi) {
             tracing::warn!("individual call to unregistered ISSI {}, rejecting", called_ssi);
             self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyNotReachable);
@@ -744,14 +748,11 @@ impl CcBsSubentity {
             return;
         }
 
-        let circuit = match {
+        let comm_type = pdu.basic_service_information.communication_type;
+        let calling_circuit = match {
             let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator(
-                Direction::Both,
-                pdu.basic_service_information.communication_type,
-                &mut state.timeslot_alloc,
-                TimeslotOwner::Cmce,
-            )
+            self.circuits
+                .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut state.timeslot_alloc, TimeslotOwner::Cmce)
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -760,35 +761,69 @@ impl CcBsSubentity {
                 return;
             }
         };
+        // A duplex call needs a second channel so the called party can transmit at the same
+        // time as the caller. Simplex shares one channel (both parties on the same slot).
+        let called_circuit = if duplex {
+            match {
+                let mut state = self.config.state_write();
+                self.circuits
+                    .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut state.timeslot_alloc, TimeslotOwner::Cmce)
+            } {
+                Ok(circuit) => circuit.clone(),
+                Err(e) => {
+                    tracing::error!("Failed to allocate second circuit for duplex U-SETUP: {:?}", e);
+                    let _ = self.circuits.close_circuit(Direction::Both, calling_circuit.ts);
+                    self.release_timeslot(calling_circuit.ts);
+                    self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
+                    return;
+                }
+            }
+        } else {
+            calling_circuit.clone()
+        };
 
         let calling_addr = calling_party;
         let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
         let hook_on_off = pdu.hook_method_selection;
 
         tracing::info!(
-            "individual call ISSI {} to ISSI {} ts={} call_id={} hook_on_off={}",
+            "individual call ISSI {} to ISSI {} ts={} called_ts={} call_id={} hook_on_off={} duplex={}",
             calling_ssi,
             called_ssi,
-            circuit.ts,
-            circuit.call_id,
-            hook_on_off
+            calling_circuit.ts,
+            called_circuit.ts,
+            calling_circuit.call_id,
+            hook_on_off,
+            duplex
         );
 
-        Self::signal_umac_circuit_open(queue, &circuit);
+        // Open the traffic channel(s). For duplex, cross-link the two slots so each party's
+        // uplink voice loops to the other party's downlink.
+        if duplex {
+            Self::signal_umac_circuit_open(queue, &calling_circuit, Some(called_circuit.ts));
+            Self::signal_umac_circuit_open(queue, &called_circuit, Some(calling_circuit.ts));
+        } else {
+            Self::signal_umac_circuit_open(queue, &calling_circuit, None);
+        }
 
         // D-CALL-PROCEEDING acknowledges the U-SETUP to the caller.
-        self.send_d_call_proceeding(queue, message, &pdu, circuit.call_id);
+        self.send_d_call_proceeding(queue, message, &pdu, calling_circuit.call_id);
 
-        // Initial floor (simplex). The U-SETUP request to transmit bit (ETSI Table 14.74)
-        // names who speaks first. Value 0 is the caller, value 1 is the other party. The
-        // radio sets it per its mode, so for a hook call it asks for the called to speak
-        // first and we grant the called. The hook method itself only drives alerting.
-        let caller_first = !pdu.request_to_transmit_send_data;
-        let floor_holder = if caller_first { calling_ssi } else { called_ssi };
-        let called_grant = if caller_first {
-            TransmissionGrant::GrantedToOtherUser
+        // Initial permission to transmit. Duplex grants both parties (talk and receive at
+        // once), no floor. Simplex names one speaker via the U-SETUP request to transmit bit
+        // (ETSI Table 14.74): value 0 is the caller, value 1 the other party. A hook radio
+        // sets it to let the called speak first. The hook method only drives alerting.
+        let (floor_holder, called_grant) = if duplex {
+            (None, TransmissionGrant::Granted)
         } else {
-            TransmissionGrant::Granted
+            let caller_first = !pdu.request_to_transmit_send_data;
+            let holder = if caller_first { calling_ssi } else { called_ssi };
+            let grant = if caller_first {
+                TransmissionGrant::GrantedToOtherUser
+            } else {
+                TransmissionGrant::Granted
+            };
+            (Some(holder), grant)
         };
 
         // D-SETUP to the called party. No channel allocation here: in a hangtime
@@ -796,10 +831,10 @@ impl CcBsSubentity {
         // assignment, so the called MS stays on the control channel and answers there.
         // The traffic channel is assigned later in the D-CONNECT ACKNOWLEDGE.
         let d_setup = DSetup {
-            call_identifier: circuit.call_id,
+            call_identifier: calling_circuit.call_id,
             call_time_out: CallTimeout::T5m,
             hook_method_selection: hook_on_off,
-            simplex_duplex_selection: false,
+            simplex_duplex_selection: duplex,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: called_grant,
             transmission_request_permission: false,
@@ -813,25 +848,27 @@ impl CcBsSubentity {
             dm_ms_address: None,
             proprietary: None,
         };
-        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, circuit.usage, circuit.ts, UlDlAssignment::Both);
+        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, called_circuit.usage, called_circuit.ts, UlDlAssignment::Both);
         let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
         queue.push_back(setup_msg);
 
         self.individual_calls.insert(
-            circuit.call_id,
+            calling_circuit.call_id,
             IndividualCall {
-                call_id: circuit.call_id,
+                call_id: calling_circuit.call_id,
                 calling_addr,
                 called_addr,
                 calling_handle: handle,
                 calling_link_id: link_id,
                 calling_endpoint_id: endpoint_id,
-                ts: circuit.ts,
-                usage: circuit.usage,
-                duplex: false,
+                ts: calling_circuit.ts,
+                usage: calling_circuit.usage,
+                called_ts: called_circuit.ts,
+                called_usage: called_circuit.usage,
+                duplex,
                 hook_on_off,
                 state: IndividualCallState::SetupSent,
-                floor_holder: Some(floor_holder),
+                floor_holder,
                 phase_started: self.dltime,
             },
         );
@@ -943,26 +980,38 @@ impl CcBsSubentity {
 
         let caller_has_floor = call.floor_holder == Some(call.calling_addr.ssi);
 
-        // D-CONNECT to the caller with the channel allocation. The caller owns the call.
-        let mut timeslots = [false; 4];
-        timeslots[call.ts as usize - 1] = true;
-        let chan_alloc = CmceChanAllocReq {
-            usage: Some(call.usage),
-            alloc_type: ChanAllocType::Replace,
-            carrier: None,
-            timeslots,
-            ul_dl_assigned: UlDlAssignment::Both,
+        // Per-party channel allocation. Simplex shares one slot (called_ts == ts), duplex
+        // gives each party its own. Duplex grants both parties (talk and receive); simplex
+        // grants the floor holder and tells the other it is for another user.
+        let make_chan_alloc = |ts: u8, usage: u8| {
+            let mut timeslots = [false; 4];
+            timeslots[ts as usize - 1] = true;
+            CmceChanAllocReq {
+                usage: Some(usage),
+                alloc_type: ChanAllocType::Replace,
+                carrier: None,
+                timeslots,
+                ul_dl_assigned: UlDlAssignment::Both,
+            }
         };
+        let caller_grant = if call.duplex || caller_has_floor {
+            TransmissionGrant::Granted
+        } else {
+            TransmissionGrant::GrantedToOtherUser
+        };
+        let called_grant = if call.duplex || !caller_has_floor {
+            TransmissionGrant::Granted
+        } else {
+            TransmissionGrant::GrantedToOtherUser
+        };
+
+        // D-CONNECT to the caller with its channel allocation. The caller owns the call.
         let d_connect = DConnect {
             call_identifier: call.call_id,
             call_time_out: CallTimeout::T5m,
             hook_method_selection: call.hook_on_off,
-            simplex_duplex_selection: false,
-            transmission_grant: if caller_has_floor {
-                TransmissionGrant::Granted
-            } else {
-                TransmissionGrant::GrantedToOtherUser
-            },
+            simplex_duplex_selection: call.duplex,
+            transmission_grant: caller_grant,
             transmission_request_permission: false,
             call_ownership: true,
             call_priority: None,
@@ -975,20 +1024,16 @@ impl CcBsSubentity {
         let mut connect_sdu = BitBuffer::new_autoexpand(30);
         d_connect.to_bitbuf(&mut connect_sdu).expect("Failed to serialize DConnect");
         connect_sdu.seek(0);
-        self.send_to_caller(queue, &call, connect_sdu, Some(chan_alloc.clone()));
+        self.send_to_caller(queue, &call, connect_sdu, Some(make_chan_alloc(call.ts, call.usage)));
 
-        // D-CONNECT ACKNOWLEDGE to the called party on the control channel, carrying the
+        // D-CONNECT ACKNOWLEDGE to the called party on the control channel, carrying its
         // channel allocation. This is the PDU that moves the called MS to the traffic
         // channel and switches its U-plane on (ETSI 14.5.1.4.1, late assignment), so it
         // needs the allocation to know which channel to render.
         let d_connect_ack = DConnectAcknowledge {
             call_identifier: call.call_id,
             call_time_out: CallTimeout::T5m as u8,
-            transmission_grant: if caller_has_floor {
-                TransmissionGrant::GrantedToOtherUser as u8
-            } else {
-                TransmissionGrant::Granted as u8
-            },
+            transmission_grant: called_grant as u8,
             transmission_request_permission: false,
             notification_indicator: None,
             facility: None,
@@ -1001,7 +1046,7 @@ impl CcBsSubentity {
         ack_sdu.seek(0);
         queue.push_back(Self::build_sapmsg(
             ack_sdu,
-            Some(chan_alloc),
+            Some(make_chan_alloc(call.called_ts, call.called_usage)),
             call.called_addr,
             Layer2Service::Unacknowledged,
             None,
@@ -1041,7 +1086,9 @@ impl CcBsSubentity {
         // it. During setup or alerting they are still on the control channel, so send it
         // there, otherwise a reject or caller cancel never reaches the other party.
         let on_traffic = call.state == IndividualCallState::Active;
-        for addr in [call.calling_addr, call.called_addr] {
+        // Each party is on its own slot (the same slot for simplex), so steal the D-RELEASE
+        // onto the right one. During setup or alerting both are still on the control channel.
+        for (addr, party_ts) in [(call.calling_addr, call.ts), (call.called_addr, call.called_ts)] {
             let d_release = DRelease {
                 call_identifier: call_id,
                 disconnect_cause: cause,
@@ -1053,17 +1100,19 @@ impl CcBsSubentity {
             d_release.to_bitbuf(&mut sdu).expect("Failed to serialize DRelease");
             sdu.seek(0);
             let msg = if on_traffic {
-                Self::build_sapmsg_stealing(sdu, addr, call.ts)
+                Self::build_sapmsg_stealing(sdu, addr, party_ts)
             } else {
                 Self::build_sapmsg(sdu, None, addr, Layer2Service::Unacknowledged, None)
             };
             queue.push_back(msg);
         }
         // Defer teardown so the stolen D-RELEASE goes out. dest_gssi=0 keeps the Brew
-        // notifications in finalize_release inert for a local individual call.
+        // notifications in finalize_release inert for a local individual call. A duplex call
+        // also frees its second slot.
         self.releasing_calls.push(ReleasingCall {
             call_id,
             ts: call.ts,
+            peer_ts: if call.duplex { Some(call.called_ts) } else { None },
             dest_gssi: 0,
             is_local: true,
             brew_uuid: None,
@@ -1261,8 +1310,9 @@ impl CcBsSubentity {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
                         // Individual calls are point-to-point, so there is no late entry and
-                        // no cached D-SETUP to resend.
-                        if self.individual_calls.contains_key(&call_id) {
+                        // no cached D-SETUP to resend. Match on the timeslot so a duplex call's
+                        // second slot is covered too.
+                        if self.individual_calls.values().any(|c| c.ts == ts || c.called_ts == ts) {
                             continue;
                         }
                         // Skip late-entry D-SETUP during hangtime. The traffic channel is still
@@ -1402,6 +1452,7 @@ impl CcBsSubentity {
                 self.releasing_calls.push(ReleasingCall {
                     call_id,
                     ts,
+                    peer_ts: None,
                     dest_gssi,
                     is_local,
                     brew_uuid,
@@ -1427,6 +1478,22 @@ impl CcBsSubentity {
         while i < self.releasing_calls.len() {
             if self.releasing_calls[i].sent_at.age(now) >= CLOSE_AFTER_SEND_TS {
                 let rc = self.releasing_calls.remove(i);
+                if let Some(peer_ts) = rc.peer_ts {
+                    // Free the duplex call's second slot too.
+                    if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, peer_ts) {
+                        Self::signal_umac_circuit_close(queue, circuit);
+                    }
+                    queue.push_back(SapMsg {
+                        sap: Sap::Control,
+                        src: TetraEntity::Cmce,
+                        dest: TetraEntity::Umac,
+                        msg: SapMsgInner::CmceCallControl(CallControl::CallEnded {
+                            call_id: rc.call_id,
+                            ts: peer_ts,
+                        }),
+                    });
+                    self.release_timeslot(peer_ts);
+                }
                 self.finalize_release(queue, rc.call_id, rc.ts, rc.dest_gssi, rc.is_local, rc.brew_uuid);
             } else {
                 i += 1;
@@ -2025,7 +2092,7 @@ impl CcBsSubentity {
         );
 
         // Signal UMAC to open DL and UL circuits
-        Self::signal_umac_circuit_open(queue, &circuit);
+        Self::signal_umac_circuit_open(queue, &circuit, None);
 
         tracing::debug!(
             "CMCE: sending D-SETUP for NEW call call_id={} gssi={} (network-initiated)",

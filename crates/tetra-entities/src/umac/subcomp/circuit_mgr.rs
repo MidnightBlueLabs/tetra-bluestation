@@ -28,6 +28,11 @@ impl CircuitMgr {
         }
     }
 
+    /// Duplex peer timeslot of the uplink circuit on this timeslot, if any.
+    pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
+        self.ul[ts as usize - 1].as_ref().and_then(|c| c.peer_ts)
+    }
+
     pub fn get_usage(&self, dir: Direction, ts: u8) -> Option<u8> {
         match dir {
             Direction::Dl => {

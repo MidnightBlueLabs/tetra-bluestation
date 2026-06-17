@@ -10,6 +10,11 @@ pub struct Circuit {
     /// Timeslot in which this circuit exists
     pub ts: u8,
 
+    /// Duplex peer timeslot. When set, uplink voice on this circuit's timeslot is
+    /// looped to the downlink of this peer timeslot instead of its own. The two
+    /// parties of a duplex call each sit on their own slot and hear the other.
+    pub peer_ts: Option<u8>,
+
     /// Usage number, between 4 and 63
     pub usage: u8,
 

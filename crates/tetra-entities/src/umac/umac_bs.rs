@@ -1294,11 +1294,13 @@ impl UmacBs {
                     }
                 }
 
-                // Loopback only if there's an active DL circuit on this timeslot
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, ts) {
-                    tracing::trace!("rx_tmd_prim: loopback UL voice on ts={}", ts);
+                // Loopback to the downlink. For a duplex call the listener sits on the peer
+                // timeslot, so route there. For simplex (no peer) it loops on the same slot.
+                let dl_ts = self.channel_scheduler.ul_peer_ts(ts).unwrap_or(ts);
+                if self.channel_scheduler.circuit_is_active(Direction::Dl, dl_ts) {
+                    tracing::trace!("rx_tmd_prim: loopback UL voice ts={} -> dl ts={}", ts, dl_ts);
                     if let Some(packed) = pack_ul_acelp_bits(&data) {
-                        self.channel_scheduler.dl_schedule_tmd(ts, packed);
+                        self.channel_scheduler.dl_schedule_tmd(dl_ts, packed);
                     } else {
                         tracing::warn!(
                             "rx_tmd_prim: unsupported UL voice length {} on ts={}, skipping loopback",
@@ -1307,7 +1309,7 @@ impl UmacBs {
                         );
                     }
                 } else {
-                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", ts);
+                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", dl_ts);
                 }
             }
             _ => {
@@ -1410,6 +1412,7 @@ impl UmacBs {
             let c = Circuit {
                 direction: d,
                 ts: circuit.ts,
+                peer_ts: circuit.peer_ts,
                 usage: circuit.usage,
                 circuit_mode: circuit.circuit_mode,
                 speech_service: circuit.speech_service,
