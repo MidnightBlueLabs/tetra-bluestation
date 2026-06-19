@@ -1210,14 +1210,19 @@ impl CcBsSubentity {
         }
         call.state = IndividualCallState::Alerting;
         call.phase_started = self.dltime;
-        let call = call.clone();
+
+        // ETSI 14.5.1.1.1: the called party offers simplex when it cannot do the duplex call.
+        if !pdu.simplex_duplex_selection {
+            self.downgrade_individual_to_simplex(queue, pdu.call_identifier);
+        }
+        let call = self.individual_calls.get(&pdu.call_identifier).unwrap().clone();
 
         // D-ALERT to caller. The old hook field is now Reserved and shall be 1 (ETSI Table 14.4).
         let d_alert = DAlert {
             call_identifier: call.call_id,
             call_time_out_set_up_phase: CallTimeoutSetupPhase::T60s as u8,
             reserved: true,
-            simplex_duplex_selection: false,
+            simplex_duplex_selection: call.duplex,
             call_queued: false,
             basic_service_information: None,
             notification_indicator: None,
@@ -1242,6 +1247,10 @@ impl CcBsSubentity {
                 return;
             }
         };
+        // ETSI 14.5.1.1.1: the called party offers simplex when it cannot do the duplex call.
+        if !pdu.simplex_duplex_selection {
+            self.downgrade_individual_to_simplex(queue, pdu.call_identifier);
+        }
         let Some(call) = self.individual_calls.get_mut(&pdu.call_identifier) else {
             tracing::warn!("U-CONNECT for unknown individual call_id={}", pdu.call_identifier);
             return;
@@ -1350,6 +1359,49 @@ impl CcBsSubentity {
         }
 
         tracing::info!("individual call_id={} active", call.call_id);
+    }
+
+    /// ETSI 14.5.1.1.1: a called MS that cannot do the requested duplex call offers simplex in
+    /// its U-ALERT or U-CONNECT. Honor it by collapsing the call onto the caller's slot, closing
+    /// the second traffic channel, and dropping the duplex cross-route so it runs as simplex.
+    fn downgrade_individual_to_simplex(&mut self, queue: &mut MessageQueue, call_id: u16) {
+        let Some(call) = self.individual_calls.get_mut(&call_id) else {
+            return;
+        };
+        if call.called_ts == call.ts {
+            return;
+        }
+        let second_ts = call.called_ts;
+        let caller_ts = call.ts;
+        let caller_usage = call.usage;
+        call.duplex = false;
+        call.called_ts = caller_ts;
+        call.called_usage = caller_usage;
+        // Hook call: the answering called party transmits first (ETSI 14.5.1.2.1 a).
+        call.floor_holder = Some(call.called_addr.ssi);
+
+        if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, second_ts) {
+            Self::signal_umac_circuit_close(queue, circuit);
+        }
+        self.release_timeslot(second_ts);
+
+        // Re-open the caller slot as a shared simplex channel without the duplex peer route.
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Umac,
+            msg: SapMsgInner::CmceCallControl(CallControl::Open(Circuit {
+                direction: Direction::Both,
+                ts: caller_ts,
+                peer_ts: None,
+                usage: caller_usage,
+                circuit_mode: CircuitModeType::TchS,
+                speech_service: Some(0),
+                etee_encrypted: false,
+                dl_media_source: CircuitDlMediaSource::LocalLoopback,
+            })),
+        });
+        tracing::info!("individual call_id={} downgraded to simplex, called offered simplex", call_id);
     }
 
     /// Release an individual call, notifying Brew if the call was over Brew.

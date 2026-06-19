@@ -1488,6 +1488,13 @@ impl UmacBs {
                 continue;
             }
 
+            // No floor model on duplex (ETSI 14.5.1.2.2) or Brew circuits, so silence is not a stuck talker.
+            if self.channel_scheduler.ul_peer_ts(ts).is_some()
+                || self.channel_scheduler.dl_media_source(ts) == Some(CircuitDlMediaSource::Network)
+            {
+                continue;
+            }
+
             // Check if we've exceeded the inactivity threshold
             let timed_out = match self.last_ul_voice[idx] {
                 Some(t) => t.age(self.dltime) > UL_INACTIVITY_TIMESLOTS,

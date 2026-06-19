@@ -324,10 +324,10 @@ impl CircuitMgr {
                             .get_or_insert_with(Vec::new)
                             .push(CircuitMgrCmd::SendDSetup(circuit.call_id, circuit.usage, circuit.ts));
                     }
-                    // Late entry: resend every 5 seconds.
+                    // Late entry: resend every 5 seconds. Group calls only, P2p has no late joiner.
                     // Compare in frames (age/4) since tick_start only fires on t==1
                     // but ts_created may have any timeslot value.
-                    else if (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0 {
+                    else if circuit.comm_type != CommunicationType::P2p && (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0 {
                         tracing::debug!(
                             "CircuitMgr: Sending late-entry D-SETUP for circuit {:?} (age {} frames)",
                             circuit,
