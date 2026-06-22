@@ -896,18 +896,26 @@ impl CcBsSubentity {
             .map(|(id, _)| *id)
     }
 
-    /// Decode an external subscriber number Type3 element into a dial string. The digits are
-    /// packed as 4-bit BCD nibbles, most significant first, in the element's data word.
+    /// Decode an external subscriber number Type3 element into a dial string. 4-bit BCD nibbles,
+    /// most significant first (ETSI Table 14.59). ETSI caps it at 24 digits, so excess is dropped.
     fn decode_external_subscriber_number(field: &tetra_core::typed_pdu_fields::Type3FieldGeneric) -> String {
-        let nibble_count = field.len / 4;
+        const MAX_DIGITS: usize = 24;
+        let nibble_count = (field.len / 4).min(MAX_DIGITS);
+        if field.len / 4 > MAX_DIGITS {
+            tracing::warn!(
+                "external subscriber number {} digits exceeds ETSI max 24, truncating",
+                field.len / 4
+            );
+        }
         let mut digits = String::with_capacity(nibble_count);
         for i in 0..nibble_count {
-            let shift = field.len - 4 * (i + 1);
-            let nibble = ((field.data >> shift) & 0xf) as u8;
+            let byte = field.raw.get(i / 2).copied().unwrap_or(0);
+            let nibble = if i % 2 == 0 { byte >> 4 } else { byte & 0xf };
             match nibble {
                 0..=9 => digits.push(char::from(b'0' + nibble)),
                 0x0a => digits.push('*'),
                 0x0b => digits.push('#'),
+                0x0c => digits.push('+'),
                 _ => {}
             }
         }
