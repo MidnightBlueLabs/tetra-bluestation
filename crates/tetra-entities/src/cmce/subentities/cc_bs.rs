@@ -134,6 +134,20 @@ struct IndividualCall {
     floor_holder: Option<u32>,
     /// dltime the call entered its current phase, used for setup and no-answer timeouts.
     phase_started: TdmaTime,
+    /// Mobile-terminated over-Brew call: backend calls, local MS is called. On-air leg is
+    /// called_addr, not calling_addr.
+    terminated: bool,
+}
+
+impl IndividualCall {
+    /// Local on-air party and slot. Calling party normally, the called MS when terminated.
+    fn local_leg(&self) -> (TetraAddress, u8) {
+        if self.terminated {
+            (self.called_addr, self.called_ts)
+        } else {
+            (self.calling_addr, self.ts)
+        }
+    }
 }
 
 /// Tracks an active group call (local or network-initiated)
@@ -884,6 +898,7 @@ impl CcBsSubentity {
                 state: IndividualCallState::SetupSent,
                 floor_holder,
                 phase_started: self.dltime,
+                terminated: false,
             },
         );
     }
@@ -1034,6 +1049,7 @@ impl CcBsSubentity {
                 // SIMPLEX GRANTED/IDLE, so start with nobody holding it.
                 floor_holder: None,
                 phase_started: self.dltime,
+                terminated: false,
             },
         );
     }
@@ -1080,15 +1096,14 @@ impl CcBsSubentity {
         if call.duplex {
             return; // Duplex has no floor cycle.
         }
-        let caller = call.calling_addr;
-        let ts = call.ts;
+        let (local, ts) = call.local_leg();
         let grant = if caller_talks {
             TransmissionGrant::Granted
         } else {
             TransmissionGrant::GrantedToOtherUser
         };
-        self.individual_calls.get_mut(&call_id).unwrap().floor_holder = if caller_talks { Some(caller.ssi) } else { None };
-        self.send_individual_tx_granted(queue, call_id, caller.ssi, caller, grant, ts);
+        self.individual_calls.get_mut(&call_id).unwrap().floor_holder = if caller_talks { Some(local.ssi) } else { None };
+        self.send_individual_tx_granted(queue, call_id, local.ssi, local, grant, ts);
     }
 
     /// Backend connected an over-Brew call. Through-connect the local caller: D-CONNECT with
@@ -1158,6 +1173,137 @@ impl CcBsSubentity {
         tracing::info!("individual call over Brew call_id={} active", call.call_id);
     }
 
+    /// Reject a mobile-terminated over-Brew setup back to the backend.
+    fn reject_network_circuit(&self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, cause: DisconnectCause) {
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Brew,
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupReject {
+                brew_uuid,
+                cause: cause as u8,
+            }),
+        });
+    }
+
+    /// Mobile-terminated individual call from the backend (PBX/phone or off-cell ISSI) to a
+    /// local MS. ETSI EN 300 392-2 clause 14.5.1. Accept toward the backend, then D-SETUP the
+    /// called MS. The MS answers with U-ALERT/U-CONNECT, relayed back over Brew.
+    fn rx_network_circuit_setup_terminated(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, call: NetworkCircuitCall) {
+        let dest = call.destination;
+        if !self.is_individual_registered(dest) {
+            tracing::warn!("terminated circuit setup for non-local ISSI {}, rejecting uuid={}", dest, brew_uuid);
+            self.reject_network_circuit(queue, brew_uuid, DisconnectCause::CalledPartyNotReachable);
+            return;
+        }
+        if self.issi_in_individual_call(dest) {
+            tracing::warn!("terminated circuit setup for busy ISSI {}, rejecting", dest);
+            self.reject_network_circuit(queue, brew_uuid, DisconnectCause::CalledPartyBusy);
+            return;
+        }
+
+        let duplex = call.duplex != 0;
+        let hook = call.method != 0;
+        let circuit = match {
+            let mut state = self.config.state_write();
+            self.circuits.allocate_circuit_with_allocator(
+                Direction::Both,
+                CommunicationType::P2p,
+                &mut state.timeslot_alloc,
+                TimeslotOwner::Cmce,
+            )
+        } {
+            Ok(circuit) => circuit.clone(),
+            Err(e) => {
+                tracing::error!("Failed to allocate circuit for terminated over-Brew call: {:?}", e);
+                self.reject_network_circuit(queue, brew_uuid, DisconnectCause::CongestionInInfrastructure);
+                return;
+            }
+        };
+
+        let calling_addr = TetraAddress::new(call.source_issi, SsiType::Issi);
+        let called_addr = TetraAddress::new(dest, SsiType::Issi);
+        tracing::info!(
+            "terminated individual call over Brew: caller {} to local ISSI {} ts={} call_id={} duplex={} uuid={}",
+            call.source_issi,
+            dest,
+            circuit.ts,
+            circuit.call_id,
+            duplex,
+            brew_uuid
+        );
+
+        // Downlink audio from the backend, MS uplink forwarded to it.
+        Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::Network);
+
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Brew,
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupAccept { brew_uuid }),
+        });
+
+        // D-SETUP on the control channel. No early assignment: the MS moves to traffic on the
+        // D-CONNECT ACKNOWLEDGE (ETSI Table 14.1, late assignment). Simplex lets the MS request
+        // the floor, duplex grants it outright.
+        let d_setup = DSetup {
+            call_identifier: circuit.call_id,
+            call_time_out: CallTimeout::T5m,
+            hook_method_selection: hook,
+            simplex_duplex_selection: duplex,
+            basic_service_information: BasicServiceInformation {
+                circuit_mode_type: CircuitModeType::TchS,
+                encryption_flag: false,
+                communication_type: CommunicationType::P2p,
+                slots_per_frame: None,
+                speech_service: Some(0),
+            },
+            transmission_grant: if duplex {
+                TransmissionGrant::Granted
+            } else {
+                TransmissionGrant::GrantedToOtherUser
+            },
+            transmission_request_permission: !duplex,
+            call_priority: call.priority,
+            notification_indicator: None,
+            temporary_address: None,
+            calling_party_address_ssi: Some(call.source_issi),
+            calling_party_extension: None,
+            external_subscriber_number: None,
+            facility: None,
+            dm_ms_address: None,
+            proprietary: None,
+        };
+        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, circuit.usage, circuit.ts, UlDlAssignment::Both);
+        let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
+        queue.push_back(setup_msg);
+
+        self.individual_calls.insert(
+            circuit.call_id,
+            IndividualCall {
+                call_id: circuit.call_id,
+                calling_addr,
+                called_addr,
+                // Backend caller has no local LLC link.
+                calling_handle: 0,
+                calling_link_id: 0,
+                calling_endpoint_id: 0,
+                ts: circuit.ts,
+                usage: circuit.usage,
+                called_ts: circuit.ts,
+                called_usage: circuit.usage,
+                duplex,
+                over_brew: true,
+                brew_uuid: Some(brew_uuid),
+                hook_on_off: hook,
+                state: IndividualCallState::SetupSent,
+                floor_holder: None,
+                phase_started: self.dltime,
+                terminated: true,
+            },
+        );
+    }
+
     /// Reject an individual U-SETUP with a D-RELEASE to the caller (ETSI 14.5.1.3.2).
     fn reject_individual_setup(&mut self, queue: &mut MessageQueue, message: &SapMsg, cause: DisconnectCause) {
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
@@ -1219,6 +1365,19 @@ impl CcBsSubentity {
         call.state = IndividualCallState::Alerting;
         call.phase_started = self.dltime;
 
+        // Terminated call: the on-air party is the called MS, so relay alerting to the backend.
+        if call.terminated {
+            if let Some(brew_uuid) = call.brew_uuid {
+                queue.push_back(SapMsg {
+                    sap: Sap::Control,
+                    src: TetraEntity::Cmce,
+                    dest: TetraEntity::Brew,
+                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitAlert { brew_uuid }),
+                });
+            }
+            return;
+        }
+
         // ETSI 14.5.1.1.1: the called party offers simplex when it cannot do the duplex call.
         if !pdu.simplex_duplex_selection {
             self.downgrade_individual_to_simplex(queue, pdu.call_identifier);
@@ -1269,6 +1428,15 @@ impl CcBsSubentity {
         }
         call.state = IndividualCallState::Active;
         call.phase_started = self.dltime;
+
+        // Terminated call: through-connect the MS and relay the answer to the backend. The MS
+        // may have offered simplex if it could not do the requested duplex (ETSI 14.5.1.1.1).
+        if call.terminated {
+            call.duplex &= pdu.simplex_duplex_selection;
+            let call = call.clone();
+            self.connect_terminated(queue, &call);
+            return;
+        }
         let call = call.clone();
 
         let caller_has_floor = call.floor_holder == Some(call.calling_addr.ssi);
@@ -1369,6 +1537,83 @@ impl CcBsSubentity {
         tracing::info!("individual call_id={} active", call.call_id);
     }
 
+    /// Through-connect a terminated over-Brew call once the MS answers: D-CONNECT ACKNOWLEDGE
+    /// moves it to traffic, then notify the backend that media is live and the call connected.
+    fn connect_terminated(&self, queue: &mut MessageQueue, call: &IndividualCall) {
+        let mut timeslots = [false; 4];
+        timeslots[call.called_ts as usize - 1] = true;
+        let chan_alloc = CmceChanAllocReq {
+            usage: Some(call.called_usage),
+            alloc_type: ChanAllocType::Replace,
+            carrier: None,
+            timeslots,
+            ul_dl_assigned: UlDlAssignment::Both,
+        };
+        // Duplex grants the MS outright, simplex lets the backend drive the floor.
+        let grant = if call.duplex {
+            TransmissionGrant::Granted
+        } else {
+            TransmissionGrant::GrantedToOtherUser
+        };
+        let d_connect_ack = DConnectAcknowledge {
+            call_identifier: call.call_id,
+            call_time_out: CallTimeout::T5m as u8,
+            transmission_grant: grant as u8,
+            transmission_request_permission: !call.duplex,
+            notification_indicator: None,
+            facility: None,
+            proprietary: None,
+        };
+        let mut ack_sdu = BitBuffer::new_autoexpand(20);
+        d_connect_ack
+            .to_bitbuf(&mut ack_sdu)
+            .expect("Failed to serialize DConnectAcknowledge");
+        ack_sdu.seek(0);
+        queue.push_back(Self::build_sapmsg(
+            ack_sdu,
+            Some(chan_alloc),
+            call.called_addr,
+            Layer2Service::Unacknowledged,
+            None,
+        ));
+
+        let brew_uuid = call.brew_uuid.expect("terminated call has a Brew uuid");
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Brew,
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady {
+                brew_uuid,
+                call_id: call.call_id,
+                ts: call.called_ts,
+            }),
+        });
+        // Brew CONNECT_REQUEST, receiver to origin. Individual voice call is always ACELP P2P.
+        let answer = NetworkCircuitCall {
+            source_issi: call.calling_addr.ssi,
+            destination: call.called_addr.ssi,
+            number: String::new(),
+            priority: 0,
+            service: 0,
+            mode: 0,
+            duplex: call.duplex as u8,
+            method: call.hook_on_off as u8,
+            communication: 0,
+            grant: TransmissionGrant::Granted.into_raw() as u8,
+            permission: 0,
+            timeout: CallTimeout::T5m.into_raw() as u8,
+            ownership: 1,
+            queued: 0,
+        };
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Brew,
+            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectRequest { brew_uuid, call: answer }),
+        });
+        tracing::info!("terminated individual call_id={} active", call.call_id);
+    }
+
     /// ETSI 14.5.1.1.1: a called MS that cannot do the requested duplex call offers simplex in
     /// its U-ALERT or U-CONNECT. Honor it by collapsing the call onto the caller's slot, closing
     /// the second traffic channel, and dropping the duplex cross-route so it runs as simplex.
@@ -1430,11 +1675,12 @@ impl CcBsSubentity {
         // there, otherwise a reject or caller cancel never reaches the other party.
         let on_traffic = call.state == IndividualCallState::Active;
         // Each local party is on its own slot (the same slot for simplex). An over-Brew call
-        // has only the local caller; the called leg is the backend and gets no on-air release.
-        let mut legs = vec![(call.calling_addr, call.ts)];
-        if !call.over_brew {
-            legs.push((call.called_addr, call.called_ts));
-        }
+        // has one local leg. The backend gets no on-air release.
+        let legs = if call.over_brew {
+            vec![call.local_leg()]
+        } else {
+            vec![(call.calling_addr, call.ts), (call.called_addr, call.called_ts)]
+        };
         for (addr, party_ts) in legs {
             let d_release = DRelease {
                 call_identifier: call_id,
@@ -1521,7 +1767,7 @@ impl CcBsSubentity {
         };
         let ts = call.ts;
         let addrs: Vec<TetraAddress> = if call.over_brew {
-            vec![call.calling_addr]
+            vec![call.local_leg().0]
         } else {
             vec![call.calling_addr, call.called_addr]
         };
@@ -2330,8 +2576,14 @@ impl CcBsSubentity {
             CallControl::UlInactivityTimeout { ts } => {
                 self.handle_ul_inactivity_timeout(queue, ts);
             }
+            CallControl::NetworkCircuitSetupRequest { brew_uuid, call } => {
+                self.rx_network_circuit_setup_terminated(queue, brew_uuid, call);
+            }
             CallControl::NetworkCircuitSetupAccept { brew_uuid } => {
                 tracing::debug!("over-Brew call setup accepted uuid={}", brew_uuid);
+            }
+            CallControl::NetworkCircuitConnectConfirm { brew_uuid, .. } => {
+                tracing::debug!("terminated over-Brew call connect confirmed uuid={}", brew_uuid);
             }
             CallControl::NetworkCircuitAlert { brew_uuid } => {
                 self.rx_network_circuit_alert(queue, brew_uuid);
