@@ -1,6 +1,6 @@
-use core::fmt;
 use crate::umac::enums::access_code::AccessCode;
 use crate::umac::structs::base_frame_length::BaseFrameLength;
+use core::fmt;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AccessField {
@@ -30,4 +30,3 @@ impl fmt::Display for AccessField {
         write!(f, "Access Code: {}, Base Frame Length: {}", self.access_code, self.base_frame_len)
     }
 }
-

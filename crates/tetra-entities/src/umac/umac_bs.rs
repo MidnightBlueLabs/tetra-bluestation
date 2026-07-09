@@ -651,10 +651,16 @@ impl UmacBs {
             return;
         }
 
-        // Schedule acknowledgement of this message
-        // let ul_time = message.dltime.add_timeslots(-2);
-        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
-        self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
+        // Acknowledge the access, unless it is on a timeslot in an active over. During
+        // traffic the uplink is reserved (ETSI 23.5.1.3), so the talker is not on random
+        // access and acking it would steal an extra MAC-RESOURCE onto the traffic channel.
+        // Hangtime and control-channel access (floor requests) are still acked.
+        let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
+        let in_active_over =
+            self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
+        if !in_active_over {
+            self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
+        }
 
         // Decrypt if needed
         if pdu.encrypted {
@@ -1111,6 +1117,7 @@ impl UmacBs {
                 // Build MAC-RESOURCE PDU for the STCH half-slot (124 type1 bits).
                 // Same format as MCCH signaling, just in 124 bits instead of 268.
                 const STCH_CAP: usize = 124;
+                const NULL_PDU_LEN_BITS: usize = 16;
 
                 let usage_marker = prim.chan_alloc.as_ref().and_then(|ca| ca.usage);
                 // Per ETSI 21.4.3.1: "The random access flag shall be used for the BS to
@@ -1134,7 +1141,7 @@ impl UmacBs {
                     slot_granting_element: None,
                     chan_alloc_element: None,
                 };
-                mac_pdu.update_len_and_fill_ind(sdu.get_len());
+                let num_fill_bits = mac_pdu.update_len_and_fill_ind(sdu.get_len());
 
                 let mut stch_block = BitBuffer::new(STCH_CAP);
                 mac_pdu.to_bitbuf(&mut stch_block);
@@ -1144,7 +1151,24 @@ impl UmacBs {
                 sdu.seek(0);
                 let sdu_len = sdu.get_len();
                 stch_block.copy_bits(&mut sdu, sdu_len);
-                // Remaining bits beyond length_ind are ignored by the receiver.
+
+                // ETSI 23.4.3.1 fill bit addition: a '1' immediately after the TM-SDU,
+                // then zeros up to the indicated length. Without the leading '1', a
+                // receiver performing the mandated fill bit deletion (23.4.3.2) strips
+                // backwards past the fill region into the PDU and corrupts its tail.
+                fillbits::addition::write(&mut stch_block, Some(num_fill_bits));
+
+                // Complete the remaining half-slot capacity with a Null PDU followed by
+                // a '1' and zeros (ETSI 23.4.2.2), instead of leaving raw zeros.
+                if stch_block.get_len_remaining() >= NULL_PDU_LEN_BITS {
+                    let mut null_pdu = MacResource::null_pdu();
+                    let _ = null_pdu.update_len_and_fill_ind(0);
+                    null_pdu.to_bitbuf(&mut stch_block);
+                }
+                if stch_block.get_len_remaining() > 0 {
+                    stch_block.write_bit(1);
+                    // Rest of the buffer is already zeroed.
+                }
 
                 tracing::info!(
                     "rx_ul_tma_unitdata_req: FACCH stealing on ts {} (MAC-RESOURCE + {} SDU bits → {} STCH bits)",

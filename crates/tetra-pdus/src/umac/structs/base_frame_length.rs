@@ -2,7 +2,6 @@ use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaseFrameLength {
-
     /// Essentially "already assigned" - Access Code is meaningless in this Access Field
     ReservedSubslot,
 
@@ -25,7 +24,7 @@ pub enum BaseFrameLength {
     Subslots16,
     Subslots20,
     Subslots24,
-    Subslots32
+    Subslots32,
 }
 
 impl TryFrom<u64> for BaseFrameLength {
@@ -71,7 +70,7 @@ impl BaseFrameLength {
             BaseFrameLength::Subslots16 => 0b1100,
             BaseFrameLength::Subslots20 => 0b1101,
             BaseFrameLength::Subslots24 => 0b1110,
-            BaseFrameLength::Subslots32 => 0b1111
+            BaseFrameLength::Subslots32 => 0b1111,
         }
     }
 }
@@ -94,7 +93,7 @@ impl fmt::Display for BaseFrameLength {
             BaseFrameLength::Subslots16 => write!(f, "16 Subslots"),
             BaseFrameLength::Subslots20 => write!(f, "20 Subslots"),
             BaseFrameLength::Subslots24 => write!(f, "24 Subslots"),
-            BaseFrameLength::Subslots32 => write!(f, "32 Subslots")
+            BaseFrameLength::Subslots32 => write!(f, "32 Subslots"),
         }
     }
 }

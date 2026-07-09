@@ -1567,6 +1567,70 @@ mod tests {
         assert!(sched.dltx_queues[ts.t as usize - 1].len() == 1);
     }
 
+    fn decode_aach(sched: &BsChannelScheduler, ts: TdmaTime) -> AccessAssign {
+        let bbk = sched.generate_bbk_block(ts);
+        let mut buf = bbk.mac_block.clone();
+        buf.seek(0);
+        AccessAssign::from_bitbuf(&mut buf).expect("Failed to decode AACH block")
+    }
+
+    /// During hangtime the AACH must hold AssignedControl on every frame, including
+    /// frames carrying a pending stolen block. If it flapped back to the traffic
+    /// usage marker, the end-of-traffic detector (N.212 successive non-UMt
+    /// ACCESS-ASSIGN PDUs, ETSI 23.8.2.3.2) would reset its count.
+    #[test]
+    fn test_hangtime_marker_does_not_flap_on_pending_stealing() {
+        use tetra_saps::control::call_control::Circuit;
+        use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
+
+        let mut sched = get_testing_slotter();
+        let ts = TdmaTime { t: 2, f: 1, m: 1, h: 0 };
+
+        sched.create_circuit(
+            Direction::Dl,
+            Circuit {
+                direction: Direction::Dl,
+                ts: 2,
+                usage: 6,
+                circuit_mode: CircuitModeType::TchS,
+                speech_service: Some(0),
+                etee_encrypted: false,
+            },
+        );
+
+        // Active over: traffic usage marker (UMt).
+        assert!(
+            decode_aach(&sched, ts).dl_is_traffic(),
+            "active over should carry the traffic usage marker"
+        );
+
+        // Hangtime, no pending steal: AssignedControl, not traffic.
+        sched.set_hangtime(2, true);
+        let aach = decode_aach(&sched, ts);
+        assert!(!aach.dl_is_traffic(), "hangtime should drop the traffic usage marker");
+        assert!(
+            matches!(
+                aach,
+                AccessAssign::DownlinkDefinedUplinkAssignedOnly {
+                    downlink_usage_marker: AccessAssignDlUsage::AssignedControl,
+                    ..
+                }
+            ),
+            "hangtime AACH should be AssignedControl, got {:?}",
+            aach
+        );
+
+        // Hangtime with a pending stolen block: still AssignedControl, no flap to UMt.
+        sched.dl_enqueue_stealing(2, BitBuffer::from_bitstr("10110000"), None);
+        assert!(sched.has_pending_stealing(2), "stealing block should be queued");
+        let aach = decode_aach(&sched, ts);
+        assert!(
+            !aach.dl_is_traffic(),
+            "hangtime marker must not flap back to traffic while a steal is pending, got {:?}",
+            aach
+        );
+    }
+
     #[test]
     fn test_dl_indicates_reserved_subslots() {
         let mut sched = get_testing_slotter();
