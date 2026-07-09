@@ -8,6 +8,10 @@ use crate::umac::{
     fields::{EventLabel, basic_slotgrant::BasicSlotgrant, channel_allocation::ChanAllocElement},
 };
 
+// Constants for length_ind field
+pub const MAC_RESOURCE_LENGTH_FRAG_START: u8 = 0b111111;
+pub const MAC_RESOURCE_LENGTH_2ND_SLOT_STOLEN: u8 = 0b111110;
+
 /// Clause 21.4.3.1 MAC-RESOURCE
 #[derive(Debug, Clone, Default)]
 pub struct MacResource {

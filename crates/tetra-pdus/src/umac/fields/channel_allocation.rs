@@ -5,7 +5,7 @@ use core::fmt;
 use tetra_core::{BitBuffer, Todo, pdu_parse_error::PduParseErr};
 use tetra_saps::lcmc::enums::{alloc_type::ChanAllocType, ul_dl_assignment::UlDlAssignment};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ChanAllocElement {
     // 2
     pub alloc_type: ChanAllocType,

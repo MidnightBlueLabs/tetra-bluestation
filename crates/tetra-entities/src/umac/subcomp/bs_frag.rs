@@ -1,14 +1,15 @@
 use std::cmp::min;
 
-use tetra_core::{BitBuffer, TxReporter};
-
-use tetra_pdus::umac::pdus::{mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource};
-
 use crate::umac::subcomp::fillbits;
+use tetra_core::{BitBuffer, TxReporter};
+use tetra_pdus::umac::fields::channel_allocation::ChanAllocElement;
+use tetra_pdus::umac::pdus::mac_resource::MAC_RESOURCE_LENGTH_FRAG_START;
+use tetra_pdus::umac::pdus::{mac_end_dl::MacEndDl, mac_frag_dl::MacFragDl, mac_resource::MacResource};
 
 #[derive(Debug)]
 pub struct BsFragger {
     resource: MacResource,
+    chan_alloc: Option<ChanAllocElement>,
     mac_hdr_is_written: bool,
     is_fully_transmitted: bool,
     sdu: BitBuffer,
@@ -28,6 +29,7 @@ impl BsFragger {
         // resource.update_len_and_fill_ind(sdu.get_len());
         BsFragger {
             resource,
+            chan_alloc: None,
             mac_hdr_is_written: false,
             is_fully_transmitted: false,
             sdu,
@@ -49,12 +51,10 @@ impl BsFragger {
         );
 
         // Compute len of full resource, including sdu and fill bits
-        let hdr_len_bits = self.resource.compute_header_len();
+        let mut hdr_len_bits = self.resource.compute_header_len();
         let sdu_len_bits = self.sdu.get_len_remaining();
         let slot_cap_bits = mac_block.get_len_remaining();
-
         let num_fill_bits = fillbits::addition::compute_required(hdr_len_bits + sdu_len_bits, slot_cap_bits);
-
         let total_len_bits = hdr_len_bits + sdu_len_bits + num_fill_bits;
         let total_len_bytes = total_len_bits / 8;
 
@@ -98,21 +98,48 @@ impl BsFragger {
             );
             false
         } else {
-            // We need to start fragmentation. No fill bits are needed
-            self.resource.length_ind = 0b111111; // Start of fragmentation
+            let mut sdu_space_bits = slot_cap_bits - hdr_len_bits;
+
+            // If there is a channel allocation element, this needs to be delayed until the last fragment.
+            // 23.5.4.1 - "The channel allocation is generally sent in a MAC-RESOURCE PDU. However, if the BS wishes to send channel
+            // allocation information with a fragmented message then that information shall be included within the MAC-END PDU
+            // and shall not be included within the MAC-RESOURCE PDU."
+            if self.resource.chan_alloc_element.is_some() {
+
+                // Move the chan_alloc element out of the resource and into the fragger state
+                self.chan_alloc = self.resource.chan_alloc_element.clone();
+                self.resource.chan_alloc_element = None;
+
+                // Compute the new header length & the new available space for SDU bits
+                hdr_len_bits = self.resource.compute_header_len();
+                sdu_space_bits = slot_cap_bits - hdr_len_bits;
+
+                // If the SDU would now fit, do not start fragmentation and instead defer the PDU
+                if sdu_len_bits <= sdu_space_bits {
+                    tracing::debug!("PDU fits after removing channel allocation, shan't fragment - deferring instead");
+
+                    // Put the channel allocation element back into the resource
+                    self.resource.chan_alloc_element = self.chan_alloc.take();
+
+                    return false;
+                }
+            }
+
+            // We need to start fragmentation
+            self.resource.length_ind = MAC_RESOURCE_LENGTH_FRAG_START;
+
+            // No fill bits are allowed.
             self.resource.fill_bits = false;
-            assert!(num_fill_bits == 0, "Got {} fill bits upon frag start", num_fill_bits);
-            let sdu_bits = slot_cap_bits - hdr_len_bits;
 
             tracing::debug!(
                 "-> Fragged {:?} sdu {}",
                 self.resource,
                 self.sdu
-                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_bits)
+                    .raw_dump_bin(false, false, self.sdu.get_pos(), self.sdu.get_pos() + sdu_space_bits)
             );
 
             self.resource.to_bitbuf(mac_block);
-            mac_block.copy_bits(&mut self.sdu, sdu_bits);
+            mac_block.copy_bits(&mut self.sdu, sdu_space_bits);
             fillbits::addition::write(mac_block, None);
 
             // More fragments follow
@@ -125,14 +152,13 @@ impl BsFragger {
     /// next chunks. Based on capacity, will determine whether to make a MAC-FRAG or
     /// MAC-END.
     /// Returns true when MAC-END (DL) was created and no further fragments are needed
-    /// TODO FIXME: support adding ChanAlloc element in MAC-END
     fn get_frag_or_end_chunk(&mut self, mac_block: &mut BitBuffer) -> bool {
         // Some sanity checks
         assert!(self.mac_hdr_is_written, "MAC header should be previously written");
 
         // Check if we can fit all in a MAC-END message
         let sdu_bits = self.sdu.get_len_remaining();
-        let macend_len_bits = MacEndDl::compute_hdr_len(false, false) + sdu_bits;
+        let macend_len_bits = MacEndDl::compute_hdr_len(None, self.chan_alloc.clone()) + sdu_bits;
         let macend_len_bytes = (macend_len_bits + 7) / 8;
         let slot_cap_bits = mac_block.get_len_remaining();
 
@@ -141,13 +167,18 @@ impl BsFragger {
         if macend_len_bytes * 8 <= slot_cap_bits {
             // Fits in single MAC-END
             let num_fill_bits = fillbits::addition::compute_required(macend_len_bits, slot_cap_bits);
-            let pdu = MacEndDl {
+            let mut pdu = MacEndDl {
                 fill_bits: num_fill_bits > 0,
                 pos_of_grant: 0,
                 length_ind: macend_len_bytes as u8,
                 slot_granting_element: None,
                 chan_alloc_element: None,
             };
+
+            if let Some(chan_alloc) = self.chan_alloc.take() {
+                tracing::debug!("Placing deferred channel allocation element in MAC-END");
+                pdu.chan_alloc_element = Some(chan_alloc);
+            }
 
             tracing::debug!(
                 "-> {:?} sdu {}",
@@ -244,13 +275,15 @@ impl Drop for BsFragger {
 
 #[cfg(test)]
 mod tests {
+    use crate::umac::subcomp::bs_sched::{SCH_F_CAP, SCH_HD_CAP};
     use tetra_core::{
         TxState,
         address::{SsiType, TetraAddress},
         debug,
     };
-
-    use crate::umac::subcomp::bs_sched::{SCH_F_CAP, SCH_HD_CAP};
+    use tetra_pdus::umac::pdus::mac_resource::MAC_RESOURCE_LENGTH_FRAG_START;
+    use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
+    use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 
     use super::*;
     fn get_default_resource() -> MacResource {
@@ -419,5 +452,190 @@ mod tests {
         assert_eq!(reporter.get_state(), TxState::Discarded);
         assert!(reporter.is_in_final_state());
         assert!(!reporter.is_transmitted());
+    }
+
+    #[test]
+    fn test_defers_chan_alloc_to_last_fragment() {
+        debug::setup_logging_verbose();
+
+        let mut resource = get_default_resource();
+        let chan_alloc = ChanAllocElement {
+            alloc_type: ChanAllocType::Replace,
+            ts_assigned: [false, true, false, false],
+            ul_dl_assigned: UlDlAssignment::Both,
+            clch_permission: false,
+            cell_change_flag: false,
+            carrier_num: 0,
+            ext: None,
+            mon_pattern: 0,
+            frame18_mon_pattern: Some(0),
+        };
+        resource.chan_alloc_element = Some(chan_alloc.clone());
+
+        let original_sdu_bitstr = &"00001111".repeat(60);
+        let original_sdu = BitBuffer::from_bitstr(original_sdu_bitstr);
+
+        // We'll reconstruct the bitstr from the fragments and check that it matches the original SDU
+        let mut reconstructed_bitstr = String::new();
+
+        let mut fragger = BsFragger::new(resource, original_sdu, None);
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let mut done = fragger.get_next_chunk(&mut mac_block);
+        mac_block.seek(0);
+
+        // Decode this chunk as a MacResource and check that the chan_alloc_element is not present
+        let pdu = MacResource::from_bitbuf(&mut mac_block).unwrap();
+        assert!(
+            pdu.chan_alloc_element.is_none(),
+            "Channel allocation element should be moved to last fragment"
+        );
+
+        // Fragmentation should start
+        assert_eq!(pdu.length_ind, MAC_RESOURCE_LENGTH_FRAG_START);
+        assert_eq!(pdu.fill_bits, false, "Fill bits should not be present in first fragment");
+
+        // Append the SDU bits from the first fragment to the reconstructed bitstr
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        reconstructed_bitstr += &mac_block.to_bitstr();
+
+        // Consume all fragments until the end
+        while !done {
+            mac_block = BitBuffer::new(SCH_HD_CAP);
+            done = fragger.get_next_chunk(&mut mac_block);
+            mac_block.seek(0);
+
+            // If we're done, process the last fragment
+            if done {
+                break;
+            }
+
+            // Decode this chunk as a MacFragDl and check that the chan_alloc_element is not present
+            let pdu = MacFragDl::from_bitbuf(&mut mac_block).unwrap();
+            assert_eq!(
+                pdu.fill_bits, false,
+                "Fill bits should not be present in fragments before the last one"
+            );
+
+            // Append the SDU bits from this fragment to the reconstructed bitstr
+            mac_block.set_raw_start(mac_block.get_raw_pos());
+            reconstructed_bitstr += &mac_block.to_bitstr();
+        }
+
+        // Final chunk should be a MacEndDl with the chan_alloc_element present
+        let pdu = MacEndDl::from_bitbuf(&mut mac_block).unwrap();
+        assert!(
+            pdu.chan_alloc_element.is_some(),
+            "Channel allocation element should be present in last fragment"
+        );
+
+        // Should match the one on the original resource
+        assert_eq!(
+            pdu.chan_alloc_element.unwrap(),
+            chan_alloc,
+            "Channel allocation element in last fragment should match the one deferred from the original resource"
+        );
+
+        // Compute the length of the PDU - we can ignore the special-meaning Length Indications for this purpose
+        let mut pdu_len_bits = pdu.length_ind as usize * 8;
+        let num_fill_bits = if pdu.fill_bits {
+            fillbits::removal::get_num_fill_bits(&mac_block, pdu_len_bits, false)
+        } else {
+            0
+        };
+
+        // Move the end of the MAC block to the end of the PDU, excluding the fill bits
+        pdu_len_bits -= num_fill_bits;
+        mac_block.set_raw_end(mac_block.get_raw_start() + pdu_len_bits);
+
+        // Append the SDU bits from the last fragment to the reconstructed bitstr
+        mac_block.set_raw_start(mac_block.get_raw_pos());
+        reconstructed_bitstr += &mac_block.to_bitstr();
+
+        // Check that the reconstructed bitstr matches the original SDU
+        assert!(
+            reconstructed_bitstr.eq(original_sdu_bitstr),
+            "Reconstructed SDU should match the original SDU bitstr"
+        );
+    }
+
+    #[test]
+    fn test_does_not_fragment_simple_small_resource() {
+        debug::setup_logging_verbose();
+
+        // Resource containing a small SDU that should fit in a single MAC-RESOURCE PDU
+        let resource = get_default_resource();
+        let original_sdu_bitstr = "0000111100001111";
+        let original_sdu = BitBuffer::from_bitstr(original_sdu_bitstr);
+
+        let mut fragger = BsFragger::new(resource, original_sdu, None);
+
+        let mut mac_block = BitBuffer::new(SCH_HD_CAP);
+        let done = fragger.get_next_chunk(&mut mac_block);
+
+        // Should be immediately complete
+        assert!(done, "Small PDU should be transmitted in a single chunk");
+
+        mac_block.seek(0);
+
+        // Decode this chunk as a MacResource and check that the chan_alloc_element is not present
+        let pdu = MacResource::from_bitbuf(&mut mac_block).unwrap();
+        assert!(pdu.chan_alloc_element.is_none(), "Channel allocation element should not be present");
+
+        // Fragmentation should not start
+        assert_ne!(
+            pdu.length_ind, MAC_RESOURCE_LENGTH_FRAG_START,
+            "Length Indication should not indicate fragmentation for small PDU"
+        );
+    }
+
+    #[test]
+    fn test_defers_mac_resource_with_chan_alloc_when_not_enough_space() {
+        debug::setup_logging_verbose();
+
+        // Resource containing a small SDU that should fit in a single MAC-RESOURCE PDU, but will not once the channel allocation element is added
+        // MAC header is 43 bits
+        let mut resource = get_default_resource();
+
+        // channel allocation element that uses 27 bits
+        let chan_alloc = ChanAllocElement {
+            alloc_type: ChanAllocType::Replace,
+            ts_assigned: [false, true, false, false],
+            ul_dl_assigned: UlDlAssignment::Both,
+            clch_permission: false,
+            cell_change_flag: false,
+            carrier_num: 0,
+            ext: None,
+            mon_pattern: 0,
+            frame18_mon_pattern: Some(0),
+        };
+        resource.chan_alloc_element = Some(chan_alloc.clone());
+
+        // Pretend there are 80 bits of capacity left in this block
+        let mut mac_block = BitBuffer::new(80);
+
+        // 16 bits of SDU, so total PDU size is 43 + 27 + 16 = 86 bits (bigger than 80 bits remaining block)
+        // Removing the 27 bit channel allocation allows the PDU to fit, however
+        let original_sdu_bitstr = "0000111100001111";
+        let original_sdu = BitBuffer::from_bitstr(original_sdu_bitstr);
+
+        let mut fragger = BsFragger::new(resource, original_sdu, None);
+        let done = fragger.get_next_chunk(&mut mac_block);
+
+        // Should defer the entire PDU to the next frame
+        assert!(!done, "Small PDU with channel allocation should be deferred to next frame");
+
+        // The MAC block should be empty
+        assert_eq!(
+            mac_block.get_len_written(),
+            0,
+            "MAC block should be empty since the PDU was deferred"
+        );
+
+        // The channel allocation element should still be present in the resource
+        assert!(
+            fragger.resource.chan_alloc_element.is_some(),
+            "Channel allocation element should still be present in the resource since the PDU was deferred"
+        );
     }
 }
