@@ -42,6 +42,13 @@ pub const TCH_S_CAP: usize = 274;
 // The default access frame marker used in access fields
 const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots2;
 
+// Housekeeping only, not an ETSI value. Reclaims a UL reservation if the MS never sends
+// its continuation at all. Normal reservations are released by ul_release_slot as soon as
+// they are actually consumed, so this almost never fires. Matches the reassembly timeout
+// already used in BsDefrag for the same purpose, so both give up on the same message at
+// the same point instead of disagreeing.
+const UL_RESERVATION_ABANDONED_FRAMES: i32 = 10;
+
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
 
@@ -390,6 +397,23 @@ impl BsChannelScheduler {
                     return None;
                 }
                 sched.ul1
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // Releases a granted UL reservation. ETSI 23.4.3.1.2 permits discarding a continuation
+    // only on decode failure or on a new MAC-ACCESS PDU superseding it. Call this on those
+    // two events, not on a timer, so the reservation stays valid for exactly as long as
+    // ETSI requires the BS to keep attempting reception.
+    pub fn ul_release_slot(&mut self, ts: TdmaTime, slot: PhyBlockNum) {
+        let sched = &mut self.ulsched[ts.t as usize - 1][self.ul_ts_to_sched_index(&ts)];
+        match slot {
+            PhyBlockNum::Block1 => sched.ul1 = None,
+            PhyBlockNum::Block2 => sched.ul2 = None,
+            PhyBlockNum::Both => {
+                sched.ul1 = None;
+                sched.ul2 = None;
             }
             _ => unreachable!(),
         }
@@ -1070,8 +1094,9 @@ impl BsChannelScheduler {
         // tracing::warn!("start finalize");
         // self.dump_ul_schedule_full(true);
 
-        // Clear UL schedule for this timeslot
-        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4));
+        // Abandonment backstop. Normal reservations are already gone by now via
+        // ul_release_slot, so this only ever catches a grant the MS never used.
+        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4 * UL_RESERVATION_ABANDONED_FRAMES));
         self.ulsched[ts.t as usize - 1][index].ul1 = None;
         self.ulsched[ts.t as usize - 1][index].ul2 = None;
 
