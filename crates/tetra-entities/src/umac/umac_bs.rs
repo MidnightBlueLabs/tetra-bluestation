@@ -656,6 +656,14 @@ impl UmacBs {
         // access and acking it would steal an extra MAC-RESOURCE onto the traffic channel.
         // Hangtime and control-channel access (floor requests) are still acked.
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
+
+        // A fresh MAC-ACCESS landed on a slot we still had reserved for someone else's
+        // continuation. ETSI 23.4.3.1.2 treats this as a supersession, not a timeout, so
+        // release the stale reservation and continue processing this as a new access.
+        if self.channel_scheduler.ul_get_slot_owner(msg_dltime, prim.block_num).is_some() {
+            self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
+        }
+
         let in_active_over =
             self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
         if !in_active_over {
@@ -775,6 +783,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
 
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented_log!("rx_mac_frag_ul: Encryption not supported");
@@ -842,6 +852,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_ul: Encryption not supported");
         }
@@ -958,6 +970,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_hu: Encryption not supported");
         }
