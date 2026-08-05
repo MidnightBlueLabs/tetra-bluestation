@@ -3,12 +3,21 @@
 use tetra_config::bluestation::{StackMode, sec_phy_soapy::*};
 
 /// Enum of all supported devices
+#[derive(Debug, PartialEq)]
 pub enum SupportedDevice {
+    BladeRf(BladeRfModel),
     LimeSdr(LimeSdrModel),
     SXceiver,
     MuCell,
     PlutoSdr,
     Usrp(UsrpModel),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BladeRfModel {
+    BladeRf1,
+    BladeRf2,
+    Other,
 }
 
 #[derive(Debug, PartialEq)]
@@ -33,6 +42,14 @@ impl SupportedDevice {
     /// Detect an SDR device based on driver key and hardware key.
     /// Return None if the device is not supported.
     pub fn detect(driver_key: &str, hardware_key: &str) -> Option<Self> {
+        if driver_key.eq_ignore_ascii_case("bladerf") {
+            return Some(Self::BladeRf(match hardware_key {
+                "bladerf1" => BladeRfModel::BladeRf1,
+                "bladerf2" => BladeRfModel::BladeRf2,
+                _ => BladeRfModel::Other,
+            }));
+        }
+
         match (driver_key, hardware_key) {
             ("FX3", "LimeSDR-USB") => Some(Self::LimeSdr(LimeSdrModel::LimeSdrUsb)),
             ("FX3", _) => Some(Self::LimeSdr(LimeSdrModel::OtherFx3)),
@@ -68,6 +85,10 @@ pub struct SdrSettings {
     /// current hardware time. This is used in case get_hardware_time
     /// is unacceptably slow or not supported.
     pub use_get_hardware_time: bool,
+    /// If false, transmit continuously instead of timestamping each block.
+    pub use_timed_tx: bool,
+    /// Read at the hardware MTU and stage samples for smaller DSP reads.
+    pub stage_rx_to_mtu: bool,
     /// Receive and transmit sample rate.
     pub fs: f64,
     /// Receive channel number
@@ -92,6 +113,7 @@ pub struct SdrSettings {
     pub dev_args: Vec<(String, String)>,
 }
 
+#[derive(Debug)]
 pub enum Error {
     InvalidConfiguration,
 }
@@ -148,6 +170,7 @@ impl SdrSettings {
     /// Get default settings based on SDR type
     fn get_defaults(cfg: &CfgSoapySdr, device: SupportedDevice, mode: StackMode) -> Self {
         match device {
+            SupportedDevice::BladeRf(model) => Self::settings_bladerf(mode, model),
             SupportedDevice::LimeSdr(model) => Self::settings_limesdr(mode, model),
 
             SupportedDevice::SXceiver => Self::settings_sxceiver(mode, cfg.fs),
@@ -184,6 +207,8 @@ impl SdrSettings {
             },
 
             use_get_hardware_time: true,
+            use_timed_tx: true,
+            stage_rx_to_mtu: false,
             rx_ant: None,
             tx_ant: None,
             rx_gain: vec![],
@@ -229,6 +254,52 @@ impl SdrSettings {
             // Minimum latency for BS/MS, maximum throughput for monitor
             rx_args: vec![("latency".to_string(), if mode == StackMode::Mon { "1" } else { "0" }.to_string())],
             tx_args: vec![("latency".to_string(), if mode == StackMode::Mon { "1" } else { "0" }.to_string())],
+
+            ..Self::default(mode)
+        }
+    }
+
+    fn settings_bladerf(mode: StackMode, model: BladeRfModel) -> Self {
+        Self {
+            name: match model {
+                BladeRfModel::BladeRf1 => "bladeRF 1",
+                BladeRfModel::BladeRf2 => "bladeRF 2",
+                BladeRfModel::Other => "Unknown bladeRF model",
+            }
+            .to_string(),
+
+            // Hardware-time reads are synchronous USB control transfers on
+            // bladeRF. RX metadata already provides the clock we need.
+            use_get_hardware_time: false,
+            // BlueStation only has the current TETRA slot available. That is
+            // not enough timestamp lead for reliable bladeRF USB writes, so
+            // keep the generated sample stream continuous instead.
+            use_timed_tx: false,
+            // The DSP requests blocks smaller than bladeRF's native MTU.
+            stage_rx_to_mtu: true,
+
+            rx_ant: Some("RX".to_string()),
+            tx_ant: Some("TX".to_string()),
+
+            rx_gain: match model {
+                // Equivalent to the tested 35 dB aggregate RX gain.
+                BladeRfModel::BladeRf1 => {
+                    vec![("lna".to_string(), 6.0), ("rxvga1".to_string(), 29.0), ("rxvga2".to_string(), 6.0)]
+                }
+                // libbladeRF exposes the AD9361's full RX stage as 1..77 dB
+                // below 1.3 GHz. Keep this untested model at a conservative
+                // manual gain while allowing the canonical gain override.
+                BladeRfModel::BladeRf2 => vec![("full".to_string(), 35.0)],
+                BladeRfModel::Other => vec![],
+            },
+            tx_gain: match model {
+                // Minimum tested bladeRF 1 TX gain (17 dB aggregate).
+                BladeRfModel::BladeRf1 => vec![("txvga1".to_string(), -35.0), ("txvga2".to_string(), 0.0)],
+                // The bladeRF 2 dsa stage is attenuation expressed as gain;
+                // -89.75 dB is libbladeRF's minimum and safest default.
+                BladeRfModel::BladeRf2 => vec![("dsa".to_string(), -89.75)],
+                BladeRfModel::Other => vec![],
+            },
 
             ..Self::default(mode)
         }
@@ -335,4 +406,85 @@ pub fn block_size(fs: f64) -> usize {
     // It is a bit bug prone to have it here in case
     // FCFB parameters are changed, but it makes things simpler for now.
     (fs * 1.5e-3).round() as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{BladeRfModel, SdrSettings, SupportedDevice};
+    use tetra_config::bluestation::{StackMode, sec_phy_soapy::CfgSoapySdr};
+
+    fn config() -> CfgSoapySdr {
+        CfgSoapySdr {
+            ul_freq: 433_025_000.0,
+            dl_freq: 438_025_000.0,
+            ppm_err: 0.0,
+            device: None,
+            rx_ant: None,
+            tx_ant: None,
+            rx_gains: HashMap::new(),
+            tx_gains: HashMap::new(),
+            fs: None,
+            rx_ch: None,
+            tx_ch: None,
+        }
+    }
+
+    #[test]
+    fn detects_both_bladerf_generations_case_insensitively() {
+        assert_eq!(
+            SupportedDevice::detect("bladeRF", "bladerf1"),
+            Some(SupportedDevice::BladeRf(BladeRfModel::BladeRf1))
+        );
+        assert_eq!(
+            SupportedDevice::detect("bladerf", "bladerf2"),
+            Some(SupportedDevice::BladeRf(BladeRfModel::BladeRf2))
+        );
+    }
+
+    #[test]
+    fn bladerf1_defaults_match_the_tested_streaming_profile() {
+        let settings = SdrSettings::get_settings(&config(), SupportedDevice::BladeRf(BladeRfModel::BladeRf1), StackMode::Bs)
+            .expect("bladeRF settings should be valid");
+
+        assert_eq!(settings.name, "bladeRF 1");
+        assert_eq!(settings.fs, 512e3);
+        assert_eq!(settings.rx_ant.as_deref(), Some("RX"));
+        assert_eq!(settings.tx_ant.as_deref(), Some("TX"));
+        assert!(!settings.use_get_hardware_time);
+        assert!(!settings.use_timed_tx);
+        assert!(settings.stage_rx_to_mtu);
+        assert_eq!(
+            settings.rx_gain,
+            vec![("lna".to_string(), 6.0), ("rxvga1".to_string(), 29.0), ("rxvga2".to_string(), 6.0),]
+        );
+        assert_eq!(settings.tx_gain, vec![("txvga1".to_string(), -35.0), ("txvga2".to_string(), 0.0)]);
+    }
+
+    #[test]
+    fn bladerf_gain_overrides_use_canonical_generic_configuration() {
+        let mut cfg = config();
+        cfg.rx_gains.insert("rxvga1".to_string(), 20.0);
+        cfg.tx_gains.insert("txvga2".to_string(), 10.0);
+
+        let settings = SdrSettings::get_settings(&cfg, SupportedDevice::BladeRf(BladeRfModel::BladeRf1), StackMode::Bs)
+            .expect("bladeRF gain overrides should be valid");
+
+        assert!(settings.rx_gain.contains(&("rxvga1".to_string(), 20.0)));
+        assert!(settings.tx_gain.contains(&("txvga2".to_string(), 10.0)));
+    }
+
+    #[test]
+    fn bladerf2_gain_stages_accept_canonical_overrides() {
+        let mut cfg = config();
+        cfg.rx_gains.insert("full".to_string(), 30.0);
+        cfg.tx_gains.insert("dsa".to_string(), -60.0);
+
+        let settings = SdrSettings::get_settings(&cfg, SupportedDevice::BladeRf(BladeRfModel::BladeRf2), StackMode::Bs)
+            .expect("bladeRF 2 gain overrides should be valid");
+
+        assert_eq!(settings.rx_gain, vec![("full".to_string(), 30.0)]);
+        assert_eq!(settings.tx_gain, vec![("dsa".to_string(), -60.0)]);
+    }
 }

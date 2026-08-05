@@ -1,0 +1,50 @@
+# TETRA BlueStation configuration for bladeRF 1 and bladeRF 2 devices.
+# DO NOT TRANSMIT without authorization for the configured frequencies.
+
+config_version = "0.6"
+stack_mode = "Bs"
+
+[phy_io]
+backend = "SoapySdr"
+
+[phy_io.soapysdr]
+# Downlink transmit and uplink receive frequencies in Hz. These must match
+# the carrier fields in cell_info below.
+tx_freq = 438025000
+rx_freq = 433025000
+
+# Select one device explicitly when multiple SDRs are connected.
+# Replace this example serial with the value reported by SoapySDRUtil --find.
+# device = "driver=bladerf,serial=00000000000000000000000000000000"
+
+rx_antenna = "RX"
+tx_antenna = "TX"
+
+# bladeRF 1 defaults below are equivalent to 35 dB aggregate RX gain and the
+# minimum 17 dB aggregate TX gain. Uncomment only the stages you need to tune.
+# bladeRF 2 exposes the full RX and dsa TX stages instead:
+# rx_gain_full = 35.0
+# tx_gain_dsa = -89.75
+# Confirm the stages and ranges exposed by your installed driver with
+# SoapySDRUtil --probe before changing them.
+# rx_gain_lna = 6.0
+# rx_gain_rxvga1 = 29.0
+# rx_gain_rxvga2 = 6.0
+# tx_gain_txvga1 = -35.0
+# tx_gain_txvga2 = 0.0
+
+[net_info]
+mcc = 204
+mnc = 1337
+
+[cell_info]
+freq_band = 4
+main_carrier = 1521
+duplex_spacing = 4
+freq_offset = 0
+reverse_operation = false
+location_area = 2
+colour_code = 1
+system_wide_services = true
+voice_service = true
+local_ssi_ranges = [[0, 90]]
