@@ -64,6 +64,13 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         }
     }
 
+    // Optional control section (legacy name: command)
+    if let Some(ref control) = root.command {
+        if !control.extra.is_empty() {
+            return Err(format!("Unrecognized fields in control config: {:?}", sorted_keys(&control.extra)).into());
+        }
+    }
+
     // Build config from required and optional values
     let mut cfg = StackConfig {
         stack_mode: root.stack_mode,
@@ -127,6 +134,7 @@ struct TomlConfigRoot {
 
     brew: Option<CfgBrewDto>,
     telemetry: Option<CfgTelemetryDto>,
+    #[serde(alias = "control")]
     command: Option<CfgControlDto>,
 
     #[serde(flatten)]
@@ -158,5 +166,46 @@ mod tests {
         assert_eq!(soapy.tx_ant.as_deref(), Some("TX"));
         assert_eq!(soapy.rx_gains.get("rxvga1"), Some(&20.0));
         assert_eq!(soapy.tx_gains.get("txvga2"), Some(&10.0));
+    }
+
+    #[test]
+    fn parses_telemetry_and_control_service_configuration() {
+        let source = format!(
+            "{}\n\
+             [telemetry]\n\
+             host = \"127.0.0.1\"\n\
+             port = 9001\n\
+             use_tls = false\n\
+             \n\
+             [control]\n\
+             host = \"127.0.0.1\"\n\
+             port = 9002\n\
+             use_tls = false\n",
+            include_str!("../../../../example_config/bladerf.toml")
+        );
+
+        let config = from_toml_str(&source).expect("telemetry and control sections should parse");
+        let telemetry = config.telemetry.expect("telemetry should be enabled");
+        let control = config.control.expect("control should be enabled");
+
+        assert_eq!(telemetry.host, "127.0.0.1");
+        assert_eq!(telemetry.port, 9001);
+        assert_eq!(control.host, "127.0.0.1");
+        assert_eq!(control.port, 9002);
+    }
+
+    #[test]
+    fn rejects_unknown_control_configuration_fields() {
+        let source = format!(
+            "{}\n\
+             [control]\n\
+             host = \"127.0.0.1\"\n\
+             port = 9002\n\
+             unsupported = true\n",
+            include_str!("../../../../example_config/bladerf.toml")
+        );
+
+        let error = from_toml_str(&source).expect_err("unknown control fields should be rejected");
+        assert!(error.to_string().contains("unsupported"));
     }
 }
