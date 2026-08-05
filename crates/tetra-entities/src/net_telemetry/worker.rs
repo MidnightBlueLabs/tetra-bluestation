@@ -198,13 +198,23 @@ mod tests {
             digest_auth_credentials: None,
             basic_auth_credentials: None,
             endpoint_path: "/".to_string(),
-            subprotocol: None,
+            subprotocol: Some(crate::net_telemetry::TELEMETRY_PROTOCOL_VERSION.to_string()),
             user_agent: "bluestation-test".to_string(),
             extra_headers: Vec::new(),
             heartbeat_interval: Duration::from_secs(10),
             heartbeat_timeout: Duration::from_secs(30),
             custom_root_certs: None,
         };
+
+        // Fail explicitly when the endpoint or protocol negotiation is not
+        // available. The worker intentionally tolerates connection failures,
+        // so joining its thread alone is not an end-to-end assertion.
+        let mut probe = WebSocketTransport::new(config.clone());
+        probe
+            .connect()
+            .expect("telemetry endpoint should accept the configured subprotocol");
+        assert!(probe.is_connected());
+        probe.disconnect();
 
         let (sink, source) = telemetry_channel();
 

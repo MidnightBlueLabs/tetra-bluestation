@@ -18,6 +18,12 @@ The documentation repository contains:
 - Build and runtime instructions   
 - Practical notes 
 
+bladeRF 1 and bladeRF 2 devices are supported through SoapyBladeRF. Start
+with `example_config/bladerf.toml`, select a device using the serial reported
+by `SoapySDRUtil --find`, and inspect valid antenna and gain-stage names with
+`SoapySDRUtil --probe`. The bladeRF x40 validation profile uses libbladeRF
+2.6.0, firmware 2.6.0, FPGA 0.16.0, and a 512 kS/s full-duplex stream.
+
 Contributions to the documentation follow the same pull-request-based workflow as the main codebase, see the appropriate "Contributions" chapter.
 
 ## Acknowledgements

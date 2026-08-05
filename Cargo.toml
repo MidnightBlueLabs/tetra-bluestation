@@ -11,9 +11,9 @@ members = [
     
     # Binaries
     "bins/bluestation-bs",
-    #"bins/bluestation-telemetry",
-    #"bins/bluestation-control",
-    #"bins/pdu-tool",
+    "bins/bluestation-telemetry",
+    "bins/bluestation-control",
+    "bins/pdu-tool",
 ]
 
 [workspace.package]

@@ -189,3 +189,30 @@ local_ssi_ranges = [
 # SDS works for all SSIs, currently, but the SDS over Brew feature may be fully disabled.
 # If left commented, all (outside of local_ssi_ranges) calls are allowed over Brew
 # whitelisted_ssis = [91]
+
+
+###############################################################################
+
+# OPTIONAL: Telemetry service. Start `bluestation-telemetry-service` separately.
+
+# [telemetry]
+# host = "127.0.0.1"
+# port = 9001
+# use_tls = false
+# ca_cert = "/path/to/ca-certificate.der"
+# username = "base-station"
+# password = "change-me"
+
+
+###############################################################################
+
+# OPTIONAL: Control service. Start `bluestation-control-service` separately.
+# The legacy section name [command] is also accepted.
+
+# [control]
+# host = "127.0.0.1"
+# port = 9002
+# use_tls = false
+# ca_cert = "/path/to/ca-certificate.der"
+# username = "base-station"
+# password = "change-me"

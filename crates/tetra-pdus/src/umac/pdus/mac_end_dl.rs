@@ -58,7 +58,7 @@ impl MacEndDl {
     }
 
     pub fn compute_hdr_len(slot_grant: Option<BasicSlotgrant>, chan_alloc: Option<ChanAllocElement>) -> usize {
-            2 + // MAC PDU type
+        2 + // MAC PDU type
             1 + // MAC PDU subtype
             1 + // Fill bit indication
             1 + // Position of grant

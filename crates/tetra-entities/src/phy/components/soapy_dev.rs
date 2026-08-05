@@ -155,6 +155,8 @@ struct RxDsp {
     /// How much of rx_buffer has been filled
     rx_buffer_i: usize,
     rx_block_count: fcfb::BlockCount,
+    /// Sample count expected from the next SDR read.
+    rx_expected_count: SampleCount,
 
     monitors: Vec<MonitorDlUlPair>,
     ul_demodulators: Vec<DemodulatorChannel>,
@@ -182,6 +184,7 @@ impl RxDsp {
             rx_buffer_i: 0,
             rx_fcfb: fcfb,
             rx_block_count: 0,
+            rx_expected_count: 0,
 
             monitors: phy_config
                 .monitor_frequencies
@@ -238,8 +241,7 @@ impl RxDsp {
             let result = sdr.receive(&mut self.rx_buffer[self.rx_buffer_i..])?;
 
             let block_size = self.rx_block_size.new as SampleCount;
-            let expected_count = self.rx_block_count as SampleCount * block_size + self.rx_buffer_i as SampleCount;
-            let samples_lost = result.count - expected_count;
+            let samples_lost = result.count - self.rx_expected_count;
             if samples_lost != 0 {
                 // Samples have been lost.
                 // Mark RX buffer as empty and skip the right number of samples
@@ -248,6 +250,7 @@ impl RxDsp {
                 // Expected sample count for the next read,
                 // assuming no more samples are lost.
                 let next_count = result.count + result.len as SampleCount;
+                self.rx_expected_count = next_count;
                 // div_euclid always rounds down (towards negative numbers),
                 // so use it with negations to round up to the next block.
                 let next_possible_block = -next_count.div_euclid(-block_size) + 1;
@@ -268,9 +271,11 @@ impl RxDsp {
                 // Repeat reads until the correct number of samples has been skipped.
                 while samples_to_skip > 0 {
                     let result = sdr.receive(&mut self.rx_buffer[0..samples_to_skip as usize])?;
+                    self.rx_expected_count = result.count + result.len as SampleCount;
                     samples_to_skip -= result.len as SampleCount;
                 }
             } else {
+                self.rx_expected_count = result.count + result.len as SampleCount;
                 self.rx_buffer_i += result.len;
                 if self.rx_buffer_i == self.rx_buffer.len() {
                     // tracing::trace!("Received processing block {} ({} samples in SDR buffer)",

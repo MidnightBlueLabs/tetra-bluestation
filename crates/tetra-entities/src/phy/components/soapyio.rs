@@ -34,10 +34,18 @@ pub struct SoapyIo {
     /// current hardware time. This is used in case get_hardware_time
     /// is unacceptably slow or not supported.
     use_get_hardware_time: bool,
+    /// If false, transmit continuously instead of timestamping each block.
+    use_timed_tx: bool,
 
     dev: soapysdr::Device,
     /// Receive stream. None if receiving is disabled.
     rx: Option<soapysdr::RxStream<StreamType>>,
+    /// MTU-sized native read buffer used by devices which cannot be drained
+    /// reliably using the smaller blocks requested by the DSP.
+    rx_staging: Vec<StreamType>,
+    rx_staging_pos: usize,
+    rx_staging_len: usize,
+    rx_staging_count: SampleCount,
     /// Transmit stream. None if transmitting is disabled.
     tx: Option<soapysdr::TxStream<StreamType>>,
 }
@@ -180,6 +188,16 @@ impl SoapyIo {
         if let Some(tx) = &mut tx {
             soapycheck!("activate TX stream", tx.activate(None));
         }
+        let rx_staging_capacity = if sdr_settings.stage_rx_to_mtu {
+            if let Some(rx) = &rx {
+                soapycheck!("get RX stream MTU", rx.mtu())
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
         Ok(Self {
             rx_ch,
             tx_ch,
@@ -189,69 +207,119 @@ impl SoapyIo {
             rx_next_count: 0,
             prev_time_ns: -1,
             use_get_hardware_time: sdr_settings.use_get_hardware_time,
+            use_timed_tx: sdr_settings.use_timed_tx,
             dev,
             rx,
+            rx_staging: vec![StreamType::default(); rx_staging_capacity],
+            rx_staging_pos: 0,
+            rx_staging_len: 0,
+            rx_staging_count: 0,
             tx,
         })
     }
 
-    pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {
-        if let Some(rx) = &mut self.rx {
-            // RX is enabled
-            match rx.read(&mut [buffer], 1000000) {
-                Ok(len) => {
-                    // Get timestamp, set initial time if not yet set
-                    let time = rx.time_ns();
-                    // rust-soapysdr does not let us if a timestamp was available
-                    // so we have to guess by checking whether it has changed from its previous value.
-                    let timestamp_available = time != self.prev_time_ns;
-                    self.prev_time_ns = time;
-
-                    if self.initial_time.is_none() && timestamp_available {
-                        self.initial_time = Some(time - ticks_to_time_ns(self.rx_next_count, self.rx_fs));
-                        tracing::trace!("Set initial_time to {} ns", self.initial_time.unwrap());
-                    };
-
-                    // Re-compute total count from timestamp (gracefully handles lost samples).
-                    let mut count = if timestamp_available {
-                        time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs)
-                    } else {
-                        // If timestamp was not available,
-                        // assume the read continues right after the previous read.
-                        // Some drivers, particularly SoapyRemote,
-                        // may provide a timestamp only in some of the reads.
-                        self.rx_next_count
-                    };
-
-                    // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic
-                    // This is known to happen for LimeSDR Mini v2 after some time
-                    let delta_from_expected = count - self.rx_next_count;
-                    if delta_from_expected.abs() <= RX_TIMESTAMP_JITTER_TOLERANCE_SAMPLES {
-                        if delta_from_expected != 0 {
-                            // Re-anchor phase so persistent +/-1 sample offset is corrected
-                            let initial_time = self.initial_time.unwrap() + ticks_to_time_ns(delta_from_expected, self.rx_fs); // unwrap never fails
-                            self.initial_time = Some(initial_time);
-                            tracing::debug!(
-                                "RX timestamp jitter {} sample(s); re-anchoring initial_time by {} ns",
-                                delta_from_expected,
-                                ticks_to_time_ns(delta_from_expected, self.rx_fs)
-                            );
-                        }
-                        count = self.rx_next_count;
-                    }
-
-                    // Store expected sample count for the next sample to be read.
-                    // This is used in case timestamp is missing.
-                    self.rx_next_count = count + len as SampleCount;
-
-                    Ok(RxResult { len, count })
-                }
-                Err(_) => Err(RxTxDevError::RxReadError),
-            }
-        } else {
-            // RX is disabled
-            Err(RxTxDevError::RxReadError)
+    /// Read directly from SoapySDR and translate the native timestamp to the
+    /// monotonically increasing sample counter used by the DSP.
+    fn receive_native(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {
+        if self.rx.is_none() {
+            return Err(RxTxDevError::RxReadError);
         }
+
+        loop {
+            let read_result = {
+                let rx = self.rx.as_mut().expect("RX stream was checked above");
+                match rx.read(&mut [buffer], 1000000) {
+                    Ok(len) => {
+                        let time = rx.time_ns();
+                        Ok((len, time))
+                    }
+                    Err(err) => Err(err),
+                }
+            };
+
+            let (len, time) = match read_result {
+                Ok(result) => result,
+                Err(err) if err.code == soapysdr::ErrorCode::Overflow => {
+                    tracing::warn!("SoapySDR RX overflow; resynchronizing from the next timestamp");
+                    continue;
+                }
+                Err(err) => {
+                    tracing::error!("SoapySDR RX read failed: {}", err);
+                    return Err(RxTxDevError::RxReadError);
+                }
+            };
+
+            if len == 0 {
+                continue;
+            }
+
+            // rust-soapysdr does not expose whether a timestamp was available,
+            // so infer it by checking whether the value changed.
+            let timestamp_available = time != self.prev_time_ns;
+            self.prev_time_ns = time;
+
+            if self.initial_time.is_none() && timestamp_available {
+                self.initial_time = Some(time - ticks_to_time_ns(self.rx_next_count, self.rx_fs));
+                tracing::trace!("Set initial_time to {} ns", self.initial_time.unwrap());
+            }
+
+            // Re-compute total count from timestamp (gracefully handles lost samples).
+            let mut count = if timestamp_available {
+                time_ns_to_ticks(time - self.initial_time.unwrap(), self.rx_fs)
+            } else {
+                // Some drivers, particularly SoapyRemote, provide timestamps
+                // only on some reads.
+                self.rx_next_count
+            };
+
+            // Smooth tiny timestamp jitter (e.g. +/-1 sample) to keep counters monotonic.
+            let delta_from_expected = count - self.rx_next_count;
+            if delta_from_expected.abs() <= RX_TIMESTAMP_JITTER_TOLERANCE_SAMPLES {
+                if delta_from_expected != 0 {
+                    let initial_time = self.initial_time.unwrap() + ticks_to_time_ns(delta_from_expected, self.rx_fs);
+                    self.initial_time = Some(initial_time);
+                    tracing::debug!(
+                        "RX timestamp jitter {} sample(s); re-anchoring initial_time by {} ns",
+                        delta_from_expected,
+                        ticks_to_time_ns(delta_from_expected, self.rx_fs)
+                    );
+                }
+                count = self.rx_next_count;
+            }
+
+            self.rx_next_count = count + len as SampleCount;
+            return Ok(RxResult { len, count });
+        }
+    }
+
+    pub fn receive(&mut self, buffer: &mut [StreamType]) -> Result<RxResult, RxTxDevError> {
+        if buffer.is_empty() {
+            return Ok(RxResult {
+                len: 0,
+                count: self.rx_next_count,
+            });
+        }
+
+        if self.rx_staging.is_empty() {
+            return self.receive_native(buffer);
+        }
+
+        if self.rx_staging_pos == self.rx_staging_len {
+            let mut staging = std::mem::take(&mut self.rx_staging);
+            let result = self.receive_native(&mut staging);
+            self.rx_staging = staging;
+            let result = result?;
+            self.rx_staging_pos = 0;
+            self.rx_staging_len = result.len;
+            self.rx_staging_count = result.count;
+        }
+
+        let count = self.rx_staging_count + self.rx_staging_pos as SampleCount;
+        let len = buffer.len().min(self.rx_staging_len - self.rx_staging_pos);
+        buffer[..len].copy_from_slice(&self.rx_staging[self.rx_staging_pos..self.rx_staging_pos + len]);
+        self.rx_staging_pos += len;
+
+        Ok(RxResult { len, count })
     }
 
     pub fn transmit(&mut self, buffer: &[StreamType], count: Option<SampleCount>) -> Result<(), RxTxDevError> {
@@ -259,7 +327,11 @@ impl SoapyIo {
             if let Some(initial_time) = self.initial_time {
                 tx.write_all(
                     &[buffer],
-                    count.map(|count| initial_time + ticks_to_time_ns(count, self.tx_fs)),
+                    if self.use_timed_tx {
+                        count.map(|count| initial_time + ticks_to_time_ns(count, self.tx_fs))
+                    } else {
+                        None
+                    },
                     false,
                     1000000,
                 )
@@ -473,4 +545,44 @@ fn open_device(soapy_cfg: &CfgSoapySdr, mode: StackMode) -> Result<(soapysdr::De
     }
 
     Ok((opened_device.dev, sdr_settings))
+}
+
+#[cfg(test)]
+mod hardware_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{SoapyIo, StreamType};
+    use tetra_config::bluestation::{SharedConfig, from_toml_str};
+
+    #[test]
+    #[ignore] // Requires exclusive access to bladeRF hardware and SoapyBladeRF.
+    fn bladerf_sustains_full_duplex_streaming() {
+        let serial = std::env::var("BLADERF_SERIAL").expect("set BLADERF_SERIAL to the bladeRF under test");
+        let source = include_str!("../../../../../example_config/bladerf.toml").replace(
+            "# device = \"driver=bladerf,serial=00000000000000000000000000000000\"",
+            &format!("device = \"driver=bladerf,serial={}\"", serial),
+        );
+        let config = from_toml_str(&source).expect("bladeRF example should parse");
+        let shared = SharedConfig::from_parts(config, None);
+        let mut io = SoapyIo::new(&shared).expect("bladeRF should initialize");
+
+        let mut rx_samples = vec![StreamType::default(); 768];
+        let tx_samples = vec![StreamType::default(); 768];
+        let started = Instant::now();
+        let mut expected_count = None;
+        let mut total_samples = 0usize;
+
+        while started.elapsed() < Duration::from_secs(3) {
+            let result = io.receive(&mut rx_samples).expect("bladeRF should return timestamped RX samples");
+            if let Some(expected_count) = expected_count {
+                assert_eq!(result.count, expected_count, "bladeRF RX timestamp discontinuity");
+            }
+            expected_count = Some(result.count + result.len as i64);
+            io.transmit(&tx_samples[..result.len], Some(result.count))
+                .expect("bladeRF should accept continuous TX samples");
+            total_samples += result.len;
+        }
+
+        assert!(total_samples >= 1_400_000, "bladeRF streamed too few samples: {total_samples}");
+    }
 }
