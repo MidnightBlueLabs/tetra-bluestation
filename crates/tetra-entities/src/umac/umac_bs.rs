@@ -22,7 +22,7 @@ use tetra_pdus::umac::pdus::mac_sync::MacSync;
 use tetra_pdus::umac::pdus::mac_sysinfo::MacSysinfo;
 use tetra_pdus::umac::pdus::mac_u_blck::MacUBlck;
 use tetra_pdus::umac::pdus::mac_u_signal::MacUSignal;
-use tetra_saps::control::call_control::{CallControl, Circuit};
+use tetra_saps::control::call_control::{CallControl, Circuit, CircuitDlMediaSource};
 use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
 use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
@@ -656,6 +656,14 @@ impl UmacBs {
         // access and acking it would steal an extra MAC-RESOURCE onto the traffic channel.
         // Hangtime and control-channel access (floor requests) are still acked.
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
+
+        // A fresh MAC-ACCESS landed on a slot we still had reserved for someone else's
+        // continuation. ETSI 23.4.3.1.2 treats this as a supersession, not a timeout, so
+        // release the stale reservation and continue processing this as a new access.
+        if self.channel_scheduler.ul_get_slot_owner(msg_dltime, prim.block_num).is_some() {
+            self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
+        }
+
         let in_active_over =
             self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
         if !in_active_over {
@@ -775,6 +783,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
 
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented_log!("rx_mac_frag_ul: Encryption not supported");
@@ -842,6 +852,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_ul: Encryption not supported");
         }
@@ -958,6 +970,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_hu: Encryption not supported");
         }
@@ -1294,11 +1308,22 @@ impl UmacBs {
                     }
                 }
 
-                // Loopback only if there's an active DL circuit on this timeslot
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, ts) {
-                    tracing::trace!("rx_tmd_prim: loopback UL voice on ts={}", ts);
+                // Loopback to the downlink. For a duplex call the listener sits on the peer
+                // timeslot, so route there. For simplex (no peer) it loops on the same slot.
+                // A network (Brew) circuit renders audio fed from the backend, so suppress the
+                // local loopback there or the caller would hear itself doubled with the echo.
+                let dl_ts = self.channel_scheduler.ul_peer_ts(ts).unwrap_or(ts);
+                let network_media = self.channel_scheduler.dl_media_source(dl_ts) == Some(CircuitDlMediaSource::Network);
+                if network_media {
+                    tracing::trace!(
+                        "rx_tmd_prim: network media on dl ts={}, suppressing local loopback from ts={}",
+                        dl_ts,
+                        ts
+                    );
+                } else if self.channel_scheduler.circuit_is_active(Direction::Dl, dl_ts) {
+                    tracing::trace!("rx_tmd_prim: loopback UL voice ts={} -> dl ts={}", ts, dl_ts);
                     if let Some(packed) = pack_ul_acelp_bits(&data) {
-                        self.channel_scheduler.dl_schedule_tmd(ts, packed);
+                        self.channel_scheduler.dl_schedule_tmd(dl_ts, packed);
                     } else {
                         tracing::warn!(
                             "rx_tmd_prim: unsupported UL voice length {} on ts={}, skipping loopback",
@@ -1307,7 +1332,7 @@ impl UmacBs {
                         );
                     }
                 } else {
-                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", ts);
+                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", dl_ts);
                 }
             }
             _ => {
@@ -1410,10 +1435,12 @@ impl UmacBs {
             let c = Circuit {
                 direction: d,
                 ts: circuit.ts,
+                peer_ts: circuit.peer_ts,
                 usage: circuit.usage,
                 circuit_mode: circuit.circuit_mode,
                 speech_service: circuit.speech_service,
                 etee_encrypted: circuit.etee_encrypted,
+                dl_media_source: circuit.dl_media_source,
             };
             self.channel_scheduler.create_circuit(d, c);
 
@@ -1475,6 +1502,13 @@ impl UmacBs {
                 continue;
             }
 
+            // No floor model on duplex (ETSI 14.5.1.2.2) or Brew circuits, so silence is not a stuck talker.
+            if self.channel_scheduler.ul_peer_ts(ts).is_some()
+                || self.channel_scheduler.dl_media_source(ts) == Some(CircuitDlMediaSource::Network)
+            {
+                continue;
+            }
+
             // Check if we've exceeded the inactivity threshold
             let timed_out = match self.last_ul_voice[idx] {
                 Some(t) => t.age(self.dltime) > UL_INACTIVITY_TIMESLOTS,
@@ -1523,6 +1557,14 @@ impl UmacBs {
                     self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
                 }
             }
+            // Network speaker: leave hangtime but do not arm local stuck-uplink detection,
+            // the uplink is silent because the audio comes from the backend.
+            CallControl::RemoteFloorGranted { ts, .. } => {
+                self.channel_scheduler.set_hangtime(ts, false);
+                if (1..=4).contains(&ts) {
+                    self.last_ul_voice[ts as usize - 1] = None;
+                }
+            }
             CallControl::CallEnded { ts, .. } => {
                 self.channel_scheduler.set_hangtime(ts, false);
                 if (1..=4).contains(&ts) {
@@ -1533,8 +1575,8 @@ impl UmacBs {
             // UlInactivityTimeout is UMAC→CMCE only, UMAC won't receive it back
             CallControl::UlInactivityTimeout { .. } => {}
 
-            // NetworkCall* are for CMCE ↔ Brew, not UMAC (for now)
-            CallControl::NetworkCallStart { .. } | CallControl::NetworkCallReady { .. } | CallControl::NetworkCallEnd { .. } => {
+            // The NetworkCall* and NetworkCircuit* messages are CMCE <-> Brew, not for UMAC.
+            _ => {
                 tracing::trace!("rx_control: ignoring CMCE-Brew notification (not for UMAC)");
             }
         }

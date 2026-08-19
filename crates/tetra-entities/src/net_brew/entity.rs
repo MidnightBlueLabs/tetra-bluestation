@@ -18,8 +18,11 @@ use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
-use tetra_saps::{SapMsg, SapMsgInner, control::call_control::CallControl, tmd::TmdCircuitDataReq};
+use tetra_saps::{
+    SapMsg, SapMsgInner, control::call_control::CallControl, control::call_control::NetworkCircuitCall, tmd::TmdCircuitDataReq,
+};
 
+use super::protocol::BrewCircularCall;
 use super::worker::{BrewCommand, BrewEvent, BrewWorker};
 
 /// Hangtime before releasing group call circuit to allow reuse without re-signaling.
@@ -109,6 +112,10 @@ pub struct BrewEntity {
     /// UL calls being forwarded to TetraPack, keyed by timeslot
     ul_forwarded: HashMap<u8, UlForwardedCall>,
 
+    /// Active circuit (individual/PBX/phone) call media, keyed by session UUID -> timeslot.
+    /// Downlink audio for these rides dl_jitter (per uuid); uplink rides ul_forwarded (per ts).
+    circuit_media: HashMap<Uuid, u8>,
+
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
 
@@ -155,6 +162,7 @@ impl BrewEntity {
             dl_jitter: HashMap::new(),
             hanging_calls: HashMap::new(),
             ul_forwarded: HashMap::new(),
+            circuit_media: HashMap::new(),
             subscriber_groups: HashMap::new(),
             connected: false,
             worker_handle: Some(handle),
@@ -189,6 +197,54 @@ impl BrewEntity {
                 }
                 BrewEvent::GroupCallEnd { uuid, cause } => {
                     self.handle_group_call_end(queue, uuid, cause);
+                }
+                BrewEvent::CircuitSetupRequest { uuid, call } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupRequest {
+                        brew_uuid: uuid,
+                        call: Self::brew_to_network_circuit(&call),
+                    }));
+                }
+                BrewEvent::CircuitSetupAccept { uuid } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupAccept { brew_uuid: uuid }));
+                }
+                BrewEvent::CircuitSetupReject { uuid, cause } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupReject { brew_uuid: uuid, cause }));
+                }
+                BrewEvent::CircuitAlert { uuid } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitAlert { brew_uuid: uuid }));
+                }
+                BrewEvent::CircuitConnectRequest { uuid, call } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitConnectRequest {
+                        brew_uuid: uuid,
+                        call: Self::brew_to_network_circuit(&call),
+                    }));
+                }
+                BrewEvent::CircuitConnectConfirm { uuid, grant, permission } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitConnectConfirm {
+                        brew_uuid: uuid,
+                        grant,
+                        permission,
+                    }));
+                }
+                BrewEvent::CircuitSimplexGranted { uuid, grant, permission } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSimplexGranted {
+                        brew_uuid: uuid,
+                        grant,
+                        permission,
+                    }));
+                }
+                BrewEvent::CircuitSimplexIdle { uuid, grant, permission } => {
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSimplexIdle {
+                        brew_uuid: uuid,
+                        grant,
+                        permission,
+                    }));
+                }
+                BrewEvent::CircuitRelease { uuid, cause } => {
+                    self.circuit_media.remove(&uuid);
+                    self.dl_jitter.remove(&uuid);
+                    self.ul_forwarded.retain(|_, fwd| fwd.uuid != uuid);
+                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitRelease { brew_uuid: uuid, cause }));
                 }
                 BrewEvent::VoiceFrame { uuid, length_bits, data } => {
                     self.handle_voice_frame(uuid, length_bits, data);
@@ -517,6 +573,19 @@ impl BrewEntity {
 
     /// Handle a voice frame from Brew — inject into the downlink
     fn handle_voice_frame(&mut self, uuid: Uuid, _length_bits: u16, data: Vec<u8>) {
+        // Circuit (individual/PBX) call: media keyed by uuid, downlink via dl_jitter.
+        if self.circuit_media.contains_key(&uuid) {
+            if data.len() < 36 {
+                tracing::warn!("BrewEntity: circuit voice frame too short ({} bytes)", data.len());
+                return;
+            }
+            let acelp_data = data[1..].to_vec();
+            self.dl_jitter
+                .entry(uuid)
+                .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(self.brew_config.jitter_initial_latency_frames as usize))
+                .push(acelp_data);
+            return;
+        }
         let Some(call) = self.active_calls.get_mut(&uuid) else {
             // Voice frame for unknown call — might arrive before GROUP_TX or after GROUP_IDLE
             tracing::trace!("BrewEntity: voice frame for unknown uuid={} ({} bytes)", uuid, data.len());
@@ -573,6 +642,20 @@ impl BrewEntity {
             let Some(ts) = call.ts else {
                 continue;
             };
+            if ts != self.dltime.t {
+                continue;
+            }
+            let Some(jitter) = self.dl_jitter.get_mut(uuid) else {
+                continue;
+            };
+            jitter.maybe_warn_unhealthy(*uuid);
+            if let Some(frame) = jitter.pop_ready() {
+                to_send.push((ts, *uuid, jitter.target_frames(), frame));
+            }
+        }
+
+        // Circuit (individual/PBX) calls play out on their own timeslot.
+        for (uuid, &ts) in &self.circuit_media {
             if ts != self.dltime.t {
                 continue;
             }
@@ -729,6 +812,93 @@ impl TetraEntityTrait for BrewEntity {
             }
             // UlInactivityTimeout is UMAC→CMCE only; Brew handles FloorReleased instead
             SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { .. }) => {}
+            // Circuit (individual/PBX/phone) call control from CMCE -> backend.
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest { brew_uuid, call }) => {
+                let _ = self.command_sender.send(BrewCommand::SendSetupRequest {
+                    uuid: brew_uuid,
+                    call: Self::network_to_brew_circuit(&call),
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupAccept { brew_uuid }) => {
+                let _ = self.command_sender.send(BrewCommand::SendSetupAccept { uuid: brew_uuid });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupReject { brew_uuid, cause }) => {
+                let _ = self.command_sender.send(BrewCommand::SendSetupReject { uuid: brew_uuid, cause });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitAlert { brew_uuid }) => {
+                let _ = self.command_sender.send(BrewCommand::SendCallAlert { uuid: brew_uuid });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectRequest { brew_uuid, call }) => {
+                let _ = self.command_sender.send(BrewCommand::SendConnectRequest {
+                    uuid: brew_uuid,
+                    call: Self::network_to_brew_circuit(&call),
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm {
+                brew_uuid,
+                grant,
+                permission,
+            }) => {
+                let _ = self.command_sender.send(BrewCommand::SendConnectConfirm {
+                    uuid: brew_uuid,
+                    grant,
+                    permission,
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexGranted {
+                brew_uuid,
+                grant,
+                permission,
+            }) => {
+                let _ = self.command_sender.send(BrewCommand::SendSimplexGranted {
+                    uuid: brew_uuid,
+                    grant,
+                    permission,
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexIdle {
+                brew_uuid,
+                grant,
+                permission,
+            }) => {
+                let _ = self.command_sender.send(BrewCommand::SendSimplexIdle {
+                    uuid: brew_uuid,
+                    grant,
+                    permission,
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, call_id, ts }) => {
+                tracing::info!("BrewEntity: circuit media ready uuid={} call_id={} ts={}", brew_uuid, call_id, ts);
+                self.circuit_media.insert(brew_uuid, ts);
+                // Forward the MS uplink on this slot to the backend under the same session.
+                self.ul_forwarded.insert(
+                    ts,
+                    UlForwardedCall {
+                        uuid: brew_uuid,
+                        call_id,
+                        source_issi: 0,
+                        dest_gssi: 0,
+                        frame_count: 0,
+                    },
+                );
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitDtmf {
+                brew_uuid,
+                length_bits,
+                data,
+            }) => {
+                let _ = self.command_sender.send(BrewCommand::SendDtmf {
+                    uuid: brew_uuid,
+                    length_bits,
+                    data,
+                });
+            }
+            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, cause }) => {
+                self.circuit_media.remove(&brew_uuid);
+                self.dl_jitter.remove(&brew_uuid);
+                self.ul_forwarded.retain(|_, fwd| fwd.uuid != brew_uuid);
+                let _ = self.command_sender.send(BrewCommand::SendCallRelease { uuid: brew_uuid, cause });
+            }
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
             }
@@ -1028,6 +1198,58 @@ impl Drop for BrewEntity {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
+        }
+    }
+}
+
+// Circuit (individual/PBX/phone) call helpers
+
+impl BrewEntity {
+    /// Build a CallControl message from Brew to CMCE.
+    fn cmce_msg(cc: CallControl) -> SapMsg {
+        SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Cmce,
+            msg: SapMsgInner::CmceCallControl(cc),
+        }
+    }
+
+    fn brew_to_network_circuit(c: &BrewCircularCall) -> NetworkCircuitCall {
+        NetworkCircuitCall {
+            source_issi: c.source,
+            destination: c.destination,
+            number: c.number.clone(),
+            priority: c.priority,
+            service: c.service,
+            mode: c.mode,
+            duplex: c.duplex,
+            method: c.method,
+            communication: c.communication,
+            grant: c.grant,
+            permission: c.permission,
+            timeout: c.timeout,
+            ownership: c.ownership,
+            queued: c.queued,
+        }
+    }
+
+    fn network_to_brew_circuit(c: &NetworkCircuitCall) -> BrewCircularCall {
+        BrewCircularCall {
+            source: c.source_issi,
+            destination: c.destination,
+            number: c.number.clone(),
+            priority: c.priority,
+            service: c.service,
+            mode: c.mode,
+            duplex: c.duplex,
+            method: c.method,
+            communication: c.communication,
+            grant: c.grant,
+            permission: c.permission,
+            timeout: c.timeout,
+            ownership: c.ownership,
+            queued: c.queued,
         }
     }
 }

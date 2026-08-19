@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use tetra_core::Direction;
-use tetra_saps::control::call_control::Circuit;
+use tetra_saps::control::call_control::{Circuit, CircuitDlMediaSource};
 
 pub struct CircuitMgr {
     pub dl: [Option<Circuit>; 4],
@@ -26,6 +26,16 @@ impl CircuitMgr {
             Direction::Ul => self.ul[ts as usize - 1].is_some(),
             _ => panic!("can only use with specific ul/dl direction"),
         }
+    }
+
+    /// Duplex peer timeslot of the uplink circuit on this timeslot, if any.
+    pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
+        self.ul[ts as usize - 1].as_ref().and_then(|c| c.peer_ts)
+    }
+
+    /// Downlink media source of the circuit on this timeslot, if any.
+    pub fn dl_media_source(&self, ts: u8) -> Option<CircuitDlMediaSource> {
+        self.dl[ts as usize - 1].as_ref().map(|c| c.dl_media_source)
     }
 
     pub fn get_usage(&self, dir: Direction, ts: u8) -> Option<u8> {

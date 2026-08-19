@@ -13,6 +13,8 @@ pub struct Type3FieldGeneric {
     pub len: usize,
     /// Up to 64 bits of data (later bits are discarded)
     pub data: u64,
+    /// Full element bits, MSB first, len bits, last byte zero-padded.
+    pub raw: Vec<u8>,
 }
 
 /// Helper functions for dealing with type2, type3 and type4 fields for MLE, CMCE, MM and SNDCP PDUs.
@@ -223,26 +225,30 @@ pub mod typed {
                 });
             }
         };
-        let read_bits = if len_bits > 64 { 64 } else { len_bits };
-        let data = match buffer.read_bits(read_bits) {
-            Some(x) => x,
-            None => {
-                return Err(PduParseErr::BufferEnded {
-                    field: Some("parse_type3_generic data"),
-                });
+        // Read the full element, MSB first, so elements longer than 64 bits keep all bits.
+        // data holds the first 64 bits for callers that read short numeric fields.
+        let mut raw = vec![0u8; len_bits.div_ceil(8)];
+        let mut data: u64 = 0;
+        for i in 0..len_bits {
+            let bit = match buffer.read_bits(1) {
+                Some(b) => b as u8,
+                None => {
+                    return Err(PduParseErr::BufferEnded {
+                        field: Some("parse_type3_generic data"),
+                    });
+                }
+            };
+            raw[i / 8] |= bit << (7 - (i % 8));
+            if i < 64 {
+                data = (data << 1) | bit as u64;
             }
-        };
-
-        // Seek forward to end of element, if larger than 64 bits
-        if len_bits > 64 {
-            tracing::warn!("Type3 element {} length {} exceeds 64 bits, data truncated", id, len_bits);
-            buffer.seek_rel(len_bits as isize - 64);
         }
 
         Ok(Some(Type3FieldGeneric {
             field_id: id,
             len: len_bits,
             data,
+            raw,
         }))
     }
 
@@ -387,7 +393,14 @@ pub mod typed {
             // Write mbit and 4-bit field ID, then write length, then the element itself
             write_type34_header_generic(buffer, id);
             buffer.write_bits(elem.len as u64, 11);
-            buffer.write_bits(elem.data, elem.len);
+            if elem.len <= 64 {
+                buffer.write_bits(elem.data, elem.len);
+            } else {
+                for i in 0..elem.len {
+                    let byte = elem.raw.get(i / 8).copied().unwrap_or(0);
+                    buffer.write_bit((byte >> (7 - (i % 8))) & 1);
+                }
+            }
         } else {
             // Don't write anything (no mbit)
             tracing::trace!("write_type3_generic no_field {}", buffer.dump_bin());
@@ -605,5 +618,41 @@ pub mod typed {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn type3_generic_round_trips_over_64_bits() {
+            // 24-digit external number = 96 bits, MSB-first nibbles 0..24.
+            let mut raw = vec![0u8; 12];
+            for i in 0..24u8 {
+                let nib = i % 10;
+                raw[(i / 2) as usize] |= if i % 2 == 0 { nib << 4 } else { nib };
+            }
+            let field = Type3FieldGeneric {
+                field_id: 2,
+                len: 96,
+                data: 0,
+                raw: raw.clone(),
+            };
+
+            let mut buf = BitBuffer::new_autoexpand(32);
+            write_type3_generic(true, &mut buf, &Some(field), 2u64).unwrap();
+            buf.seek(0);
+            let parsed = parse_type3_generic(true, &mut buf, 2u64).unwrap().unwrap();
+
+            assert_eq!(parsed.len, 96);
+            assert_eq!(parsed.raw, raw);
+            // data holds the first 64 bits MSB-first.
+            let mut expected_data: u64 = 0;
+            for i in 0..64 {
+                let bit = (raw[i / 8] >> (7 - (i % 8))) & 1;
+                expected_data = (expected_data << 1) | bit as u64;
+            }
+            assert_eq!(parsed.data, expected_data);
+        }
     }
 }

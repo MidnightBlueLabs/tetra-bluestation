@@ -1,6 +1,6 @@
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
 use tetra_saps::{
-    control::call_control::Circuit,
+    control::call_control::{Circuit, CircuitDlMediaSource},
     tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
 };
 
@@ -41,6 +41,13 @@ pub const TCH_S_CAP: usize = 274;
 
 // The default access frame marker used in access fields
 const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots2;
+
+// Housekeeping only, not an ETSI value. Reclaims a UL reservation if the MS never sends
+// its continuation at all. Normal reservations are released by ul_release_slot as soon as
+// they are actually consumed, so this almost never fires. Matches the reassembly timeout
+// already used in BsDefrag for the same purpose, so both give up on the same message at
+// the same point instead of disagreeing.
+const UL_RESERVATION_ABANDONED_FRAMES: i32 = 10;
 
 /// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
 pub const NUM_TIMESLOTS: usize = 4;
@@ -395,6 +402,23 @@ impl BsChannelScheduler {
         }
     }
 
+    // Releases a granted UL reservation. ETSI 23.4.3.1.2 permits discarding a continuation
+    // only on decode failure or on a new MAC-ACCESS PDU superseding it. Call this on those
+    // two events, not on a timer, so the reservation stays valid for exactly as long as
+    // ETSI requires the BS to keep attempting reception.
+    pub fn ul_release_slot(&mut self, ts: TdmaTime, slot: PhyBlockNum) {
+        let sched = &mut self.ulsched[ts.t as usize - 1][self.ul_ts_to_sched_index(&ts)];
+        match slot {
+            PhyBlockNum::Block1 => sched.ul1 = None,
+            PhyBlockNum::Block2 => sched.ul2 = None,
+            PhyBlockNum::Both => {
+                sched.ul1 = None;
+                sched.ul2 = None;
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn ul_get_usage(&self, ts: TdmaTime) -> AccessAssignUlUsage {
         let ul_sched = &self.ulsched[ts.t as usize - 1][self.ul_ts_to_sched_index(&ts)];
         match (ul_sched.ul1, ul_sched.ul2) {
@@ -499,6 +523,16 @@ impl BsChannelScheduler {
 
     pub fn circuit_is_active(&self, dir: Direction, ts: u8) -> bool {
         self.circuits.is_active(dir, ts)
+    }
+
+    /// Duplex peer timeslot of the uplink circuit on this timeslot, if any.
+    pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
+        self.circuits.ul_peer_ts(ts)
+    }
+
+    /// Downlink media source of the circuit on this timeslot, if any.
+    pub fn dl_media_source(&self, ts: u8) -> Option<CircuitDlMediaSource> {
+        self.circuits.dl_media_source(ts)
     }
 
     pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
@@ -1070,8 +1104,9 @@ impl BsChannelScheduler {
         // tracing::warn!("start finalize");
         // self.dump_ul_schedule_full(true);
 
-        // Clear UL schedule for this timeslot
-        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4));
+        // Abandonment backstop. Normal reservations are already gone by now via
+        // ul_release_slot, so this only ever catches a grant the MS never used.
+        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4 * UL_RESERVATION_ABANDONED_FRAMES));
         self.ulsched[ts.t as usize - 1][index].ul1 = None;
         self.ulsched[ts.t as usize - 1][index].ul2 = None;
 
@@ -1580,7 +1615,7 @@ mod tests {
     /// ACCESS-ASSIGN PDUs, ETSI 23.8.2.3.2) would reset its count.
     #[test]
     fn test_hangtime_marker_does_not_flap_on_pending_stealing() {
-        use tetra_saps::control::call_control::Circuit;
+        use tetra_saps::control::call_control::{Circuit, CircuitDlMediaSource};
         use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 
         let mut sched = get_testing_slotter();
@@ -1591,10 +1626,12 @@ mod tests {
             Circuit {
                 direction: Direction::Dl,
                 ts: 2,
+                peer_ts: None,
                 usage: 6,
                 circuit_mode: CircuitModeType::TchS,
                 speech_service: Some(0),
                 etee_encrypted: false,
+                dl_media_source: CircuitDlMediaSource::LocalLoopback,
             },
         );
 
