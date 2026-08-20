@@ -1,6 +1,6 @@
 use std::panic;
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{InternalState, SharedConfig, StackState};
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
@@ -41,8 +41,13 @@ use super::subcomp::bs_defrag::BsDefrag;
 pub struct UmacBs {
     self_component: TetraEntity,
     config: SharedConfig,
+    state: InternalState,
+
+    /// Maintains previous setting for system wide services
+    /// We'll update cached sysinfo messages if it changes
+    old_sws_setting: bool,
+
     dltime: TdmaTime,
-    system_wide_services: bool,
 
     /// This MAC's endpoint ID, for addressing by the higher layers
     /// When using only a single base radio, we can set this to a fixed value
@@ -71,16 +76,16 @@ struct PendingStch {
 }
 
 impl UmacBs {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, state: InternalState) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
-        let system_wide_services = Self::get_system_wide_services_state(&config);
-        let precomps = Self::generate_precomps(&config);
+        let precomps = Self::generate_precomps(&config, false);
         Self {
             self_component: TetraEntity::Umac,
             config,
+            state,
+            old_sws_setting: false,
             dltime: TdmaTime::default(),
-            system_wide_services,
             endpoint_id: 1,
             defrag: BsDefrag::new(),
             pending_stch: None,
@@ -93,7 +98,7 @@ impl UmacBs {
     /// Precomputes SYNC, SYSINFO messages (and subfield variants) for faster TX msg building
     /// Precomputed PDUs are passed to scheduler
     /// Needs to be re-invoked if any network parameter changes
-    pub fn generate_precomps(config: &SharedConfig) -> PrecomputedUmacPdus {
+    pub fn generate_precomps(config: &SharedConfig, system_wide_services: bool) -> PrecomputedUmacPdus {
         let c = config.config();
 
         // TODO FIXME make more/all parameters configurable
@@ -160,7 +165,6 @@ impl UmacBs {
             ext_services: Some(ext_services),
         };
 
-        let system_wide_services = Self::get_system_wide_services_state(config);
         let mle_sysinfo_pdu = DMleSysinfo {
             location_area: c.cell.location_area,
             subscriber_class: c.cell.subscriber_class,
@@ -208,23 +212,21 @@ impl UmacBs {
 
     /// Retrieve currently set value of system-wide services. If SwMI is active, this governs connection state
     /// Otherwise, value from config is used.
-    fn get_system_wide_services_state(config: &SharedConfig) -> bool {
-        let cfg = config.config();
-        if cfg.brew.is_some() {
-            config.state_read().network_connected
-        } else {
-            cfg.cell.system_wide_services
-        }
+    fn get_system_wide_services_state(&self) -> bool {
+        self.state.with_global_state(|g| g.network_connected)
     }
 
+    /// Each tick, check if sws changed
     fn refresh_system_wide_services(&mut self) {
-        let is_effective = Self::get_system_wide_services_state(&self.config);
-        if is_effective != self.system_wide_services {
-            self.system_wide_services = is_effective;
-            self.channel_scheduler.set_system_wide_services_state(is_effective);
-
+        let current_sws_setting = self.get_system_wide_services_state();
+        if self.old_sws_setting != current_sws_setting {
+            self.channel_scheduler.set_system_wide_services_state(current_sws_setting);
             // Should already be signalled at SwMI interface level
-            tracing::debug!("UmacBs: system_wide_services {}", if is_effective { "ENABLED" } else { "DISABLED" });
+            tracing::debug!(
+                "UmacBs: system_wide_services {}",
+                if current_sws_setting { "ENABLED" } else { "DISABLED" }
+            );
+            self.old_sws_setting = current_sws_setting;
         }
     }
 

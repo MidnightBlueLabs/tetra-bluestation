@@ -120,9 +120,6 @@ pub struct BrewEntity {
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
 
-    /// Whether the worker is connected
-    connected: bool,
-
     /// Worker thread handle for graceful shutdown
     worker_handle: Option<thread::JoinHandle<()>>,
 }
@@ -147,10 +144,6 @@ impl BrewEntity {
                 worker.run();
             })
             .expect("failed to spawn BrewWorker thread");
-        {
-            let mut state = config.state_write();
-            state.network_connected = false;
-        }
 
         Self {
             config,
@@ -165,9 +158,20 @@ impl BrewEntity {
             ul_forwarded: HashMap::new(),
             circuit_media: HashMap::new(),
             subscriber_groups: HashMap::new(),
-            connected: false,
+            // connected: false,
             worker_handle: Some(handle),
         }
+    }
+
+    /// Retrieves current connection status from global state
+    fn state_is_connected(&self) -> bool {
+        self.state.with_global_state(|x| x.network_connected)
+    }
+
+    /// Updates global state to reflect we are either connected or disconnected
+    fn state_set_connected(&self, is_connected: bool) {
+        self.state.with_global_state(|x| x.network_connected = is_connected);
+        tracing::info!("BrewEntity: backhaul {}", if is_connected { "CONNECTED" } else { "DISCONNECTED" });
     }
 
     /// Process all pending events from the worker thread
@@ -176,14 +180,12 @@ impl BrewEntity {
             match event {
                 BrewEvent::Connected => {
                     tracing::debug!("BrewEntity: connected to TetraPack server");
-                    self.connected = true;
+                    self.state_set_connected(true);
                     self.resync_subscribers();
-                    self.set_network_connected(true);
                 }
                 BrewEvent::Disconnected(reason) => {
                     tracing::debug!("BrewEntity: disconnected: {}", reason); // Already warned in worker
-                    self.set_network_connected(false);
-                    // Release all active calls
+                    self.state_set_connected(false);
                     self.release_all_calls(queue);
                 }
                 BrewEvent::GroupCallStart {
@@ -373,15 +375,6 @@ impl BrewEntity {
                     groups: gssi_list,
                 });
             }
-        }
-    }
-
-    fn set_network_connected(&mut self, connected: bool) {
-        self.connected = connected;
-        let mut state = self.config.state_write();
-        if state.network_connected != connected {
-            state.network_connected = connected;
-            tracing::info!("BrewEntity: backhaul {}", if connected { "CONNECTED" } else { "DISCONNECTED" });
         }
     }
 
@@ -919,7 +912,7 @@ impl BrewEntity {
     /// Handle notification that a local UL group call has started.
     /// If the group is subscribed (in config.groups), start forwarding to TetraPack.
     fn handle_local_call_start(&mut self, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
-        if !self.connected {
+        if !self.state_is_connected() {
             tracing::trace!("BrewEntity: not connected, ignoring local call start");
             return;
         }
@@ -1150,7 +1143,7 @@ impl BrewEntity {
 
     /// Handle outgoing SDS from CMCE → Brew (local MS → network)
     fn handle_sds_send(&self, sds: CmceSdsData) {
-        if !self.connected {
+        if !self.state_is_connected() {
             tracing::warn!(
                 "BrewEntity: not connected, dropping outgoing SDS {} -> {}",
                 sds.source_issi,

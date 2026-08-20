@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Default)]
 pub struct GlobalState {
-    network_connected: bool,
+    /// Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
+    pub network_connected: bool,
 }

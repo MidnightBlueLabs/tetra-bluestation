@@ -112,7 +112,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
 /// Start base station stack
 fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySource>, HashMap<TetraEntity, CommandDispatcher>) {
     let mut router = MessageRouter::new(cfg.clone());
-    let state = InternalState::new();
+    let state = InternalState::from_config(cfg.clone());
 
     // Add suitable Phy component based on PhyIo type
     match cfg.config().phy_io.backend {
@@ -143,7 +143,7 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
 
     // Add remaining components
     let lmac = LmacBs::new(cfg.clone());
-    let umac = UmacBs::new(cfg.clone());
+    let umac = UmacBs::new(cfg.clone(), state.clone());
     let llc = Llc::new(cfg.clone());
     let mle = MleBs::new(cfg.clone());
     let mm = MmBs::new(cfg.clone(), state.clone(), tsink.clone(), c_e.remove(&TetraEntity::Mm));
