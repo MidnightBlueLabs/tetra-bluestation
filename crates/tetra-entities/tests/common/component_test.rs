@@ -47,7 +47,7 @@ impl ComponentTest {
 
     /// Create a new ComponentTest instance with the given config and optional start downlink time.
     pub fn from_config(config: StackConfig, start_dl_time: Option<TdmaTime>) -> Self {
-        let shared_config = SharedConfig::from_parts(config, None);
+        let shared_config = SharedConfig::new(config, None);
         let config_clone = shared_config.clone();
         let mut mr = MessageRouter::new(config_clone);
 
@@ -124,7 +124,7 @@ impl ComponentTest {
                     self.router.register_entity(Box::new(sndcp));
                 }
                 TetraEntity::Cmce => {
-                    let cmce = CmceBs::new(self.config.clone(), None, None);
+                    let cmce = CmceBs::new(self.config.clone(), None, None, None);
                     self.router.register_entity(Box::new(cmce));
                 }
                 _ => {

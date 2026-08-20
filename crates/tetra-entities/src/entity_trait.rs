@@ -6,7 +6,7 @@ use tetra_saps::SapMsg;
 
 /// Trait for TETRA entities
 /// Used by MessageRouter for passing messages between entities
-pub trait TetraEntityTrait: Send + AsAny {
+pub trait TetraEntityTrait: AsAny {
     /// Returns the entity type identifier
     fn entity(&self) -> TetraEntity;
 

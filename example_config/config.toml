@@ -77,7 +77,7 @@ mnc = 1337
 # Read the spec if in doubt. Make sure these match the tx/rx freqs as given above
 # See ETSI TS 100 392-15 V1.5.1 Clause 6: Duplex spacing
 freq_band = 4                       # 400MHz band
-main_carrier = 1521                 # + 1521 * 25kHz = 38250kHz
+main_carrier = 1521                 # + 1521 * 25kHz = 38025kHz
 duplex_spacing = 4                  # Use 5MHz spacing between ul and dl (for 400 MHz band)
 # custom_duplex_spacing = 7600000   # Don't uncomment unless you have programmed a custom duplex spacing entry in your radios
 freq_offset = 0                     # Offset from carrier. Usually 0. Options: 0, 6250, -6250, 12500.

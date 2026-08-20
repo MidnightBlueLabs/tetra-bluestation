@@ -1,11 +1,8 @@
 use std::collections::VecDeque;
 
 use tetra_core::{Direction, TdmaTime, TimeslotAllocator, TimeslotOwner, frames, multiframes};
-use tetra_pdus::cmce::structs::cmce_circuit::CmceCircuit;
-use tetra_saps::{
-    control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
-    lcmc::CallId,
-};
+use tetra_pdus::cmce::structs::cmce_circuit::{CallId, CmceCircuit};
+use tetra_saps::control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType};
 
 const D_SETUP_REPEATS: i32 = 1;
 const LATE_ENTRY_INTERVAL_TIMESLOTS: i32 = multiframes!(5);

@@ -1,4 +1,4 @@
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{InternalState, SharedConfig};
 use tetra_core::Layer2Service;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
@@ -21,11 +21,12 @@ use crate::net_control::ControlCommand;
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
     config: SharedConfig,
+    state: InternalState,
 }
 
 impl SdsBsSubentity {
-    pub fn new(config: SharedConfig) -> Self {
-        SdsBsSubentity { config }
+    pub fn new(config: SharedConfig, state: InternalState) -> Self {
+        SdsBsSubentity { config, state }
     }
 
     /// Handle incoming U-SDS-DATA from a local MS (via RF uplink)
@@ -65,8 +66,11 @@ impl SdsBsSubentity {
         );
 
         // Route: local delivery (ISSI or GSSI), Brew forward, or drop
-        let is_local_issi = self.config.state_read().subscribers.is_registered(dest_ssi);
-        let is_local_group = !is_local_issi && self.config.state_read().subscribers.has_group_members(dest_ssi);
+        let (is_local_issi, is_local_group) = self.state.with_subscribers(|s| {
+            let is_local_issi = s.is_registered(dest_ssi);
+            let is_local_group = !is_local_issi && s.group_has_local_attached_mses(dest_ssi);
+            (is_local_issi, is_local_group)
+        });
 
         if is_local_issi {
             tracing::info!("SDS: local delivery: {} -> {}", source_ssi, dest_ssi);
@@ -105,7 +109,8 @@ impl SdsBsSubentity {
             sds.user_defined_data.length_bits()
         );
 
-        if !self.config.state_read().subscribers.is_registered(sds.dest_issi) {
+        // Route: local delivery (ISSI or GSSI), Brew forward, or drop
+        if !self.state.with_subscribers(|s| s.is_registered(sds.dest_issi)) {
             tracing::warn!("SDS: dest ISSI {} from Brew is not locally registered, dropping", sds.dest_issi);
             return;
         }
@@ -137,7 +142,7 @@ impl SdsBsSubentity {
             len_bits
         );
 
-        if !self.config.state_read().subscribers.is_registered(dest_ssi) {
+        if !self.state.with_subscribers(|s| s.is_registered(dest_ssi)) {
             tracing::warn!("SDS: dest ISSI {} from Control is not locally registered, dropping", dest_ssi);
             return false;
         }
@@ -192,7 +197,7 @@ impl SdsBsSubentity {
         );
 
         // Route: local delivery, Brew forward, or drop
-        if self.config.state_read().subscribers.is_registered(dest_ssi) {
+        if self.state.with_subscribers(|s| s.is_registered(dest_ssi)) {
             tracing::info!("SDS-STATUS: local delivery: {} -> {}", source_ssi, dest_ssi);
             self.send_d_status(queue, source_ssi, dest_ssi, pdu.pre_coded_status);
         } else if net_brew::is_active(&self.config) {

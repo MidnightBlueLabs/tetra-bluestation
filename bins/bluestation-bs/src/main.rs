@@ -9,7 +9,7 @@ use tetra_entities::net_control::{
     CONTROL_HEARTBEAT_INTERVAL, CONTROL_HEARTBEAT_TIMEOUT, CONTROL_PROTOCOL_VERSION, CommandDispatcher, ControlWorker,
 };
 
-use tetra_config::bluestation::{PhyBackend, SharedConfig, StackConfig, parsing};
+use tetra_config::bluestation::{InternalState, PhyBackend, SharedConfig, StackConfig, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;
@@ -112,6 +112,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
 /// Start base station stack
 fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySource>, HashMap<TetraEntity, CommandDispatcher>) {
     let mut router = MessageRouter::new(cfg.clone());
+    let state = InternalState::new();
 
     // Add suitable Phy component based on PhyIo type
     match cfg.config().phy_io.backend {
@@ -145,9 +146,10 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
     let umac = UmacBs::new(cfg.clone());
     let llc = Llc::new(cfg.clone());
     let mle = MleBs::new(cfg.clone());
-    let mm = MmBs::new(cfg.clone(), tsink.clone(), c_e.remove(&TetraEntity::Mm));
+    let mm = MmBs::new(cfg.clone(), state.clone(), tsink.clone(), c_e.remove(&TetraEntity::Mm));
     let sndcp = Sndcp::new(cfg.clone());
-    let cmce = CmceBs::new(cfg.clone(), tsink.clone(), c_e.remove(&TetraEntity::Cmce));
+    let cmce = CmceBs::new(cfg.clone(), state.clone(), tsink.clone(), c_e.remove(&TetraEntity::Cmce));
+
     router.register_entity(Box::new(lmac));
     router.register_entity(Box::new(umac));
     router.register_entity(Box::new(llc));
@@ -165,7 +167,7 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
     // Register Brew entity if enabled
     if let Some(ref brew_cfg) = cfg.config().brew {
         let transport = new_websocket_transport(brew_cfg);
-        let brew_entity = BrewEntity::new(cfg.clone(), transport);
+        let brew_entity = BrewEntity::new(cfg.clone(), state.clone(), transport);
         router.register_entity(Box::new(brew_entity));
         eprintln!(" -> Brew/TetraPack integration enabled");
     }

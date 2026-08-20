@@ -1,3 +1,4 @@
+use tetra_config::bluestation::NUM_TIMESLOTS;
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
 use tetra_saps::{
     control::call_control::{Circuit, CircuitDlMediaSource},
@@ -48,9 +49,6 @@ const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots2;
 // already used in BsDefrag for the same purpose, so both give up on the same message at
 // the same point instead of disagreeing.
 const UL_RESERVATION_ABANDONED_FRAMES: i32 = 10;
-
-/// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
-pub const NUM_TIMESLOTS: usize = 4;
 
 #[derive(Debug)]
 pub struct PrecomputedUmacPdus {

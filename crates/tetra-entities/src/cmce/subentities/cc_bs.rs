@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{InternalState, SharedConfig};
 use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_core::{Layer2Service, TimeslotOwner, TxReporter, TxState};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
@@ -40,6 +40,8 @@ use crate::{
 /// Clause 11 Call Control CMCE sub-entity
 pub struct CcBsSubentity {
     config: SharedConfig,
+    state: InternalState,
+
     dltime: TdmaTime,
     /// Cached D-SETUP PDUs for late-entry re-sends: call_id -> (D-SETUP PDU, dest address, tx reporter)
     cached_setups: HashMap<u16, (DSetup, TetraAddress, Option<TxReporter>)>,
@@ -168,9 +170,10 @@ struct ActiveCall {
 }
 
 impl CcBsSubentity {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, state: InternalState) -> Self {
         CcBsSubentity {
             config,
+            state,
             dltime: TdmaTime::default(),
             cached_setups: HashMap::new(),
             circuits: CircuitMgr::new(),

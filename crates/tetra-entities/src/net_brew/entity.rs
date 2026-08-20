@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::{CfgBrew, SharedConfig};
+use tetra_config::bluestation::{CfgBrew, InternalState, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{
@@ -89,6 +89,7 @@ struct UlForwardedCall {
 
 pub struct BrewEntity {
     config: SharedConfig,
+    state: InternalState,
 
     /// Also contained in the SharedConfig, but kept for fast, convenient access
     brew_config: CfgBrew,
@@ -131,7 +132,7 @@ impl BrewEntity {
     ///
     /// The transport is moved into a worker thread. Any [`NetworkTransport`]
     /// implementation can be used (WebSocket, QUIC, TCP, …).
-    pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, transport: T) -> Self {
+    pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, state: InternalState, transport: T) -> Self {
         // Create channels
         let (event_sender, event_receiver) = unbounded::<BrewEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
@@ -146,7 +147,6 @@ impl BrewEntity {
                 worker.run();
             })
             .expect("failed to spawn BrewWorker thread");
-
         {
             let mut state = config.state_write();
             state.network_connected = false;
@@ -154,6 +154,7 @@ impl BrewEntity {
 
         Self {
             config,
+            state,
             brew_config,
             dltime: TdmaTime::default(),
             event_receiver,
@@ -1111,7 +1112,8 @@ impl BrewEntity {
         );
 
         // Only forward and acknowledge if destination ISSI is locally registered
-        if !self.config.state_read().subscribers.is_registered(destination) {
+        let is_local = self.state.with_subscribers(|s| s.is_registered(destination));
+        if !is_local {
             tracing::warn!(
                 "BrewEntity: SDS dest ISSI {} not registered, dropping (no report sent) uuid={}",
                 destination,

@@ -1,7 +1,7 @@
 use crate::net_control::{ControlCommand, ControlEndpoint, ControlResponse};
 use crate::net_telemetry::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{InternalState, SharedConfig};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{Sap, TdmaTime, unimplemented_log};
 use tetra_saps::{SapMsg, SapMsgInner};
@@ -14,6 +14,7 @@ use super::subentities::ss_bs::SsBsSubentity;
 
 pub struct CmceBs {
     config: SharedConfig,
+    // state: Option<InternalState>,
     telemetry: Option<TelemetrySink>,
     control: Option<ControlEndpoint>,
 
@@ -23,13 +24,15 @@ pub struct CmceBs {
 }
 
 impl CmceBs {
-    pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
+    pub fn new(config: SharedConfig, state: InternalState, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
+        // let s2 = state.clone();
         Self {
             config: config.clone(),
+            // state: s2,
             telemetry,
             control,
-            sds: SdsBsSubentity::new(config.clone()),
-            cc: CcBsSubentity::new(config.clone()),
+            sds: SdsBsSubentity::new(config.clone(), state.clone()),
+            cc: CcBsSubentity::new(config.clone(), state),
             ss: SsBsSubentity::new(),
         }
     }
