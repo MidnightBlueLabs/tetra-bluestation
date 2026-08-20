@@ -4,6 +4,8 @@ pub use circuits::*;
 pub use global_state::GlobalState;
 pub use subscribers::{Subscriber, SubscriberStore};
 
+use crate::bluestation::SharedConfig;
+
 pub mod circuits;
 pub mod global_state;
 pub mod subscribers;
@@ -31,22 +33,22 @@ impl Default for InternalStateInner {
 }
 
 #[derive(Debug, Clone)]
-pub struct InternalState {
+pub struct StackState {
     shared: Rc<RefCell<InternalStateInner>>,
 }
 
-impl InternalState {
-    pub fn from_initial_state(initial: InternalStateInner) -> InternalState {
+impl StackState {
+    pub fn from_initial_state(initial: InternalStateInner) -> StackState {
         let shared = Rc::new(RefCell::new(initial));
-        InternalState { shared }
+        StackState { shared }
     }
 
-    pub fn new() -> InternalState {
+    pub fn new() -> StackState {
         let initial = InternalStateInner::default();
         Self::from_initial_state(initial)
     }
 
-    pub fn from_config(config: SharedConfig) -> InternalState {
+    pub fn from_config(config: SharedConfig) -> StackState {
         // Make default state
         let ret = Self::new();
 
@@ -150,27 +152,5 @@ impl InternalState {
         let out = f(&mut subscribers);
         self.put_subscribers(subscribers);
         out
-    }
-}
-
-// TODO FIXME cleanup below remainders of state
-
-use tetra_core::TimeslotAllocator;
-
-use crate::bluestation::SharedConfig;
-
-/// Mutable, stack-editable state (mutex-protected).
-#[derive(Debug, Clone)]
-pub struct StackState {
-    pub timeslot_alloc: TimeslotAllocator,
-    // Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
-}
-
-impl Default for StackState {
-    fn default() -> Self {
-        Self {
-            timeslot_alloc: TimeslotAllocator::default(),
-            // network_connected: false,
-        }
     }
 }

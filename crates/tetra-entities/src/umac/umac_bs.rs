@@ -1,6 +1,6 @@
 use std::panic;
 
-use tetra_config::bluestation::{InternalState, SharedConfig, StackState};
+use tetra_config::bluestation::{StackState, SharedConfig};
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
@@ -41,7 +41,7 @@ use super::subcomp::bs_defrag::BsDefrag;
 pub struct UmacBs {
     self_component: TetraEntity,
     config: SharedConfig,
-    state: InternalState,
+    state: StackState,
 
     /// Maintains previous setting for system wide services
     /// We'll update cached sysinfo messages if it changes
@@ -76,7 +76,7 @@ struct PendingStch {
 }
 
 impl UmacBs {
-    pub fn new(config: SharedConfig, state: InternalState) -> Self {
+    pub fn new(config: SharedConfig, state: StackState) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
         let precomps = Self::generate_precomps(&config, false);

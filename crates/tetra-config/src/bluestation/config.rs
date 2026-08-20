@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::sync::{Arc, RwLock};
 use tetra_core::freqs::FreqInfo;
 
-use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend, StackState};
+use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend};
 
 use super::sec_brew::CfgBrew;
 use super::sec_telemetry::CfgTelemetry;
@@ -139,36 +139,21 @@ impl StackConfig {
 pub struct SharedConfig {
     /// Read-only configuration (immutable after construction).
     cfg: Arc<StackConfig>,
-    /// Mutable state guarded with RwLock (write by the stack, read by others).
-    state: Arc<RwLock<StackState>>,
 }
 
 impl SharedConfig {
-    pub fn from_parts(cfg: StackConfig, state: Option<StackState>) -> Self {
+    pub fn from_parts(cfg: StackConfig) -> Self {
         // Check config for validity before returning the SharedConfig object
         match cfg.validate() {
             Ok(_) => {}
             Err(e) => panic!("Invalid stack configuration: {}", e),
         }
 
-        Self {
-            cfg: Arc::new(cfg),
-            state: Arc::new(RwLock::new(state.unwrap_or_default())),
-        }
+        Self { cfg: Arc::new(cfg) }
     }
 
     /// Access immutable config.
     pub fn config(&self) -> Arc<StackConfig> {
         Arc::clone(&self.cfg)
-    }
-
-    /// Read guard for mutable state.
-    pub fn state_read(&self) -> std::sync::RwLockReadGuard<'_, StackState> {
-        self.state.read().expect("StackState RwLock blocked")
-    }
-
-    /// Write guard for mutable state.
-    pub fn state_write(&self) -> std::sync::RwLockWriteGuard<'_, StackState> {
-        self.state.write().expect("StackState RwLock blocked")
     }
 }

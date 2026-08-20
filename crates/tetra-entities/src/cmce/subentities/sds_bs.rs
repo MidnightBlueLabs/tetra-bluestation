@@ -1,4 +1,4 @@
-use tetra_config::bluestation::{InternalState, SharedConfig};
+use tetra_config::bluestation::{StackState, SharedConfig};
 use tetra_core::Layer2Service;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;
@@ -21,11 +21,11 @@ use crate::net_control::ControlCommand;
 /// Clause 13 Short Data Service CMCE sub-entity
 pub struct SdsBsSubentity {
     config: SharedConfig,
-    state: InternalState,
+    state: StackState,
 }
 
 impl SdsBsSubentity {
-    pub fn new(config: SharedConfig, state: InternalState) -> Self {
+    pub fn new(config: SharedConfig, state: StackState) -> Self {
         SdsBsSubentity { config, state }
     }
 

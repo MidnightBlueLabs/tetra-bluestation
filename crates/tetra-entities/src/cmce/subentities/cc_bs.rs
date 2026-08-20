@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tetra_config::bluestation::{InternalState, SharedConfig};
+use tetra_config::bluestation::{StackState, SharedConfig};
 use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_core::{Layer2Service, TimeslotOwner, TxReporter, TxState};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
@@ -40,7 +40,7 @@ use crate::{
 /// Clause 11 Call Control CMCE sub-entity
 pub struct CcBsSubentity {
     config: SharedConfig,
-    state: InternalState,
+    state: StackState,
 
     dltime: TdmaTime,
     /// Cached D-SETUP PDUs for late-entry re-sends: call_id -> (D-SETUP PDU, dest address, tx reporter)
@@ -170,7 +170,7 @@ struct ActiveCall {
 }
 
 impl CcBsSubentity {
-    pub fn new(config: SharedConfig, state: InternalState) -> Self {
+    pub fn new(config: SharedConfig, state: StackState) -> Self {
         CcBsSubentity {
             config,
             state,
@@ -532,13 +532,14 @@ impl CcBsSubentity {
 
         // Allocate circuit (DL+UL for group call)
         let circuit = match {
-            let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator(
-                Direction::Both,
-                pdu.basic_service_information.communication_type,
-                &mut state.timeslot_alloc,
-                TimeslotOwner::Cmce,
-            )
+            self.state.with_circuits(|s| {
+                self.circuits.allocate_circuit_with_allocator(
+                    Direction::Both,
+                    pdu.basic_service_information.communication_type,
+                    &mut s.allocator,
+                    TimeslotOwner::Cmce,
+                )
+            })
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -769,9 +770,10 @@ impl CcBsSubentity {
 
         let comm_type = pdu.basic_service_information.communication_type;
         let calling_circuit = match {
-            let mut state = self.config.state_write();
-            self.circuits
-                .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut state.timeslot_alloc, TimeslotOwner::Cmce)
+            self.state.with_circuits(|c| {
+                self.circuits
+                    .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut c.allocator, TimeslotOwner::Cmce)
+            })
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -784,9 +786,10 @@ impl CcBsSubentity {
         // time as the caller. Simplex shares one channel (both parties on the same slot).
         let called_circuit = if duplex {
             match {
-                let mut state = self.config.state_write();
-                self.circuits
-                    .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut state.timeslot_alloc, TimeslotOwner::Cmce)
+                self.state.with_circuits(|c| {
+                    self.circuits
+                        .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut c.allocator, TimeslotOwner::Cmce)
+                })
             } {
                 Ok(circuit) => circuit.clone(),
                 Err(e) => {
@@ -970,13 +973,14 @@ impl CcBsSubentity {
             .unwrap_or_default();
 
         let circuit = match {
-            let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator(
-                Direction::Both,
-                pdu.basic_service_information.communication_type,
-                &mut state.timeslot_alloc,
-                TimeslotOwner::Cmce,
-            )
+            self.state.with_circuits(|c| {
+                self.circuits.allocate_circuit_with_allocator(
+                    Direction::Both,
+                    pdu.basic_service_information.communication_type,
+                    &mut c.allocator,
+                    TimeslotOwner::Cmce,
+                )
+            })
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -1208,13 +1212,14 @@ impl CcBsSubentity {
         let duplex = call.duplex != 0;
         let hook = call.method != 0;
         let circuit = match {
-            let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator(
-                Direction::Both,
-                CommunicationType::P2p,
-                &mut state.timeslot_alloc,
-                TimeslotOwner::Cmce,
-            )
+            self.state.with_circuits(|c| {
+                self.circuits.allocate_circuit_with_allocator(
+                    Direction::Both,
+                    CommunicationType::P2p,
+                    &mut c.allocator,
+                    TimeslotOwner::Cmce,
+                )
+            })
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -2043,10 +2048,11 @@ impl CcBsSubentity {
     }
 
     fn release_timeslot(&mut self, ts: u8) {
-        let mut state = self.config.state_write();
-        if let Err(err) = state.timeslot_alloc.release(TimeslotOwner::Cmce, ts) {
-            tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
-        }
+        self.state.with_circuits(|c| {
+            if let Err(err) = c.allocator.release(TimeslotOwner::Cmce, ts) {
+                tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
+            }
+        })
     }
 
     /// Release a call. Removes it from active state immediately so it cannot be re-keyed
@@ -2717,13 +2723,14 @@ impl CcBsSubentity {
 
         // New network call - allocate circuit
         let circuit = match {
-            let mut state = self.config.state_write();
-            self.circuits.allocate_circuit_with_allocator(
-                Direction::Both,
-                CommunicationType::P2Mp,
-                &mut state.timeslot_alloc,
-                TimeslotOwner::Cmce,
-            )
+            self.state.with_circuits(|c| {
+                self.circuits.allocate_circuit_with_allocator(
+                    Direction::Both,
+                    CommunicationType::P2Mp,
+                    &mut c.allocator,
+                    TimeslotOwner::Cmce,
+                )
+            })
         } {
             Ok(c) => c.clone(),
             Err(err) => {

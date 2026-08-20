@@ -1,6 +1,6 @@
 use std::usize;
 
-use tetra_core::TdmaTime;
+use tetra_core::{TdmaTime, TimeslotAllocator};
 
 #[derive(Debug, Clone)]
 pub enum CircuitState {
@@ -144,6 +144,7 @@ pub const NUM_TIMESLOTS: usize = 4 * NUM_CARRIERS;
 #[derive(Debug, Clone)]
 pub struct CircuitStore {
     pub circuits: [Option<TetraCircuit>; NUM_TIMESLOTS],
+    pub allocator: TimeslotAllocator,
 }
 
 impl CircuitStore {
@@ -151,9 +152,7 @@ impl CircuitStore {
     // TODO: get_circuit_for_dl(ts) -> Option<&TetraCircuit>
     // TODO: get_circuit_for_ul(ts) -> Option<&TetraCircuit>
     pub fn new() -> Self {
-        Self {
-            circuits: [None, None, None, None],
-        }
+        Self::default()
     }
 
     pub fn get_circuit_by_ts(&self, ts: u8) -> Option<&TetraCircuit> {
@@ -179,6 +178,7 @@ impl Default for CircuitStore {
     fn default() -> Self {
         Self {
             circuits: [None, None, None, None],
+            allocator: TimeslotAllocator::default(),
         }
     }
 }

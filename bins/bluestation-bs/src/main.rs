@@ -9,7 +9,7 @@ use tetra_entities::net_control::{
     CONTROL_HEARTBEAT_INTERVAL, CONTROL_HEARTBEAT_TIMEOUT, CONTROL_PROTOCOL_VERSION, CommandDispatcher, ControlWorker,
 };
 
-use tetra_config::bluestation::{InternalState, PhyBackend, SharedConfig, StackConfig, parsing};
+use tetra_config::bluestation::{StackState, PhyBackend, SharedConfig, StackConfig, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;
@@ -112,7 +112,7 @@ fn start_control_worker(cfg: SharedConfig, command_dispatchers: HashMap<TetraEnt
 /// Start base station stack
 fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySource>, HashMap<TetraEntity, CommandDispatcher>) {
     let mut router = MessageRouter::new(cfg.clone());
-    let state = InternalState::from_config(cfg.clone());
+    let state = StackState::from_config(cfg.clone());
 
     // Add suitable Phy component based on PhyIo type
     match cfg.config().phy_io.backend {
@@ -205,7 +205,7 @@ fn main() {
 
     // Build immutable, cheaply clonable SharedConfig and build the base station stack
     let stack_cfg = load_config_from_toml(&args.config);
-    let mut cfg = SharedConfig::from_parts(stack_cfg, None);
+    let mut cfg = SharedConfig::from_parts(stack_cfg);
 
     let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
     let (mut router, tsource, cdispatchers) = build_bs_stack(&mut cfg);

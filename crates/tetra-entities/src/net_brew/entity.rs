@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::{CfgBrew, InternalState, SharedConfig};
+use tetra_config::bluestation::{CfgBrew, StackState, SharedConfig};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::{
@@ -89,7 +89,7 @@ struct UlForwardedCall {
 
 pub struct BrewEntity {
     config: SharedConfig,
-    state: InternalState,
+    state: StackState,
 
     /// Also contained in the SharedConfig, but kept for fast, convenient access
     brew_config: CfgBrew,
@@ -129,7 +129,7 @@ impl BrewEntity {
     ///
     /// The transport is moved into a worker thread. Any [`NetworkTransport`]
     /// implementation can be used (WebSocket, QUIC, TCP, …).
-    pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, state: InternalState, transport: T) -> Self {
+    pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, state: StackState, transport: T) -> Self {
         // Create channels
         let (event_sender, event_receiver) = unbounded::<BrewEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
