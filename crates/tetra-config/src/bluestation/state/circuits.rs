@@ -355,6 +355,30 @@ impl CircuitStore {
         self.circuits.get_mut(&call_id)
     }
 
+    /// Mutates an existing circuit in place, then refreshes the cached timeslot map.
+    /// Returns false if the call_id is not known.
+    pub fn update_circuit_with<F>(&mut self, call_id: CallId, f: F) -> bool
+    where
+        F: FnOnce(&mut TetraCircuit),
+    {
+        let Some(circuit) = self.get_circuit_by_callid_mut(call_id) else {
+            return false;
+        };
+        f(circuit);
+        self.update_timeslot_map();
+        true
+    }
+
+    /// Sets the state of an existing circuit. Returns false if the call_id is not known.
+    pub fn set_circuit_state(&mut self, call_id: CallId, state: CircuitState) -> bool {
+        self.update_circuit_with(call_id, |c| c.state = state)
+    }
+
+    /// Sets the floor holder of an existing circuit. Returns false if the call_id is not known.
+    pub fn set_circuit_floor(&mut self, call_id: CallId, floor: Option<u32>) -> bool {
+        self.update_circuit_with(call_id, |c| c.floor = floor)
+    }
+
     // pub fn update_circuit(&mut self, call_id: CallId) {
     //     self.get_circuit_by_callid_mut(call_id);
 

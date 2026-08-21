@@ -298,8 +298,8 @@ impl MmBs {
         let issi = prim.received_address.ssi;
         let handle = prim.handle;
         let is_new = !self.state_is_registered(issi);
+        self.state_register_subscriber(issi);
         if is_new {
-            self.state_register_subscriber(issi);
             self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
         } else {
             tracing::warn!("Registered already-known MS {}", issi);

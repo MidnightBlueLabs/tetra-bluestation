@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tetra_config::bluestation::{SharedConfig, StackState};
+use tetra_config::bluestation::{CircuitState, CircuitStreamDest, CircuitStreamSrc, SharedConfig, StackState, TetraCircuit};
 use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_core::{Layer2Service, TimeslotOwner, TxReporter, TxState};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
@@ -61,7 +61,7 @@ pub struct CcBsSubentity {
 }
 
 /// Origin of a group call
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum CallOrigin {
     /// Local MS-initiated call, needs MLE routing for individual addressing
     Local {
@@ -78,6 +78,7 @@ enum CallOrigin {
 /// transmits while the slot is in traffic mode) at sent_at, then the circuit is closed a
 /// couple frames later. Carries everything teardown needs, since the active_calls entry is
 /// already gone.
+#[derive(Debug)]
 struct ReleasingCall {
     call_id: u16,
     ts: u8,
@@ -105,7 +106,7 @@ enum IndividualCallState {
 /// The called party is addressed by its ISSI. The calling party keeps the MLE routing
 /// (handle, link_id, endpoint_id) from its U-SETUP so later PDUs reach it over the
 /// established LLC link.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct IndividualCall {
     call_id: u16,
     calling_addr: TetraAddress,
@@ -153,7 +154,7 @@ impl IndividualCall {
 }
 
 /// Tracks an active group call (local or network-initiated)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ActiveCall {
     origin: CallOrigin,
     dest_gssi: u32,   // Destination group
@@ -167,6 +168,400 @@ struct ActiveCall {
     /// Brew session UUID — set when a network speaker is active on this call,
     /// regardless of call origin. Cleared when the network speaker ends.
     brew_uuid: Option<uuid::Uuid>,
+}
+
+/// A discrepancy between the legacy CcBsSubentity call bookkeeping and the mirrored
+/// view in the global CircuitStore. Used by `check_circuit_mirror` during the migration
+/// to the single global circuit view.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CircuitMismatch {
+    /// Legacy state knows this call, the global CircuitStore does not (missed mirror create).
+    MissingInCentral(u16),
+    /// The global CircuitStore holds a call legacy state no longer knows (missed mirror destroy).
+    OrphanInCentral(u16),
+    /// Both know the call, but a field differs.
+    FieldMismatch {
+        call_id: u16,
+        field: &'static str,
+        legacy: String,
+        central: String,
+    },
+}
+
+/// ===== Phase 1 circuit mirror =====
+///
+/// The legacy `active_calls` / `individual_calls` / `releasing_calls` fields remain the
+/// source of truth. Every mutation to them is shadowed into the global `CircuitStore`
+/// so other entities can eventually read one single view of all calls. Nothing reads the
+/// mirror back to make decisions yet, so a mirror bug cannot change on-air behaviour.
+///
+/// The mirror is deliberately maintained by independent writes rather than being derived
+/// from the legacy fields, so that `check_circuit_mirror` is a meaningful cross-check.
+impl CcBsSubentity {
+    /// Inserts or replaces the mirrored circuit for a call.
+    /// Must not be called from inside another `with_circuits` closure.
+    fn mirror_put(&self, circuit: TetraCircuit) {
+        self.state.with_circuits(|c| {
+            // put_circuit asserts on a duplicate call_id, so drop any previous copy first.
+            let _ = c.take_circuit(circuit.call_id);
+            c.put_circuit(circuit);
+        })
+    }
+
+    /// Removes the mirrored circuit for a call.
+    #[track_caller]
+    fn mirror_destroy(&self, call_id: u16) {
+        let existed = self.state.with_circuits(|c| c.take_circuit(call_id).is_some());
+        if !existed {
+            tracing::warn!("circuit mirror: destroy for unknown call_id {}", call_id);
+        }
+        self.verify_circuit_mirror(&std::panic::Location::caller());
+    }
+
+    /// Mutates the mirrored circuit for a call in place.
+    #[track_caller]
+    fn mirror_update<F>(&self, call_id: u16, f: F)
+    where
+        F: FnOnce(&mut TetraCircuit),
+    {
+        let updated = self.state.with_circuits(|c| c.update_circuit_with(call_id, f));
+        if !updated {
+            tracing::warn!("circuit mirror: update for unknown call_id {}", call_id);
+        }
+        self.verify_circuit_mirror(&std::panic::Location::caller());
+    }
+
+    /// Downlink destination of a group call: always the local slot, plus the Brew peer
+    /// when a network speaker is attached.
+    fn group_dl_dest(call: &ActiveCall) -> CircuitStreamDest {
+        match call.brew_uuid {
+            Some(uuid) => CircuitStreamDest::LocalAndRemote(Some(call.ts), Some(uuid)),
+            None => CircuitStreamDest::Local(Some(call.ts)),
+        }
+    }
+
+    /// Uplink source of a group call: the network when a Brew speaker holds the floor,
+    /// otherwise the local slot.
+    fn group_ul_src(call: &ActiveCall) -> CircuitStreamSrc {
+        match call.brew_uuid {
+            Some(uuid) => CircuitStreamSrc::Remote(Some(uuid)),
+            None => CircuitStreamSrc::Local(Some(call.ts)),
+        }
+    }
+
+    /// Maps the legacy tx_active/hangtime_start pair onto the circuit state machine.
+    fn group_state(call: &ActiveCall, now: TdmaTime) -> CircuitState {
+        match call.hangtime_start {
+            Some(start) => CircuitState::TxCeased(start.age(now).max(0) as u32),
+            None => CircuitState::Tx(0),
+        }
+    }
+
+    /// Builds the mirrored circuit for a group call.
+    fn mirror_circuit_from_group(&self, call_id: u16, call: &ActiveCall) -> TetraCircuit {
+        TetraCircuit {
+            state: Self::group_state(call, self.dltime),
+            dl1_source: Self::group_dl_dest(call),
+            ul1_source: Self::group_ul_src(call),
+            dl2_source: None,
+            ul2_source: None,
+            comm_type: CommunicationType::P2Mp,
+            call_id,
+            usage_id: call.usage,
+            usage2_id: None,
+            floor: Some(call.source_issi),
+            caller: call.source_issi,
+            callee: call.dest_gssi,
+            is_etee_encrypted: false,
+            t_start: self.dltime,
+        }
+    }
+
+    /// Maps the individual call phase onto the circuit state machine. Setup and alerting
+    /// are both pre-traffic, so they collapse onto Setup.
+    fn individual_state(call: &IndividualCall) -> CircuitState {
+        match call.state {
+            IndividualCallState::SetupSent | IndividualCallState::Alerting => CircuitState::Setup(0),
+            IndividualCallState::Active => CircuitState::Tx(0),
+        }
+    }
+
+    /// Stream sources/destinations of an individual call.
+    /// - over Brew: one local slot, media crosses to the backend.
+    /// - local duplex: two slots, each party's uplink feeds the other's downlink.
+    /// - local simplex: both parties share one slot.
+    fn individual_streams(
+        call: &IndividualCall,
+    ) -> (
+        CircuitStreamSrc,
+        CircuitStreamDest,
+        Option<CircuitStreamSrc>,
+        Option<CircuitStreamDest>,
+    ) {
+        if call.over_brew {
+            let (_, local_ts) = call.local_leg();
+            return (
+                CircuitStreamSrc::Local(Some(local_ts)),
+                CircuitStreamDest::LocalAndRemote(Some(local_ts), call.brew_uuid),
+                None,
+                None,
+            );
+        }
+        if call.duplex && call.called_ts != call.ts {
+            return (
+                CircuitStreamSrc::Local(Some(call.ts)),
+                CircuitStreamDest::Local(Some(call.called_ts)),
+                Some(CircuitStreamSrc::Local(Some(call.called_ts))),
+                Some(CircuitStreamDest::Local(Some(call.ts))),
+            );
+        }
+        (
+            CircuitStreamSrc::Local(Some(call.ts)),
+            CircuitStreamDest::Local(Some(call.ts)),
+            None,
+            None,
+        )
+    }
+
+    /// Builds the mirrored circuit for an individual call.
+    fn mirror_circuit_from_individual(&self, call: &IndividualCall) -> TetraCircuit {
+        let (ul1_source, dl1_source, ul2_source, dl2_source) = Self::individual_streams(call);
+        let is_duplex = dl2_source.is_some();
+        TetraCircuit {
+            state: Self::individual_state(call),
+            dl1_source,
+            ul1_source,
+            dl2_source,
+            ul2_source,
+            comm_type: CommunicationType::P2p,
+            call_id: call.call_id,
+            usage_id: call.usage,
+            usage2_id: if is_duplex { Some(call.called_usage) } else { None },
+            floor: call.floor_holder,
+            caller: call.calling_addr.ssi,
+            callee: call.called_addr.ssi,
+            is_etee_encrypted: false,
+            t_start: self.dltime,
+        }
+    }
+
+    /// Re-mirrors a group call from its current legacy entry. Used after in-place edits
+    /// where recomputing the whole circuit is simpler than a targeted update.
+    #[track_caller]
+    fn mirror_refresh_group(&self, call_id: u16) {
+        let Some(call) = self.active_calls.get(&call_id).cloned() else {
+            return;
+        };
+        let circuit = self.mirror_circuit_from_group(call_id, &call);
+        self.mirror_put(circuit);
+        self.verify_circuit_mirror(&std::panic::Location::caller());
+    }
+
+    /// Re-mirrors an individual call from its current legacy entry. Used after in-place
+    /// edits where recomputing the whole circuit is simpler than a targeted update.
+    #[track_caller]
+    fn mirror_refresh_individual(&self, call_id: u16) {
+        let Some(call) = self.individual_calls.get(&call_id).cloned() else {
+            return;
+        };
+        let circuit = self.mirror_circuit_from_individual(&call);
+        self.mirror_put(circuit);
+        self.verify_circuit_mirror(&std::panic::Location::caller());
+    }
+
+    /// Builds a field mismatch when the legacy and mirrored values differ.
+    fn cmp_field(call_id: u16, field: &'static str, legacy: String, central: String) -> Option<CircuitMismatch> {
+        if legacy == central {
+            None
+        } else {
+            Some(CircuitMismatch::FieldMismatch {
+                call_id,
+                field,
+                legacy,
+                central,
+            })
+        }
+    }
+
+    /// Name of a circuit state variant, for comparisons that must ignore the elapsed counter.
+    fn state_name(state: &CircuitState) -> &'static str {
+        match state {
+            CircuitState::Setup(_) => "Setup",
+            CircuitState::Tx(_) => "Tx",
+            CircuitState::TxCeased(_) => "TxCeased",
+            CircuitState::Releasing(_) => "Releasing",
+        }
+    }
+
+    /// Compares the legacy call bookkeeping against the mirrored global CircuitStore and
+    /// reports every discrepancy. Intended for tests and debug builds during the migration.
+    /// An empty result means both views agree.
+    pub fn check_circuit_mirror(&self) -> Vec<CircuitMismatch> {
+        let mut out = Vec::new();
+        let central = self.state.with_circuits(|c| c.get_circuits().clone());
+        let mut expected: HashSet<u16> = HashSet::new();
+
+        macro_rules! cmp {
+            ($call_id:expr, $field:expr, $legacy:expr, $central:expr) => {
+                out.extend(Self::cmp_field($call_id, $field, $legacy, $central))
+            };
+        }
+
+        // Group calls
+        for (&call_id, call) in &self.active_calls {
+            expected.insert(call_id);
+            let Some(c) = central.get(&call_id) else {
+                out.push(CircuitMismatch::MissingInCentral(call_id));
+                continue;
+            };
+            cmp!(call_id, "caller", call.source_issi.to_string(), c.caller.to_string());
+            cmp!(call_id, "callee", call.dest_gssi.to_string(), c.callee.to_string());
+            cmp!(call_id, "usage_id", call.usage.to_string(), c.usage_id.to_string());
+            cmp!(call_id, "comm_type", "P2Mp".to_string(), format!("{:?}", c.comm_type));
+            cmp!(
+                call_id,
+                "dl_ts",
+                call.ts.to_string(),
+                c.dl1_source.get_ts().map(|t| t.to_string()).unwrap_or_default()
+            );
+            cmp!(
+                call_id,
+                "state",
+                Self::state_name(&Self::group_state(call, self.dltime)).to_string(),
+                Self::state_name(&c.state).to_string()
+            );
+            cmp!(
+                call_id,
+                "brew_uuid",
+                call.brew_uuid.map(|u| u.to_string()).unwrap_or_default(),
+                c.dl1_source.get_uuid().map(|u| u.to_string()).unwrap_or_default()
+            );
+        }
+
+        // Individual calls
+        for (&call_id, call) in &self.individual_calls {
+            expected.insert(call_id);
+            let Some(c) = central.get(&call_id) else {
+                out.push(CircuitMismatch::MissingInCentral(call_id));
+                continue;
+            };
+            cmp!(call_id, "caller", call.calling_addr.ssi.to_string(), c.caller.to_string());
+            cmp!(call_id, "callee", call.called_addr.ssi.to_string(), c.callee.to_string());
+            cmp!(call_id, "usage_id", call.usage.to_string(), c.usage_id.to_string());
+            cmp!(call_id, "comm_type", "P2p".to_string(), format!("{:?}", c.comm_type));
+            cmp!(
+                call_id,
+                "floor",
+                call.floor_holder.map(|f| f.to_string()).unwrap_or_default(),
+                c.floor.map(|f| f.to_string()).unwrap_or_default()
+            );
+            cmp!(
+                call_id,
+                "state",
+                Self::state_name(&Self::individual_state(call)).to_string(),
+                Self::state_name(&c.state).to_string()
+            );
+            let (ul1, dl1, _, _) = Self::individual_streams(call);
+            cmp!(
+                call_id,
+                "ul_ts",
+                ul1.get_ts().map(|t| t.to_string()).unwrap_or_default(),
+                c.ul1_source.get_ts().map(|t| t.to_string()).unwrap_or_default()
+            );
+            cmp!(
+                call_id,
+                "dl_ts",
+                dl1.get_ts().map(|t| t.to_string()).unwrap_or_default(),
+                c.dl1_source.get_ts().map(|t| t.to_string()).unwrap_or_default()
+            );
+        }
+
+        // Calls in teardown are kept in the mirror until the circuit is actually closed.
+        for rc in &self.releasing_calls {
+            expected.insert(rc.call_id);
+            let Some(c) = central.get(&rc.call_id) else {
+                out.push(CircuitMismatch::MissingInCentral(rc.call_id));
+                continue;
+            };
+            cmp!(rc.call_id, "state", "Releasing".to_string(), Self::state_name(&c.state).to_string());
+        }
+
+        // Anything left in the mirror that legacy state no longer tracks is a leak.
+        for &call_id in central.keys() {
+            if !expected.contains(&call_id) {
+                out.push(CircuitMismatch::OrphanInCentral(call_id));
+            }
+        }
+
+        out
+    }
+
+    /// Logs any legacy-vs-mirror discrepancy, with a verbose dump of both views so the
+    /// divergence can be diagnosed from the log alone. `site` identifies where the check
+    /// ran. Temporary porting aid; remove once the mirror is trusted.
+    fn verify_circuit_mirror(&self, site: &dyn std::fmt::Display) {
+        let mismatches = self.check_circuit_mirror();
+        if mismatches.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            "CIRCUIT MIRROR DIVERGENCE at {}: {} mismatch(es) between legacy CcBs state and shadow CircuitStore",
+            site,
+            mismatches.len()
+        );
+        for m in &mismatches {
+            match m {
+                CircuitMismatch::MissingInCentral(call_id) => {
+                    tracing::warn!("  [{}] present in legacy state but MISSING from shadow CircuitStore", call_id)
+                }
+                CircuitMismatch::OrphanInCentral(call_id) => {
+                    tracing::warn!("  [{}] ORPHANED in shadow CircuitStore, legacy state no longer tracks it", call_id)
+                }
+                CircuitMismatch::FieldMismatch {
+                    call_id,
+                    field,
+                    legacy,
+                    central,
+                } => tracing::warn!(
+                    "  [{}] field '{}' differs: legacy={:?} shadow={:?}",
+                    call_id,
+                    field,
+                    legacy,
+                    central
+                ),
+            }
+        }
+        self.dump_circuit_states();
+        panic!();
+    }
+
+    /// Verbose dump of both the legacy call bookkeeping and the shadow CircuitStore.
+    fn dump_circuit_states(&self) {
+        tracing::warn!("--- legacy CcBsSubentity state (dltime={:?}) ---", self.dltime);
+        tracing::warn!("  active_calls: {} entry/entries", self.active_calls.len());
+        for (call_id, call) in &self.active_calls {
+            tracing::warn!("    call_id={} {:?}", call_id, call);
+        }
+        tracing::warn!("  individual_calls: {} entry/entries", self.individual_calls.len());
+        for (call_id, call) in &self.individual_calls {
+            tracing::warn!("    call_id={} {:?}", call_id, call);
+        }
+        tracing::warn!("  releasing_calls: {} entry/entries", self.releasing_calls.len());
+        for call in &self.releasing_calls {
+            tracing::warn!("    {:?}", call);
+        }
+        tracing::warn!("  cached_setups for call_ids: {:?}", self.cached_setups.keys().collect::<Vec<_>>());
+        tracing::warn!("  group_listeners: {:?}", self.group_listeners);
+        tracing::warn!("  subscriber_groups: {:?}", self.subscriber_groups);
+
+        let (circuits, map) = self.state.with_circuits(|c| (c.get_circuits().clone(), c.get_timeslot_map()));
+        tracing::warn!("--- shadow CircuitStore: {} circuit(s) ---", circuits.len());
+        for (call_id, circuit) in &circuits {
+            tracing::warn!("    call_id={} {:?}", call_id, circuit);
+        }
+        tracing::warn!("  timeslot map dl={:?}", map.dl);
+        tracing::warn!("  timeslot map ul={:?}", map.ul);
+    }
 }
 
 impl CcBsSubentity {
@@ -402,6 +797,9 @@ impl CcBsSubentity {
                 }
             }
         }
+
+        // Porting aid: listener changes can drop calls, so re-check the mirror here too.
+        self.verify_circuit_mirror(&"handle_subscriber_update");
     }
 
     fn send_d_call_proceeding(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu_request: &USetup, call_id: u16) {
@@ -677,6 +1075,7 @@ impl CcBsSubentity {
                 brew_uuid: None,
             },
         );
+        self.mirror_refresh_group(circuit.call_id);
 
         // Notify Brew entity about this local call if Brew is loaded and the SSI is cleared for Brew
         // It can then forward to TetraPack if the group is subscribed
@@ -907,6 +1306,7 @@ impl CcBsSubentity {
                 terminated: false,
             },
         );
+        self.mirror_refresh_individual(calling_circuit.call_id);
     }
 
     /// Find the call id of an over-Brew individual call by its Brew session UUID.
@@ -1059,6 +1459,7 @@ impl CcBsSubentity {
                 terminated: false,
             },
         );
+        self.mirror_refresh_individual(circuit.call_id);
     }
 
     /// Backend is alerting (ringing) on an over-Brew call. Relay D-ALERT to the caller.
@@ -1072,6 +1473,7 @@ impl CcBsSubentity {
             call.phase_started = self.dltime;
         }
         let call = call.clone();
+        self.mirror_refresh_individual(call_id);
         let d_alert = DAlert {
             call_identifier: call.call_id,
             call_time_out_set_up_phase: 0,
@@ -1110,6 +1512,7 @@ impl CcBsSubentity {
             TransmissionGrant::GrantedToOtherUser
         };
         self.individual_calls.get_mut(&call_id).unwrap().floor_holder = if caller_talks { Some(local.ssi) } else { None };
+        self.mirror_refresh_individual(call_id);
         self.send_individual_tx_granted(queue, call_id, local.ssi, local, grant, ts);
     }
 
@@ -1126,6 +1529,7 @@ impl CcBsSubentity {
         call.state = IndividualCallState::Active;
         call.phase_started = self.dltime;
         let call = call.clone();
+        self.mirror_refresh_individual(call_id);
 
         let mut timeslots = [false; 4];
         timeslots[call.ts as usize - 1] = true;
@@ -1310,6 +1714,7 @@ impl CcBsSubentity {
                 terminated: true,
             },
         );
+        self.mirror_refresh_individual(circuit.call_id);
     }
 
     /// Reject an individual U-SETUP with a D-RELEASE to the caller (ETSI 14.5.1.3.2).
@@ -1372,10 +1777,13 @@ impl CcBsSubentity {
         }
         call.state = IndividualCallState::Alerting;
         call.phase_started = self.dltime;
+        let terminated = call.terminated;
+        let terminated_brew_uuid = call.brew_uuid;
+        self.mirror_refresh_individual(pdu.call_identifier);
 
         // Terminated call: the on-air party is the called MS, so relay alerting to the backend.
-        if call.terminated {
-            if let Some(brew_uuid) = call.brew_uuid {
+        if terminated {
+            if let Some(brew_uuid) = terminated_brew_uuid {
                 queue.push_back(SapMsg {
                     sap: Sap::Control,
                     src: TetraEntity::Cmce,
@@ -1442,10 +1850,12 @@ impl CcBsSubentity {
         if call.terminated {
             call.duplex &= pdu.simplex_duplex_selection;
             let call = call.clone();
+            self.mirror_refresh_individual(pdu.call_identifier);
             self.connect_terminated(queue, &call);
             return;
         }
         let call = call.clone();
+        self.mirror_refresh_individual(pdu.call_identifier);
 
         let caller_has_floor = call.floor_holder == Some(call.calling_addr.ssi);
 
@@ -1663,6 +2073,7 @@ impl CcBsSubentity {
             })),
         });
         tracing::info!("individual call_id={} downgraded to simplex, called offered simplex", call_id);
+        self.mirror_refresh_individual(call_id);
     }
 
     /// Release an individual call, notifying Brew if the call was over Brew.
@@ -1738,6 +2149,7 @@ impl CcBsSubentity {
             brew_uuid: None,
             sent_at: self.dltime,
         });
+        self.mirror_update(call_id, |c| c.state = CircuitState::Releasing(0));
     }
 
     /// Release individual calls that pass their setup/no-answer or call-length timeout.
@@ -1780,6 +2192,7 @@ impl CcBsSubentity {
             vec![call.calling_addr, call.called_addr]
         };
         call.floor_holder = None;
+        self.mirror_refresh_individual(call_id);
 
         for addr in addrs {
             let d_tx_ceased = DTxCeased {
@@ -1836,6 +2249,7 @@ impl CcBsSubentity {
             (called, calling)
         };
         self.individual_calls.get_mut(&call_id).unwrap().floor_holder = Some(requester);
+        self.mirror_refresh_individual(call_id);
 
         self.send_individual_tx_granted(queue, call_id, requester, requester_addr, TransmissionGrant::Granted, ts);
         // The peer of an over-Brew call is the backend, which is off air and gets no D-TX GRANTED.
@@ -1920,6 +2334,9 @@ impl CcBsSubentity {
                 panic!();
             }
         }
+
+        // Porting aid: catch any legacy call-state change that was not mirrored.
+        self.verify_circuit_mirror(&format_args!("route_xx_deliver after {}", pdu_type));
     }
 
     pub fn tick_start(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) {
@@ -2013,6 +2430,7 @@ impl CcBsSubentity {
                         // Clean up call state
                         self.cached_setups.remove(&call_id);
                         self.active_calls.remove(&call_id);
+                        self.mirror_destroy(call_id);
 
                         // Signal UMAC to release the circuit
                         Self::signal_umac_circuit_close(queue, circuit);
@@ -2021,6 +2439,11 @@ impl CcBsSubentity {
                 }
             }
         }
+
+        // Migration aid: verify the mirrored global circuit view still agrees with the
+        // legacy call bookkeeping. Read-only, so a mirror bug can never change on-air
+        // behaviour. Remove once the mirror is trusted.
+        self.verify_circuit_mirror(&"tick_start");
     }
 
     /// Check if any active calls in hangtime have expired, and if so, release them
@@ -2088,6 +2511,7 @@ impl CcBsSubentity {
                     brew_uuid,
                     sent_at: self.dltime,
                 });
+                self.mirror_update(call_id, |c| c.state = CircuitState::Releasing(0));
             }
             None => {
                 tracing::warn!("No cached D-SETUP for call_id={}, cleaning up without D-RELEASE", call_id);
@@ -2142,6 +2566,9 @@ impl CcBsSubentity {
         is_local: bool,
         brew_uuid: Option<uuid::Uuid>,
     ) {
+        // The call is fully gone at this point, so drop it from the global circuit view too.
+        self.mirror_destroy(call_id);
+
         if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
             Self::signal_umac_circuit_close(queue, circuit);
         }
@@ -2273,6 +2700,7 @@ impl CcBsSubentity {
         let dest_ssi = call.dest_gssi;
         call.tx_active = false;
         call.hangtime_start = Some(self.dltime);
+        self.mirror_refresh_group(call_id);
 
         // Get dest address from cached setup
         let Some((_, dest_addr, _)) = self.cached_setups.get(&call_id) else {
@@ -2378,6 +2806,7 @@ impl CcBsSubentity {
         if let CallOrigin::Local { caller_addr } = &mut call.origin {
             *caller_addr = requesting_party;
         }
+        self.mirror_refresh_group(call_id);
 
         let Some((_, dest_addr, _)) = self.cached_setups.get(&call_id) else {
             tracing::error!("No cached D-SETUP for call_id={}", call_id);
@@ -2619,6 +3048,9 @@ impl CcBsSubentity {
                 tracing::warn!("Unexpected CallControl message: {:?}", call_control);
             }
         }
+
+        // Porting aid: catch any legacy call-state change that was not mirrored.
+        self.verify_circuit_mirror(&"rx_call_control (after Brew CallControl dispatch)");
     }
 
     /// Handle network-initiated group call start
@@ -2689,6 +3121,7 @@ impl CcBsSubentity {
 
             // End the mutable borrow
             let _ = call;
+            self.mirror_refresh_group(call_id_val);
 
             // Send D-TX GRANTED via FACCH to notify radios of new speaker
             self.send_d_tx_granted_facch(queue, call_id_val, source_issi, dest_gssi, ts);
@@ -2854,6 +3287,7 @@ impl CcBsSubentity {
                 brew_uuid: Some(brew_uuid),
             },
         );
+        self.mirror_refresh_group(call_id);
 
         // Respond to Brew with allocated resources, we already ensured it is cleared for brew
         queue.push_back(SapMsg {
@@ -2900,6 +3334,7 @@ impl CcBsSubentity {
                 active_call.hangtime_start = Some(self.dltime);
                 active_call.brew_uuid = None;
             }
+            self.mirror_refresh_group(call_id);
             // Send D-TX CEASED via FACCH
             self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
 

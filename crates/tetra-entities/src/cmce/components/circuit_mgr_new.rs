@@ -81,13 +81,21 @@ impl CircuitMgrNew {
             // Return None on failure
             let ts = Self::find_free_ts(&map)?;
 
-            // Update passed mutable circuit struct and return struct
-            if circuit.dl2_source.unwrap().has_local() {
-                circuit.dl2_source.unwrap().set_ts(ts);
+            // Update passed mutable circuit struct and return struct.
+            // Must go through as_mut(), as the stream enums are Copy and writing through
+            // unwrap() on the Option would only mutate a temporary copy.
+            if let Some(dl2) = circuit.dl2_source.as_mut()
+                && dl2.has_local()
+            {
+                dl2.set_ts(ts);
             };
-            if circuit.ul2_source.unwrap().is_local() {
-                circuit.ul2_source.unwrap().set_ts(ts);
+            if let Some(ul2) = circuit.ul2_source.as_mut()
+                && ul2.is_local()
+            {
+                ul2.set_ts(ts);
             };
+
+            // No further allocation follows, so the local map needs no update here.
         }
         Some(circuit)
     }
