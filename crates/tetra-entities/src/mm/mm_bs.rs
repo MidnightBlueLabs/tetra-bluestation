@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::net_control::ControlEndpoint;
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
-use tetra_config::bluestation::{StackState, SharedConfig, Subscriber};
+use tetra_config::bluestation::{SharedConfig, StackState, Subscriber};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
 use tetra_pdus::mm::fields::class_of_ms::ClassOfMs;

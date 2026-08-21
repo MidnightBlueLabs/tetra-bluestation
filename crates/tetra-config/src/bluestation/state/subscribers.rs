@@ -27,6 +27,10 @@ pub struct SubscriberStore {
     subscribers: HashMap<u32, Subscriber>,
     /// All groups that currently have locally attached MSes
     attached_groups: HashSet<u32>,
+    // Likely remotely registered MSes
+    // remote_subscribers: HashSet<u32>,
+    // Groups that likely have remotely attached MSes
+    // remote_groups: HashSet<u32>,
 }
 
 impl SubscriberStore {

@@ -1,6 +1,6 @@
 use std::panic;
 
-use tetra_config::bluestation::{StackState, SharedConfig};
+use tetra_config::bluestation::{SharedConfig, StackState};
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};

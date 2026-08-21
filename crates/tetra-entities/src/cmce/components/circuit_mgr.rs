@@ -19,7 +19,7 @@ pub enum CircuitMgrCmd {
     SendClose(CallId, CmceCircuit),
 }
 
-pub struct CircuitMgr {
+pub struct CircuitMgrOld {
     pub dltime: TdmaTime,
 
     /// Holds any Dl and Dl+Ul circuits
@@ -36,7 +36,7 @@ pub struct CircuitMgr {
     pub next_usage_number: u8,
 }
 
-impl CircuitMgr {
+impl CircuitMgrOld {
     pub fn new() -> Self {
         Self {
             dltime: TdmaTime::default(),

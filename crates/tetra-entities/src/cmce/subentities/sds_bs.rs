@@ -1,4 +1,4 @@
-use tetra_config::bluestation::{StackState, SharedConfig};
+use tetra_config::bluestation::{SharedConfig, StackState};
 use tetra_core::Layer2Service;
 use tetra_core::{BitBuffer, Sap, SsiType, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
 use tetra_pdus::cmce::enums::pre_coded_status::PreCodedStatus;

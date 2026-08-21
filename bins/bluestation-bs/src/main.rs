@@ -9,7 +9,7 @@ use tetra_entities::net_control::{
     CONTROL_HEARTBEAT_INTERVAL, CONTROL_HEARTBEAT_TIMEOUT, CONTROL_PROTOCOL_VERSION, CommandDispatcher, ControlWorker,
 };
 
-use tetra_config::bluestation::{StackState, PhyBackend, SharedConfig, StackConfig, parsing};
+use tetra_config::bluestation::{PhyBackend, SharedConfig, StackConfig, StackState, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;

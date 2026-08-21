@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use tetra_config::bluestation::{SharedConfig, StackState};
+use tetra_config::bluestation::{CircuitStreamDest, CircuitStreamSrc, SharedConfig, StackState, TetraCircuit};
 use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
-use tetra_core::{Layer2Service, TimeslotOwner, TxReporter, TxState};
+use tetra_core::{Layer2Service, TxReporter, TxState};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::{
     enums::{
@@ -34,7 +34,7 @@ use tetra_saps::{
 use crate::net_brew;
 use crate::{
     MessageQueue,
-    cmce::components::circuit_mgr::{CircuitMgrCmd, CircuitMgrOld as CircuitMgr},
+    cmce::components::circuit_mgr_new::{CircuitMgr, CircuitMgrCmd},
 };
 
 /// Clause 11 Call Control CMCE sub-entity
@@ -45,7 +45,7 @@ pub struct CcBsSubentity {
     dltime: TdmaTime,
     /// Cached D-SETUP PDUs for late-entry re-sends: call_id -> (D-SETUP PDU, dest address, tx reporter)
     cached_setups: HashMap<u16, (DSetup, TetraAddress, Option<TxReporter>)>,
-    circuits: CircuitMgr,
+    circuit_mgr: CircuitMgr,
     /// Active group calls: call_id -> call info
     active_calls: HashMap<u16, ActiveCall>,
     /// Registered subscriber groups (ISSI -> set of GSSIs)
@@ -173,10 +173,10 @@ impl CcBsSubentity {
     pub fn new(config: SharedConfig, state: StackState) -> Self {
         CcBsSubentity {
             config,
-            state,
+            state: state.clone(),
             dltime: TdmaTime::default(),
             cached_setups: HashMap::new(),
-            circuits: CircuitMgr::new(),
+            circuit_mgr: CircuitMgr::new(state),
             active_calls: HashMap::new(),
             subscriber_groups: HashMap::new(),
             group_listeners: HashMap::new(),
@@ -288,15 +288,18 @@ impl CcBsSubentity {
     }
 
     fn has_listener(&self, gssi: u32) -> bool {
-        self.group_listeners.get(&gssi).copied().unwrap_or(0) > 0
+        // self.group_listeners.get(&gssi).copied().unwrap_or(0) > 0
+        self.state.with_subscribers(|s| s.group_has_local_attached_mses(gssi))
     }
 
     fn inc_group_listener(&mut self, gssi: u32) {
+        unimplemented!();
         let entry = self.group_listeners.entry(gssi).or_insert(0);
         *entry += 1;
     }
 
     fn dec_group_listener(&mut self, gssi: u32) {
+        unimplemented!();
         if let Some(entry) = self.group_listeners.get_mut(&gssi) {
             if *entry <= 1 {
                 self.group_listeners.remove(&gssi);
@@ -481,6 +484,106 @@ impl CcBsSubentity {
         queue.push_back(cmd);
     }
 
+    /// Computes stream dest from CommunicationType and brew configuration
+    fn compute_dl_source_type(&self, dest_ssi: u32, comm_type: CommunicationType) -> CircuitStreamDest {
+        match comm_type {
+            CommunicationType::P2Mp | CommunicationType::P2MpAcked => {
+                // Group call. Check if locally attached MSes exist
+                if self.state.with_subscribers(|s| s.group_has_local_attached_mses(dest_ssi)) {
+                    // Local MSes are subscribed
+                    if net_brew::is_brew_gssi_routable(&self.config, dest_ssi) {
+                        // Should also be routed over brew
+                        CircuitStreamDest::LocalAndRemote(None, None)
+                    } else {
+                        // Should not be routed over brew
+                        CircuitStreamDest::Remote(None)
+                    }
+                } else {
+                    // No local subscribers
+                    if net_brew::is_brew_gssi_routable(&self.config, dest_ssi) {
+                        // But should be routed over brew
+                        CircuitStreamDest::Remote(None)
+                    } else {
+                        // No listening parties at this point
+                        CircuitStreamDest::NoListeners
+                    }
+                }
+            }
+            CommunicationType::P2p => {
+                // Individual call. Check if target MS is local
+                if self.state.with_subscribers(|s| s.is_registered(dest_ssi)) {
+                    // Locally registered
+                    CircuitStreamDest::Local(None)
+                } else {
+                    // Not locally registered
+                    if net_brew::is_brew_gssi_routable(&self.config, dest_ssi) {
+                        // But should be routed over brew
+                        CircuitStreamDest::Remote(None)
+                    } else {
+                        // No listening parties at this point
+                        CircuitStreamDest::NoListeners
+                    }
+                }
+            }
+            _ => panic!(),
+        }
+    }
+
+    // Computes stream locations for dl2 and ul2
+    fn compute_duplex_sources(
+        &self,
+        ul1_source: CircuitStreamSrc,
+        dl1_source: CircuitStreamDest,
+        is_duplex: bool,
+    ) -> (Option<CircuitStreamSrc>, Option<CircuitStreamDest>) {
+        if is_duplex {
+            // Duplex is always individual. As such, we can simply inverse sources
+            assert!(
+                !matches!(dl1_source, CircuitStreamDest::LocalAndRemote(_, _)),
+                "duplex stream with multiple dl localities"
+            );
+            (
+                Some(match dl1_source {
+                    CircuitStreamDest::Local(_) => CircuitStreamSrc::Local(None),
+                    CircuitStreamDest::Remote(_) => CircuitStreamSrc::Remote(None),
+                    CircuitStreamDest::NoListeners => CircuitStreamSrc::Unknown, // Called party not located yet
+                    _ => panic!(),
+                }),
+                Some(match ul1_source {
+                    CircuitStreamSrc::Local(_) => CircuitStreamDest::Local(None),
+                    CircuitStreamSrc::Remote(_) => CircuitStreamDest::Remote(None),
+                    _ => panic!(),
+                }),
+            )
+        } else {
+            // Not duplex
+            (None, None)
+        }
+    }
+
+    fn tetra_circuit_to_cmce_circuit(t: &TetraCircuit) -> CmceCircuit {
+        tracing::warn!("legacy compat function tetra_circuit_to_cmce_circuit called");
+        let ts = match (t.dl1_source, t.ul1_source) {
+            (_, CircuitStreamSrc::Local(_)) => t.ul1_source.get_ts(),
+            (CircuitStreamDest::Local(_), _) => t.dl1_source.get_ts(),
+            _ => panic!(),
+        }
+        .unwrap();
+
+        CmceCircuit {
+            ts_created: t.t_start,
+            direction: Direction::Both,
+            ts,
+            call_id: t.call_id,
+            usage: t.usage_id,
+            circuit_mode: CircuitModeType::TchS,
+            comm_type: t.comm_type,
+            simplex_duplex: t.is_duplex(),
+            speech_service: Some(0),
+            etee_encrypted: t.is_etee_encrypted,
+        }
+    }
+
     fn rx_u_setup(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_setup: {:?}", message);
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
@@ -513,51 +616,68 @@ impl CcBsSubentity {
             return;
         }
 
-        // Get destination GSSI (called party)
-        let Some(dest_gssi) = pdu.called_party_ssi else {
+        // Get destination ISSI or GSSI (called party)
+        let Some(dest_ssi) = pdu.called_party_ssi else {
             tracing::warn!("U-SETUP without called_party_ssi, ignoring");
             return;
         };
-        let dest_gssi = dest_gssi as u32;
-        let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
+        let dest_ssi = dest_ssi as u32;
+        let dest_addr = TetraAddress::new(
+            dest_ssi,
+            match pdu.basic_service_information.communication_type {
+                CommunicationType::P2p => SsiType::Issi,
+                CommunicationType::P2Mp | CommunicationType::P2MpAcked => SsiType::Gssi,
+                _ => unreachable!(),
+            },
+        );
 
-        if !self.has_listener(dest_gssi) {
+        unimplemented!("revisit below");
+        if !self.has_listener(dest_ssi) {
             tracing::info!(
                 "CMCE: rejecting U-SETUP from issi={} to gssi={} (no listeners)",
                 calling_party.ssi,
-                dest_gssi
+                dest_ssi
             );
             return;
         }
 
-        // Allocate circuit (DL+UL for group call)
-        let circuit = match {
-            self.state.with_circuits(|s| {
-                self.circuits.allocate_circuit_with_allocator(
-                    Direction::Both,
-                    pdu.basic_service_information.communication_type,
-                    &mut s.allocator,
-                    TimeslotOwner::Cmce,
-                )
-            })
-        } {
-            Ok(circuit) => circuit.clone(),
-            Err(e) => {
-                tracing::error!("Failed to allocate circuit for U-SETUP: {:?}", e);
-                return;
-            }
+        // Find circuit destination localities
+        let ul1_source = CircuitStreamSrc::Local(None);
+        let dl1_source = self.compute_dl_source_type(dest_ssi, pdu.basic_service_information.communication_type);
+        let (ul2_source, dl2_source) = self.compute_duplex_sources(ul1_source, dl1_source, pdu.simplex_duplex_selection);
+
+        // Build circuit (without ts reservation)
+        let Some(call_id) = self.circuit_mgr.allocate_circuit(
+            calling_party.ssi,
+            dest_ssi,
+            pdu.basic_service_information.communication_type,
+            ul1_source, // U-SETUP always local, no ts allocated yet
+            dl1_source,
+            ul2_source,
+            dl2_source,
+            self.dltime,
+        ) else {
+            tracing::warn!(
+                "rx_u_setup: could not setup circuit for call from ISSI {} to SSI {}",
+                calling_party.ssi,
+                dest_ssi,
+            );
+            return;
         };
+
+        let t_circuit = self.circuit_mgr.get_circuit_by_callid(call_id).unwrap(); // never fails
+        let circuit = Self::tetra_circuit_to_cmce_circuit(&t_circuit);
+
+        // Signal UMAC to open DL+UL circuits
 
         tracing::info!(
             "rx_u_setup: call from ISSI {} to GSSI {} → ts={} call_id={} usage={}",
             calling_party.ssi,
-            dest_gssi,
+            dest_ssi,
             circuit.ts,
             circuit.call_id,
             circuit.usage
         );
-
-        // Signal UMAC to open DL+UL circuits
         Self::signal_umac_circuit_open(queue, &circuit, None, CircuitDlMediaSource::LocalLoopback);
 
         // Build channel allocation timeslot mask for this call
@@ -668,7 +788,7 @@ impl CcBsSubentity {
                 origin: CallOrigin::Local {
                     caller_addr: calling_party,
                 },
-                dest_gssi,
+                dest_gssi: dest_ssi,
                 source_issi: calling_party.ssi,
                 ts: circuit.ts,
                 usage: circuit.usage,
@@ -680,7 +800,7 @@ impl CcBsSubentity {
 
         // Notify Brew entity about this local call if Brew is loaded and the SSI is cleared for Brew
         // It can then forward to TetraPack if the group is subscribed
-        if net_brew::is_brew_gssi_routable(&self.config, dest_gssi) {
+        if net_brew::is_brew_gssi_routable(&self.config, dest_ssi) {
             let msg = SapMsg {
                 sap: Sap::Control,
                 src: TetraEntity::Cmce,
@@ -688,7 +808,7 @@ impl CcBsSubentity {
                 msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
                     call_id: circuit.call_id,
                     source_issi: calling_party.ssi,
-                    dest_gssi,
+                    dest_gssi: dest_ssi,
                     ts: circuit.ts,
                 }),
             };
@@ -734,13 +854,17 @@ impl CcBsSubentity {
     /// Set up an individual (point-to-point) call. ETSI EN 300 392-2 clause 14.5.1.
     /// Local on-cell simplex call with either hook method, ISSI-addressed.
     fn setup_individual_call(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu: USetup, calling_party: TetraAddress) {
+        tracing::warn!("legacy separate setup individual call entered");
+        unimplemented!();
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
             panic!()
         };
+        assert!(pdu.basic_service_information.communication_type == CommunicationType::P2p);
+
         let (handle, link_id, endpoint_id) = (prim.handle, prim.link_id, prim.endpoint_id);
 
         let calling_ssi = calling_party.ssi;
-        let duplex = pdu.simplex_duplex_selection;
+        let is_duplex = pdu.simplex_duplex_selection;
         let called_ssi = pdu.called_party_ssi.map(|s| s as u32);
 
         // A locally registered ISSI is reached on-air. Anything else (an off-cell ISSI or a
@@ -748,7 +872,7 @@ impl CcBsSubentity {
         let is_local = called_ssi.map(|s| self.is_individual_registered(s)).unwrap_or(false);
         if !is_local {
             if net_brew::is_active(&self.config) {
-                self.setup_individual_call_over_brew(queue, message, &pdu, calling_party, duplex, handle, link_id, endpoint_id);
+                self.setup_individual_call_over_brew(queue, message, &pdu, calling_party, is_duplex, handle, link_id, endpoint_id);
             } else {
                 tracing::warn!("individual call to non-local target and no Brew, rejecting");
                 self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyNotReachable);
@@ -769,74 +893,101 @@ impl CcBsSubentity {
         }
 
         let comm_type = pdu.basic_service_information.communication_type;
-        let calling_circuit = match {
-            self.state.with_circuits(|c| {
-                self.circuits
-                    .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut c.allocator, TimeslotOwner::Cmce)
-            })
-        } {
-            Ok(circuit) => circuit.clone(),
-            Err(e) => {
-                tracing::error!("Failed to allocate circuit for individual U-SETUP: {:?}", e);
-                self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
-                return;
-            }
-        };
-        // A duplex call needs a second channel so the called party can transmit at the same
-        // time as the caller. Simplex shares one channel (both parties on the same slot).
-        let called_circuit = if duplex {
-            match {
-                self.state.with_circuits(|c| {
-                    self.circuits
-                        .allocate_circuit_with_allocator(Direction::Both, comm_type, &mut c.allocator, TimeslotOwner::Cmce)
-                })
-            } {
-                Ok(circuit) => circuit.clone(),
-                Err(e) => {
-                    tracing::error!("Failed to allocate second circuit for duplex U-SETUP: {:?}", e);
-                    let _ = self.circuits.close_circuit(Direction::Both, calling_circuit.ts);
-                    self.release_timeslot(calling_circuit.ts);
-                    self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
-                    return;
-                }
-            }
-        } else {
-            calling_circuit.clone()
+
+        // Find circuit destination localities
+        let ul1_source = CircuitStreamSrc::Local(None);
+        let dl1_source = self.compute_dl_source_type(called_ssi, pdu.basic_service_information.communication_type);
+        let (ul2_source, dl2_source) = self.compute_duplex_sources(ul1_source, dl1_source, pdu.simplex_duplex_selection);
+
+        // Build circuit (without ts reservation)
+        let Some(call_id) = self.circuit_mgr.allocate_circuit(
+            calling_party.ssi,
+            called_ssi,
+            pdu.basic_service_information.communication_type,
+            ul1_source, // U-SETUP always local, no ts allocated yet
+            dl1_source,
+            ul2_source,
+            dl2_source,
+            self.dltime,
+        ) else {
+            tracing::warn!(
+                "rx_u_setup: could not setup circuit for call from ISSI {} to SSI {}",
+                calling_party.ssi,
+                called_ssi,
+            );
+            return;
         };
 
-        let calling_addr = calling_party;
+        let t_circuit = self.circuit_mgr.get_circuit_by_callid(call_id).unwrap(); // never fails
+        let calling_circuit = Self::tetra_circuit_to_cmce_circuit(&t_circuit);
+
+        // let circuit_ts = self.circuit_mgr.allocate_circuit(
+        //     calling_party.ssi,
+        //     // CircuitStreamSource::Local(0),
+        //     // CircuitStreamDest::None,
+        //     called_ssi,
+        //     pdu.basic_service_information.communication_type,
+        //     pdu.simplex_duplex_selection,
+        //     self.dltime
+        // );
+        // let Some(circuit_ts) = circuit_ts else {
+        //     tracing::error!("Failed to allocate circuit for individual U-SETUP");
+        //     self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
+        //     return;
+        // };
+
+        // // A duplex call needs a second channel so the called party can transmit at the same
+        // // time as the caller. Simplex shares one channel (both parties on the same slot).
+        // let duplex_circuit_ts = if is_duplex {
+        //     let duplex_ts = self.circuit_mgr.allocate_circuit(
+        //         calling_party.ssi,
+        //         // CircuitStreamSource::Local(0),
+        //         // CircuitStreamDest::None,
+        //         called_ssi,
+        //         pdu.basic_service_information.communication_type,
+        //         pdu.simplex_duplex_selection,
+        //         self.dltime
+        //     );
+        //     let Some(duplex_ts) = duplex_ts else {
+        //         tracing::error!("Failed to allocate second circuit for duplex U-SETUP: {:?}", e);
+        //         self.release_timeslot(calling_circuit.ts);
+        //         self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
+        //         return;
+        //     };
+        //     Some(duplex_ts)
+        // } else {
+        //     None
+        // };
+
+        let (duplex_circuit_ts, duplex_circuit_usage) = if let Some(dl2) = t_circuit.dl2_source {
+            (dl2.get_ts(), t_circuit.usage2_id)
+        } else {
+            (None, None)
+        };
+
+        // let calling_addr = calling_party;
         let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
+        let calling_addr = TetraAddress::new(calling_ssi, SsiType::Issi);
         let hook_on_off = pdu.hook_method_selection;
 
         tracing::info!(
-            "individual call ISSI {} to ISSI {} ts={} called_ts={} call_id={} hook_on_off={} duplex={}",
+            "individual call ISSI {} to ISSI {} ts={} called_ts={:?} call_id={} hook_on_off={} duplex={}",
             calling_ssi,
             called_ssi,
-            calling_circuit.ts,
-            called_circuit.ts,
-            calling_circuit.call_id,
+            calling_circuit.ts,      // calling_circuit.ts,
+            duplex_circuit_ts,       // duplex_circuit_ts.ts,
+            calling_circuit.call_id, // calling_circuit.call_id,
             hook_on_off,
-            duplex
+            is_duplex
         );
 
-        // Open the traffic channel(s). For duplex, cross-link the two slots so each party's
-        // uplink voice loops to the other party's downlink.
-        if duplex {
-            Self::signal_umac_circuit_open(
-                queue,
-                &calling_circuit,
-                Some(called_circuit.ts),
-                CircuitDlMediaSource::LocalLoopback,
-            );
-            Self::signal_umac_circuit_open(
-                queue,
-                &called_circuit,
-                Some(calling_circuit.ts),
-                CircuitDlMediaSource::LocalLoopback,
-            );
-        } else {
-            Self::signal_umac_circuit_open(queue, &calling_circuit, None, CircuitDlMediaSource::LocalLoopback);
-        }
+        // Open the traffic channel(s) (two for duplex)
+        Self::signal_umac_circuit_open(
+            queue,
+            &calling_circuit, //circuit_ts,
+            duplex_circuit_ts,
+            CircuitDlMediaSource::LocalLoopback,
+        );
 
         // D-CALL-PROCEEDING acknowledges the U-SETUP to the caller.
         self.send_d_call_proceeding(queue, message, &pdu, calling_circuit.call_id);
@@ -845,7 +996,7 @@ impl CcBsSubentity {
         // once), no floor. Simplex names one speaker via the U-SETUP request to transmit bit
         // (ETSI Table 14.74): value 0 is the caller, value 1 the other party. A hook radio
         // sets it to let the called speak first. The hook method only drives alerting.
-        let (floor_holder, called_grant) = if duplex {
+        let (floor_holder, called_grant) = if is_duplex {
             (None, TransmissionGrant::Granted)
         } else {
             let caller_first = !pdu.request_to_transmit_send_data;
@@ -866,7 +1017,7 @@ impl CcBsSubentity {
             call_identifier: calling_circuit.call_id,
             call_time_out: CallTimeout::T5m,
             hook_method_selection: hook_on_off,
-            simplex_duplex_selection: duplex,
+            simplex_duplex_selection: is_duplex,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: called_grant,
             transmission_request_permission: false,
@@ -880,7 +1031,7 @@ impl CcBsSubentity {
             dm_ms_address: None,
             proprietary: None,
         };
-        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, called_circuit.usage, called_circuit.ts, UlDlAssignment::Both);
+        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, calling_circuit.usage, duplex_circuit_ts.unwrap(), UlDlAssignment::Both);
         let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
         queue.push_back(setup_msg);
 
@@ -895,9 +1046,9 @@ impl CcBsSubentity {
                 calling_endpoint_id: endpoint_id,
                 ts: calling_circuit.ts,
                 usage: calling_circuit.usage,
-                called_ts: called_circuit.ts,
-                called_usage: called_circuit.usage,
-                duplex,
+                called_ts: duplex_circuit_ts.unwrap(),
+                called_usage: duplex_circuit_usage.unwrap(),
+                duplex: is_duplex,
                 over_brew: false,
                 brew_uuid: None,
                 hook_on_off,
@@ -972,23 +1123,48 @@ impl CcBsSubentity {
             .map(Self::decode_external_subscriber_number)
             .unwrap_or_default();
 
-        let circuit = match {
-            self.state.with_circuits(|c| {
-                self.circuits.allocate_circuit_with_allocator(
-                    Direction::Both,
-                    pdu.basic_service_information.communication_type,
-                    &mut c.allocator,
-                    TimeslotOwner::Cmce,
-                )
-            })
-        } {
-            Ok(circuit) => circuit.clone(),
-            Err(e) => {
-                tracing::error!("Failed to allocate circuit for over-Brew U-SETUP: {:?}", e);
-                self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
-                return;
-            }
+        // let circuit = match {
+        //     self.state.with_circuits(|c| {
+        //         self.circuit_mgr.allocate_circuit(
+        //             Direction::Both,
+        //             pdu.basic_service_information.communication_type,
+        //         )
+        //     })
+        // } {
+        //     Ok(circuit) => circuit.clone(),
+        //     Err(e) => {
+        //         tracing::error!("Failed to allocate circuit for over-Brew U-SETUP: {:?}", e);
+        //         self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
+        //         return;
+        //     }
+        // };
+
+        // Find circuit destination localities
+        let ul1_source = CircuitStreamSrc::Local(None);
+        let dl1_source = self.compute_dl_source_type(called_ssi, pdu.basic_service_information.communication_type);
+        let (ul2_source, dl2_source) = self.compute_duplex_sources(ul1_source, dl1_source, pdu.simplex_duplex_selection);
+
+        // Build circuit (without ts reservation)
+        let Some(call_id) = self.circuit_mgr.allocate_circuit(
+            calling_party.ssi,
+            called_ssi,
+            pdu.basic_service_information.communication_type,
+            ul1_source, // U-SETUP always local, no ts allocated yet
+            dl1_source,
+            ul2_source,
+            dl2_source,
+            self.dltime,
+        ) else {
+            tracing::warn!(
+                "rx_u_setup: could not setup circuit for call from ISSI {} to SSI {}",
+                calling_party.ssi,
+                called_ssi,
+            );
+            return;
         };
+
+        let t_circuit = self.circuit_mgr.get_circuit_by_callid(call_id).unwrap(); // never fails
+        let calling_circuit = Self::tetra_circuit_to_cmce_circuit(&t_circuit);
 
         let brew_uuid = uuid::Uuid::new_v4();
         tracing::info!(
@@ -1212,14 +1388,8 @@ impl CcBsSubentity {
         let duplex = call.duplex != 0;
         let hook = call.method != 0;
         let circuit = match {
-            self.state.with_circuits(|c| {
-                self.circuits.allocate_circuit_with_allocator(
-                    Direction::Both,
-                    CommunicationType::P2p,
-                    &mut c.allocator,
-                    TimeslotOwner::Cmce,
-                )
-            })
+            self.state
+                .with_circuits(|c| self.circuit_mgr.allocate_circuit(Direction::Both, CommunicationType::P2p))
         } {
             Ok(circuit) => circuit.clone(),
             Err(e) => {
@@ -1626,25 +1796,33 @@ impl CcBsSubentity {
     /// its U-ALERT or U-CONNECT. Honor it by collapsing the call onto the caller's slot, closing
     /// the second traffic channel, and dropping the duplex cross-route so it runs as simplex.
     fn downgrade_individual_to_simplex(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(call) = self.individual_calls.get_mut(&call_id) else {
-            return;
-        };
-        if call.called_ts == call.ts {
-            return;
-        }
-        let second_ts = call.called_ts;
-        let caller_ts = call.ts;
-        let caller_usage = call.usage;
-        call.duplex = false;
-        call.called_ts = caller_ts;
-        call.called_usage = caller_usage;
-        // Hook call: the answering called party transmits first (ETSI 14.5.1.2.1 a).
-        call.floor_holder = Some(call.called_addr.ssi);
+        // let Some(call) = self.individual_calls.get_mut(&call_id) else {
+        //     return;
+        // };
+        // if call.called_ts == call.ts {
+        //     return;
+        // }
+        // let second_ts = call.called_ts;
+        // let caller_ts = call.ts;
+        // let caller_usage = call.usage;
+        // call.duplex = false;
+        // call.called_ts = caller_ts;
+        // call.called_usage = caller_usage;
+        // // Hook call: the answering called party transmits first (ETSI 14.5.1.2.1 a).
+        // call.floor_holder = Some(call.called_addr.ssi);
 
-        if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, second_ts) {
-            Self::signal_umac_circuit_close(queue, circuit);
-        }
-        self.release_timeslot(second_ts);
+        self.circuit_mgr.downgrade_duplex_to_simplex(call_id);
+        let circuit = self.circuit_mgr.get_circuit_by_callid(call_id).unwrap(); // never fails
+        let ts = match (circuit.dl1_source, circuit.ul1_source) {
+            (CircuitStreamDest::Local(ts), _) => ts.unwrap(),
+            (_, CircuitStreamSrc::Local(ts)) => ts.unwrap(),
+            _ => panic!(),
+        };
+
+        // if let Ok(circuit) = self.circuit_mgr.close_circuit(Direction::Both, second_ts) {
+        //     Self::signal_umac_circuit_close(queue, circuit);
+        // }
+        // self.release_timeslot(second_ts);
 
         // Re-open the caller slot as a shared simplex channel without the duplex peer route.
         queue.push_back(SapMsg {
@@ -1653,12 +1831,12 @@ impl CcBsSubentity {
             dest: TetraEntity::Umac,
             msg: SapMsgInner::CmceCallControl(CallControl::Open(Circuit {
                 direction: Direction::Both,
-                ts: caller_ts,
+                ts,
                 peer_ts: None,
-                usage: caller_usage,
+                usage: circuit.usage_id,
                 circuit_mode: CircuitModeType::TchS,
                 speech_service: Some(0),
-                etee_encrypted: false,
+                etee_encrypted: circuit.is_etee_encrypted,
                 dl_media_source: CircuitDlMediaSource::LocalLoopback,
             })),
         });
@@ -1934,7 +2112,7 @@ impl CcBsSubentity {
         // Release individual calls that pass their setup or call-length timeout
         self.process_individual_timeouts(queue);
 
-        if let Some(tasks) = self.circuits.tick_start(dltime) {
+        if let Some(tasks) = self.circuit_mgr.tick_start(dltime) {
             for task in tasks {
                 match task {
                     CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
@@ -2048,11 +2226,12 @@ impl CcBsSubentity {
     }
 
     fn release_timeslot(&mut self, ts: u8) {
-        self.state.with_circuits(|c| {
-            if let Err(err) = c.allocator.release(TimeslotOwner::Cmce, ts) {
-                tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
-            }
-        })
+        unimplemented!();
+        // self.state.with_circuits(|c| {
+        //     if let Err(err) = c.allocator.release(TimeslotOwner::Cmce, ts) {
+        //         tracing::warn!("CcBsSubentity: failed to release timeslot ts={} err={:?}", ts, err);
+        //     }
+        // })
     }
 
     /// Release a call. Removes it from active state immediately so it cannot be re-keyed
@@ -2110,7 +2289,7 @@ impl CcBsSubentity {
                 let rc = self.releasing_calls.remove(i);
                 if let Some(peer_ts) = rc.peer_ts {
                     // Free the duplex call's second slot too.
-                    if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, peer_ts) {
+                    if let Ok(circuit) = self.circuit_mgr.close_circuit(Direction::Both, peer_ts) {
                         Self::signal_umac_circuit_close(queue, circuit);
                     }
                     queue.push_back(SapMsg {
@@ -2142,7 +2321,7 @@ impl CcBsSubentity {
         is_local: bool,
         brew_uuid: Option<uuid::Uuid>,
     ) {
-        if let Ok(circuit) = self.circuits.close_circuit(Direction::Both, ts) {
+        if let Ok(circuit) = self.circuit_mgr.close_circuit(Direction::Both, ts) {
             Self::signal_umac_circuit_close(queue, circuit);
         }
 
@@ -2196,11 +2375,7 @@ impl CcBsSubentity {
             unimplemented_log!("Only simplex calls supported: {}", pdu.simplex_duplex_selection);
             supported = false;
         };
-        // if pdu.basic_service_information != 0xFC {
-        //     // TODO FIXME implement parsing
-        //     tracing::error!("Basic service information not supported: {}", pdu.basic_service_information);
-        //     return;
-        // };
+
         // request_to_transmit_send_data can be false for speech group calls — the MS
         // implicitly requests to transmit by initiating the call. No action needed.
         if pdu.clir_control != 0 {
@@ -2222,6 +2397,30 @@ impl CcBsSubentity {
         if let Some(v) = &pdu.proprietary {
             unimplemented_log!("proprietary not supported: {:?}", v);
         };
+
+        if pdu.basic_service_information.circuit_mode_type != CircuitModeType::TchS {
+            unimplemented_log!(
+                "circuit_mode_type not supported: {:?}",
+                pdu.basic_service_information.circuit_mode_type
+            );
+        }
+        if !matches!(
+            pdu.basic_service_information.communication_type,
+            CommunicationType::P2p | CommunicationType::P2Mp
+        ) {
+            unimplemented_log!(
+                "communication_type not supported: {:?}",
+                pdu.basic_service_information.communication_type
+            );
+        }
+        if let Some(spf) = pdu.basic_service_information.slots_per_frame
+            && spf != 1
+        {
+            unimplemented_log!("slots_per_frame not supported: {:?}", pdu.basic_service_information.slots_per_frame);
+        }
+        if pdu.basic_service_information.speech_service != Some(0) {
+            unimplemented_log!("speech_service not supported: {:?}", pdu.basic_service_information.speech_service);
+        }
 
         supported
     }

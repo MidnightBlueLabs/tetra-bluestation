@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tetra_core::freqs::FreqInfo;
 
 use crate::bluestation::{CfgCellInfo, CfgControl, CfgNetInfo, CfgPhyIo, PhyBackend};
