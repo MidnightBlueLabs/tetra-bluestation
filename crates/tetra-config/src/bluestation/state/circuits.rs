@@ -1,6 +1,6 @@
 use std::{collections::HashMap, usize};
 
-use tetra_core::{TdmaTime, TimeslotAllocator};
+use tetra_core::{SsiType, TdmaTime, TetraAddress, TimeslotAllocator};
 use tetra_pdus::cmce::structs::cmce_circuit::CallId;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 
@@ -8,10 +8,17 @@ use tetra_saps::control::enums::communication_type::CommunicationType;
 pub enum CircuitState {
     /// Call was just set up, initial D-SETUPs are being sent out. Contains timeslots elapsed since initial setup
     /// Transitions:
+    /// -> Alerting if the called party reports ringing
     /// -> Tx after 3 D-SETUPs sent TODO IMPLEMENT
     /// -> TxCeased if U-TX CEASED received TODO IMPLEMENT
     /// -> Releasing if U-RELEASE received TODO IMPLEMENT
     Setup(u32),
+    /// Individual call only: the called party is ringing and has not answered yet.
+    /// Both parties are still on the control channel.
+    /// Transitions:
+    /// -> Tx when the called party answers
+    /// -> Releasing on release or no-answer timeout
+    Alerting(u32),
     /// Call currently in TX, contains timeslots elapsed since tx segment started (including initial Setup if no TxCeased followed
     /// D-SETUP frames are emitted periodically
     /// Transitions:
@@ -150,10 +157,31 @@ impl CircuitStreamDest {
     }
 }
 
+/// MLE routing back to a local MS over its already established LLC link. Downlink PDUs that
+/// must reach one specific MS (rather than a group broadcast) have to carry these.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MleRoute {
+    pub handle: u32,
+    pub link_id: u32,
+    pub endpoint_id: u32,
+}
+
+impl MleRoute {
+    pub fn new(handle: u32, link_id: u32, endpoint_id: u32) -> Self {
+        Self {
+            handle,
+            link_id,
+            endpoint_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TetraCircuit {
     /// Current state of the call. Element contains data associated uniquely with this state, e.g. elapsed time in setup or hangtime in tx ceased.
     pub state: CircuitState,
+    /// Time the circuit entered its current state. Drives hangtime, setup and release timers.
+    pub t_state: TdmaTime,
     /// Source of the downlink stream. Can be local, remote or both, depending on who's subscribed.
     pub dl1_source: CircuitStreamDest,
     /// Source of the local or remote "uplink" stream.
@@ -169,9 +197,14 @@ pub struct TetraCircuit {
     // pub circuit_mode_type: CircuitModeType,
     // Speech service, 0 = TETRA ACELP encoded speech, 1|2 = reserved, 3 = proprietary
     // pub speech_service: Option<u8>,
+    /// Duplex as negotiated on air (ETSI 14.5.1.1.1). This is not the same as having a second
+    /// local traffic channel: a duplex call whose far leg is reached over Brew has only one
+    /// local slot. Use `has_second_channel()` for the timeslot question.
+    pub is_duplex: bool,
 
-    // Set to true for a duplex call, false for an individual call.
-    // pub is_duplex: bool,
+    /// On/off hook signalling was selected, so the called party alerts before answering.
+    pub hook_on_off: bool,
+
     /// Set to true for an individual call, false for a group call.
     pub comm_type: CommunicationType,
 
@@ -186,9 +219,25 @@ pub struct TetraCircuit {
     pub floor: Option<u32>,
 
     /// ISSI that opened the call. Does not equal the one who now has the floor!
+    /// Zero for a call pushed in by the network, which has no local owner.
     pub caller: u32,
     /// ISSI or GSSI that was called
     pub callee: u32,
+
+    /// The call was opened by a local MS. False when the network pushed it in over Brew.
+    pub is_local_origin: bool,
+
+    /// Mobile terminated over-Brew call: the network is the calling party and the local MS is
+    /// the called party, so the on-air leg is `callee`, not `caller`.
+    pub is_mobile_terminated: bool,
+
+    /// Brew session of the party that opened the call. The stream sources carry the *current*
+    /// Brew session, which the backend re-issues per speaker and which is cleared in hangtime,
+    /// so this is kept separately for the final teardown notification.
+    pub origin_brew_uuid: Option<uuid::Uuid>,
+
+    /// MLE routing back to the local calling MS. Unset for a network originated call.
+    pub caller_route: MleRoute,
 
     /// Call voice frames are E2EE encrypted
     pub is_etee_encrypted: bool,
@@ -205,19 +254,108 @@ impl TetraCircuit {
         matches!(self.comm_type, CommunicationType::P2p)
     }
 
-    pub fn is_duplex(&self) -> bool {
+    /// A second local traffic channel is allocated, so both parties can transmit at once and
+    /// each uplink is cross-routed to the other party's downlink. Only a local duplex call has
+    /// this: an over-Brew duplex call has one local slot and the backend on the other side.
+    pub fn has_second_channel(&self) -> bool {
         let ret = self.dl2_source.is_some();
         // Some sanity checks
         if ret {
-            assert!(self.is_individual_call(), "duplex but also group call");
-            assert!(
-                self.dl2_source.is_some() && self.ul2_source.is_some(),
-                "duplex but 2nd circuit not set"
-            );
+            assert!(self.is_individual_call(), "second channel but also group call");
+            assert!(self.ul2_source.is_some(), "dl2_source set but ul2_source is None");
+            assert!(self.is_duplex, "second channel but call is not duplex");
         } else {
-            assert!(self.ul2_source.is_none(), "dl2_source set but ul2_source is None");
+            assert!(self.ul2_source.is_none(), "ul2_source set but dl2_source is None");
         }
         ret
+    }
+
+    /// The far party is reached over Brew (off-cell ISSI, PBX or phone number) rather than on air.
+    pub fn is_over_brew(&self) -> bool {
+        self.dl1_source.has_remote()
+    }
+
+    /// Brew session currently attached to this circuit, if any.
+    pub fn brew_uuid(&self) -> Option<uuid::Uuid> {
+        self.dl1_source.get_uuid()
+    }
+
+    pub fn caller_addr(&self) -> TetraAddress {
+        TetraAddress::new(self.caller, SsiType::Issi)
+    }
+
+    pub fn callee_addr(&self) -> TetraAddress {
+        let ssi_type = if self.is_group_call() { SsiType::Gssi } else { SsiType::Issi };
+        TetraAddress::new(self.callee, ssi_type)
+    }
+
+    /// Local downlink timeslot. Every circuit this cell serves has one.
+    pub fn dl_ts(&self) -> u8 {
+        self.dl1_source.get_ts().expect("circuit has no local downlink timeslot")
+    }
+
+    /// Timeslot the calling party transmits on. For a group call with a network speaker the
+    /// uplink is remote, so the local slot is taken from the downlink instead.
+    pub fn ul_ts(&self) -> u8 {
+        self.ul1_source.get_ts().unwrap_or_else(|| self.dl_ts())
+    }
+
+    /// Timeslot the called party is on. Equal to `ul_ts()` unless a second channel is allocated.
+    pub fn callee_ts(&self) -> u8 {
+        self.dl1_source.get_ts().unwrap_or_else(|| self.ul_ts())
+    }
+
+    /// MAC usage marker of the called party's channel.
+    pub fn callee_usage_id(&self) -> u8 {
+        self.usage2_id.unwrap_or(self.usage_id)
+    }
+
+    /// Second local traffic channel timeslot, if one is allocated.
+    pub fn peer_ts(&self) -> Option<u8> {
+        self.dl2_source.and_then(|d| d.get_ts())
+    }
+
+    /// Local on-air party of an individual call and the slot it is on. A mobile terminated
+    /// over-Brew call has the called MS on air, everything else the calling MS.
+    pub fn local_leg(&self) -> (TetraAddress, u8) {
+        let ts = self.ul_ts();
+        if self.is_mobile_terminated {
+            (self.callee_addr(), ts)
+        } else {
+            (self.caller_addr(), ts)
+        }
+    }
+
+    /// True while D-SETUP is out but the called party has not alerted or answered.
+    pub fn is_setup(&self) -> bool {
+        matches!(self.state, CircuitState::Setup(_))
+    }
+
+    /// True while the called party is ringing.
+    pub fn is_alerting(&self) -> bool {
+        matches!(self.state, CircuitState::Alerting(_))
+    }
+
+    /// True while the circuit carries traffic, i.e. someone holds the floor on air.
+    pub fn is_tx(&self) -> bool {
+        matches!(self.state, CircuitState::Tx(_))
+    }
+
+    /// True while the circuit is in hangtime after a transmission ceased.
+    pub fn is_tx_ceased(&self) -> bool {
+        matches!(self.state, CircuitState::TxCeased(_))
+    }
+
+    /// True once teardown has started. The circuit stays in the store until the deferred
+    /// D-RELEASE has transmitted.
+    pub fn is_releasing(&self) -> bool {
+        matches!(self.state, CircuitState::Releasing(_))
+    }
+
+    /// True before the call is through-connected, so signalling still goes over the control
+    /// channel rather than being stolen onto the traffic channel.
+    pub fn is_pre_traffic(&self) -> bool {
+        self.is_setup() || self.is_alerting()
     }
 
     // pub fn has_local_ul(&self) -> bool {
@@ -347,6 +485,35 @@ impl CircuitStore {
         self.map.dl[ts as usize]
     }
 
+    pub fn get_callid_by_ul_ts(&self, ts: u8) -> Option<CallId> {
+        self.map.ul[ts as usize]
+    }
+
+    /// First circuit matching the predicate. Iteration order is unspecified, so the predicate
+    /// should identify at most one circuit.
+    pub fn find_circuit<F>(&self, pred: F) -> Option<&TetraCircuit>
+    where
+        F: Fn(&TetraCircuit) -> bool,
+    {
+        self.circuits.values().find(|c| pred(c))
+    }
+
+    /// True if any circuit matches the predicate.
+    pub fn any_circuit<F>(&self, pred: F) -> bool
+    where
+        F: Fn(&TetraCircuit) -> bool,
+    {
+        self.circuits.values().any(|c| pred(c))
+    }
+
+    /// Call ids of every circuit matching the predicate.
+    pub fn find_call_ids<F>(&self, pred: F) -> Vec<CallId>
+    where
+        F: Fn(&TetraCircuit) -> bool,
+    {
+        self.circuits.values().filter(|c| pred(c)).map(|c| c.call_id).collect()
+    }
+
     pub fn get_circuit_by_callid(&self, call_id: CallId) -> Option<&TetraCircuit> {
         self.circuits.get(&call_id)
     }
@@ -369,9 +536,13 @@ impl CircuitStore {
         true
     }
 
-    /// Sets the state of an existing circuit. Returns false if the call_id is not known.
-    pub fn set_circuit_state(&mut self, call_id: CallId, state: CircuitState) -> bool {
-        self.update_circuit_with(call_id, |c| c.state = state)
+    /// Sets the state of an existing circuit and stamps the transition time, which restarts the
+    /// setup, hangtime or release timer. Returns false if the call_id is not known.
+    pub fn set_circuit_state(&mut self, call_id: CallId, state: CircuitState, now: TdmaTime) -> bool {
+        self.update_circuit_with(call_id, |c| {
+            c.state = state;
+            c.t_state = now;
+        })
     }
 
     /// Sets the floor holder of an existing circuit. Returns false if the call_id is not known.
