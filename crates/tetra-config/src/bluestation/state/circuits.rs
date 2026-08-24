@@ -354,6 +354,49 @@ impl TetraCircuit {
         self.dl2_source.and_then(|d| d.get_ts())
     }
 
+    /// Local downlink timeslots this circuit occupies: its own, plus the second channel of a
+    /// duplex call.
+    pub fn dl_slots(&self) -> [Option<u8>; 2] {
+        [self.dl1_source.get_ts(), self.dl2_source.and_then(|d| d.get_ts())]
+    }
+
+    /// Local uplink timeslots this circuit occupies. A remote uplink (a network speaker on a
+    /// group call) still holds the local slot, so it is taken from the downlink instead.
+    pub fn ul_slots(&self) -> [Option<u8>; 2] {
+        [
+            self.ul1_source.get_ts().or_else(|| self.dl1_source.get_ts()),
+            self.ul2_source
+                .and_then(|s| s.get_ts())
+                .or_else(|| self.dl2_source.and_then(|d| d.get_ts())),
+        ]
+    }
+
+    /// MAC usage marker to advertise on the given timeslot.
+    pub fn usage_for_ts(&self, ts: u8) -> u8 {
+        match self.ul2_source.and_then(|s| s.get_ts()) {
+            Some(second) if second == ts => self.callee_usage_id(),
+            _ => self.usage_id,
+        }
+    }
+
+    /// Other half of a cross-routed duplex pair: the timeslot whose downlink carries what is
+    /// received on this timeslot's uplink. None unless a second channel is allocated.
+    pub fn peer_of_ts(&self, ts: u8) -> Option<u8> {
+        let first = self.ul1_source.get_ts()?;
+        let second = self.ul2_source?.get_ts()?;
+        match ts {
+            _ if ts == first => Some(second),
+            _ if ts == second => Some(first),
+            _ => None,
+        }
+    }
+
+    /// Downlink audio comes from the network rather than from a local uplink, so the MAC must
+    /// not loop uplink speech back onto the downlink.
+    pub fn dl_is_from_network(&self) -> bool {
+        (self.is_individual_call() && self.is_over_brew()) || self.ul1_source.is_remote()
+    }
+
     /// Local on-air party of an individual call and the slot it is on. A mobile terminated
     /// over-Brew call has the called MS on air, everything else the calling MS.
     pub fn local_leg(&self) -> (TetraAddress, u8) {
@@ -452,6 +495,18 @@ pub struct CircuitMap {
     pub ul: [Option<CallId>; NUM_TIMESLOTS + 1],
 }
 
+/// What the MAC needs to know about the circuit occupying a traffic timeslot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MacSlot {
+    pub call_id: CallId,
+    /// Usage marker to advertise for this slot on the AACH.
+    pub usage: u8,
+    /// Timeslot whose downlink carries this slot's uplink speech, for a cross-routed duplex call.
+    pub peer_ts: Option<u8>,
+    /// Downlink speech comes from the network, so local uplink must not be looped back.
+    pub dl_from_network: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CircuitStore {
     circuits: HashMap<CallId, TetraCircuit>,
@@ -470,7 +525,9 @@ impl CircuitStore {
         Self::default()
     }
 
-    /// Returns a struct describing which call IDs are related to which ul and dl timeslots
+    /// Returns a struct describing which call IDs are related to which ul and dl timeslots.
+    /// A circuit claims its timeslots for as long as it exists, regardless of where its media
+    /// currently comes from, so this doubles as the MAC's view of which slots carry traffic.
     fn build_timeslot_map(&self) -> CircuitMap {
         let mut map = CircuitMap::default();
 
@@ -482,25 +539,12 @@ impl CircuitStore {
                 circuit.call_id
             );
 
-            // Get associated dl ts (if any) and store its call id in the map
-            let dl = match circuit.dl1_source {
-                CircuitStreamDest::Local(ts) => Some(ts),
-                CircuitStreamDest::LocalAndRemote(ts, _) => Some(ts),
-                _ => None,
-            };
-            if let Some(ts) = dl {
-                let ts = ts.unwrap(); // TetraCircuits in the CircuitStore must be tied to timeslots
+            for ts in circuit.dl_slots().into_iter().flatten() {
                 assert!(map.dl[ts as usize].is_none(), "dl ts {} used twice", ts);
                 map.dl[ts as usize] = Some(circuit.call_id);
             }
 
-            // Get associated ul ts (if any) and store its call id in the map
-            let ul = match circuit.ul1_source {
-                CircuitStreamSrc::Local(ts) => Some(ts),
-                _ => None,
-            };
-            if let Some(ts) = ul {
-                let ts = ts.unwrap(); // TetraCircuits in the CircuitStore must be tied to timeslots
+            for ts in circuit.ul_slots().into_iter().flatten() {
                 assert!(map.ul[ts as usize].is_none(), "ul ts {} used twice", ts);
                 map.ul[ts as usize] = Some(circuit.call_id);
             }
@@ -554,6 +598,21 @@ impl CircuitStore {
         self.uuid_map = self.build_uuid_map();
     }
 
+    /// Renders which call occupies which timeslot, for debugging the derived MAC view.
+    /// tetra-config has no logger, so the caller does the logging.
+    pub fn dump_maps(&self) -> String {
+        let mut out = String::new();
+        for ts in 1..=NUM_TIMESLOTS {
+            let dl = self.circuit_map.dl[ts];
+            let ul = self.circuit_map.ul[ts];
+            if dl.is_none() && ul.is_none() {
+                continue;
+            }
+            out.push_str(&format!("ts {}: dl {:?}, ul {:?}; ", ts, dl, ul));
+        }
+        out
+    }
+
     /// Retrieves a copy of the timeslot map
     pub fn get_timeslot_map(&self) -> CircuitMap {
         self.circuit_map.clone()
@@ -573,6 +632,19 @@ impl CircuitStore {
 
     pub fn get_callid_by_uuid(&self, uuid: uuid::Uuid) -> Option<CallId> {
         self.uuid_map.get(&uuid).copied()
+    }
+
+    /// The MAC's view of a traffic timeslot: everything the scheduler needs to build the slot,
+    /// derived from the circuit occupying it. None when the timeslot carries no circuit.
+    pub fn mac_slot(&self, ts: u8) -> Option<MacSlot> {
+        let call_id = self.get_callid_by_dl_ts(ts).or_else(|| self.get_callid_by_ul_ts(ts))?;
+        let circuit = self.get_circuit_by_callid(call_id)?;
+        Some(MacSlot {
+            call_id,
+            usage: circuit.usage_for_ts(ts),
+            peer_ts: circuit.peer_of_ts(ts),
+            dl_from_network: circuit.dl_is_from_network(),
+        })
     }
 
     pub fn get_circuit_by_uuid(&self, uuid: uuid::Uuid) -> Option<&TetraCircuit> {
