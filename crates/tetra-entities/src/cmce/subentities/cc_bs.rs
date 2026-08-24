@@ -240,13 +240,13 @@ impl CcBsSubentity {
 
     /// True if at least one MS on this cell is attached to the group, so a call to it has
     /// somebody to reach.
-    fn has_listener(&self, gssi: u32) -> bool {
+    fn group_has_listener(&self, gssi: u32) -> bool {
         self.state.with_subscribers(|s| s.group_has_local_attached_mses(gssi))
     }
 
     /// Tear down any group call to a GSSI that no longer has local listeners.
     fn drop_group_calls_if_unlistened(&mut self, queue: &mut MessageQueue, gssi: u32) {
-        if self.has_listener(gssi) {
+        if self.group_has_listener(gssi) {
             return;
         }
 
@@ -431,7 +431,7 @@ impl CcBsSubentity {
         let dest_gssi = dest_gssi as u32;
         let dest_addr = TetraAddress::new(dest_gssi, SsiType::Gssi);
 
-        if !self.has_listener(dest_gssi) {
+        if !self.group_has_listener(dest_gssi) {
             tracing::info!(
                 "CMCE: rejecting U-SETUP from issi={} to gssi={} (no listeners)",
                 calling_party.ssi,
@@ -2279,7 +2279,7 @@ impl CcBsSubentity {
     fn rx_network_call_start(&mut self, queue: &mut MessageQueue, brew_uuid: uuid::Uuid, source_issi: u32, dest_gssi: u32, _priority: u8) {
         assert!(net_brew::is_brew_gssi_routable(&self.config, dest_gssi));
 
-        if !self.has_listener(dest_gssi) {
+        if !self.group_has_listener(dest_gssi) {
             tracing::info!(
                 "CMCE: ignoring network call start uuid={} gssi={} (no listeners)",
                 brew_uuid,

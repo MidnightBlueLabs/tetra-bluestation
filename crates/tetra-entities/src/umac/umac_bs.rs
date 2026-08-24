@@ -22,7 +22,7 @@ use tetra_pdus::umac::pdus::mac_sync::MacSync;
 use tetra_pdus::umac::pdus::mac_sysinfo::MacSysinfo;
 use tetra_pdus::umac::pdus::mac_u_blck::MacUBlck;
 use tetra_pdus::umac::pdus::mac_u_signal::MacUSignal;
-use tetra_saps::control::call_control::{CallControl, Circuit, CircuitDlMediaSource};
+use tetra_saps::control::call_control::CallControl;
 use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
 use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
@@ -82,14 +82,14 @@ impl UmacBs {
         Self {
             self_component: TetraEntity::Umac,
             config,
-            state,
+            state: state.clone(),
             old_sws_setting: false,
             dltime: TdmaTime::default(),
             endpoint_id: 1,
             defrag: BsDefrag::new(),
             pending_stch: None,
             // event_label_store: EventLabelStore::new(),
-            channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps),
+            channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps, state),
             last_ul_voice: [None; 4],
         }
     }
@@ -665,8 +665,7 @@ impl UmacBs {
             self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         }
 
-        let in_active_over =
-            self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
+        let in_active_over = self.channel_scheduler.circuit_is_active(msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
         if !in_active_over {
             self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
         }
@@ -1126,7 +1125,7 @@ impl UmacBs {
                 .chan_alloc
                 .as_ref()
                 .and_then(|ca| ca.timeslots.iter().enumerate().find(|&(_, &set)| set).map(|(i, _)| (i + 1) as u8))
-                .or_else(|| (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(Direction::Dl, t)));
+                .or_else(|| (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(t)));
 
             if let Some(ts) = traffic_ts {
                 // Build MAC-RESOURCE PDU for the STCH half-slot (124 type1 bits).
@@ -1270,10 +1269,10 @@ impl UmacBs {
                 let ts = prim.ts;
                 // Refresh UL inactivity timer when DL voice is being fed (network call scenario).
                 // This prevents false timeout when Brew is the speaker and no UL radio is transmitting.
-                if (1..=4).contains(&ts) && self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+                if (1..=4).contains(&ts) && self.channel_scheduler.circuit_is_active(ts) {
                     self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
                 }
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, ts) {
+                if self.channel_scheduler.circuit_is_active(ts) {
                     self.channel_scheduler.dl_schedule_tmd(ts, prim.data);
                 } else {
                     tracing::warn!(
@@ -1296,7 +1295,7 @@ impl UmacBs {
 
                 // Forward UL voice to Brew (User plane) if loaded
                 if self.config.config().brew.is_some() {
-                    if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+                    if self.channel_scheduler.circuit_is_active(ts) {
                         let msg = SapMsg {
                             sap: Sap::TmdSap,
                             src: TetraEntity::Umac,
@@ -1314,14 +1313,14 @@ impl UmacBs {
                 // A network (Brew) circuit renders audio fed from the backend, so suppress the
                 // local loopback there or the caller would hear itself doubled with the echo.
                 let dl_ts = self.channel_scheduler.ul_peer_ts(ts).unwrap_or(ts);
-                let network_media = self.channel_scheduler.dl_media_source(dl_ts) == Some(CircuitDlMediaSource::Network);
+                let network_media = self.channel_scheduler.dl_is_from_network(dl_ts);
                 if network_media {
                     tracing::trace!(
                         "rx_tmd_prim: network media on dl ts={}, suppressing local loopback from ts={}",
                         dl_ts,
                         ts
                     );
-                } else if self.channel_scheduler.circuit_is_active(Direction::Dl, dl_ts) {
+                } else if self.channel_scheduler.circuit_is_active(dl_ts) {
                     tracing::trace!("rx_tmd_prim: loopback UL voice ts={} -> dl ts={}", ts, dl_ts);
                     if let Some(packed) = pack_ul_acelp_bits(&data) {
                         self.channel_scheduler.dl_schedule_tmd(dl_ts, packed);
@@ -1413,74 +1412,39 @@ impl UmacBs {
     fn rx_control_circuit_open(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
         let CallControl::Open(circuit) = prim else { panic!() };
         let ts = circuit.ts;
-        let dir = circuit.direction;
 
-        // Direction::Both needs to be split into separate DL and UL operations
-        // because the UMAC circuit manager tracks them independently.
-        let dirs: Vec<Direction> = match dir {
-            Direction::Both => vec![Direction::Dl, Direction::Ul],
-            d @ (Direction::Dl | Direction::Ul) => vec![d],
-            Direction::None => {
-                tracing::warn!("rx_control_circuit_open: Direction::None, ignoring");
-                return;
-            }
-        };
-
-        for d in dirs {
-            // See if pre-existing circuit somehow needs to be closed
-            if self.channel_scheduler.circuit_is_active(d, ts) {
-                tracing::warn!("rx_control_circuit_open: Circuit already exists for {:?} {}, closing first", d, ts);
-                self.channel_scheduler.close_circuit(d, ts);
-            }
-
-            let c = Circuit {
-                direction: d,
-                ts: circuit.ts,
-                peer_ts: circuit.peer_ts,
-                usage: circuit.usage,
-                circuit_mode: circuit.circuit_mode,
-                speech_service: circuit.speech_service,
-                etee_encrypted: circuit.etee_encrypted,
-                dl_media_source: circuit.dl_media_source,
-            };
-            self.channel_scheduler.create_circuit(d, c);
-
-            // Start UL inactivity timer when opening a UL circuit
-            if d == Direction::Ul && (1..=4).contains(&ts) {
-                self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
-            }
-
-            tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {}", d, ts);
+        if !(1..=4).contains(&ts) {
+            tracing::warn!("rx_control_circuit_open: invalid ts {}", ts);
+            return;
         }
+
+        // The circuit itself lives in the shared state, so only the MAC's own per-slot state
+        // is touched here: leave hangtime and drop anything left over from a previous call.
+        self.channel_scheduler.reset_slot(ts);
+
+        // Start UL inactivity timer when the uplink is opened
+        if matches!(circuit.direction, Direction::Ul | Direction::Both) {
+            self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
+        }
+
+        tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {}", circuit.direction, ts);
     }
 
     fn rx_control_circuit_close(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
         let CallControl::Close(dir, ts) = prim else { panic!() };
 
-        // Direction::Both needs to be split into separate DL and UL close operations
-        let dirs: Vec<Direction> = match dir {
-            Direction::Both => vec![Direction::Dl, Direction::Ul],
-            d @ (Direction::Dl | Direction::Ul) => vec![d],
-            Direction::None => {
-                tracing::warn!("rx_control_circuit_close: Direction::None, ignoring");
-                return;
-            }
-        };
-
-        for d in dirs {
-            match self.channel_scheduler.close_circuit(d, ts) {
-                Some(_) => {
-                    // Clear UL inactivity timer when closing a UL circuit
-                    if d == Direction::Ul && (1..=4).contains(&ts) {
-                        self.last_ul_voice[ts as usize - 1] = None;
-                    }
-                    tracing::info!("  rx_control_circuit_close: Closed {:?} circuit for ts {}", d, ts);
-                }
-                None => {
-                    tracing::warn!("  rx_control_circuit_close: No {:?} circuit to close for ts {}", d, ts);
-                }
-            }
+        if !(1..=4).contains(&ts) {
+            tracing::warn!("rx_control_circuit_close: invalid ts {}", ts);
+            return;
         }
+
+        self.channel_scheduler.reset_slot(ts);
+
+        if matches!(dir, Direction::Ul | Direction::Both) {
+            self.last_ul_voice[ts as usize - 1] = None;
+        }
+
+        tracing::info!("  rx_control_circuit_close: Closed {:?} circuit for ts {}", dir, ts);
     }
 
     /// Check for UL inactivity on traffic timeslots. If no voice frames have arrived
@@ -1493,8 +1457,8 @@ impl UmacBs {
         for ts in 1..=4u8 {
             let idx = ts as usize - 1;
 
-            // Only check timeslots with an active UL circuit
-            if !self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+            // Only check timeslots carrying a circuit
+            if !self.channel_scheduler.circuit_is_active(ts) {
                 continue;
             }
 
@@ -1504,9 +1468,7 @@ impl UmacBs {
             }
 
             // No floor model on duplex (ETSI 14.5.1.2.2) or Brew circuits, so silence is not a stuck talker.
-            if self.channel_scheduler.ul_peer_ts(ts).is_some()
-                || self.channel_scheduler.dl_media_source(ts) == Some(CircuitDlMediaSource::Network)
-            {
+            if self.channel_scheduler.ul_peer_ts(ts).is_some() || self.channel_scheduler.dl_is_from_network(ts) {
                 continue;
             }
 
