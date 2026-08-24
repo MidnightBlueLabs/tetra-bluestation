@@ -5,6 +5,7 @@ use tetra_core::tetra_entities::TetraEntity;
 
 use crate::control::brew::MmSubscriberUpdate;
 use crate::control::call_control::CallControl;
+use crate::control::call_signal::{BrewEvent, CmceEvent};
 use crate::control::sds::CmceSdsData;
 use crate::tmd::TmdCircuitDataInd;
 use crate::tmd::TmdCircuitDataReq;
@@ -76,6 +77,12 @@ pub enum SapMsgInner {
 
     // CMCE -> UMAC control
     CmceCallControl(CallControl),
+
+    // Brew -> CMCE call signalling
+    BrewCallEvent(BrewEvent),
+
+    // CMCE -> Brew call signalling
+    CmceCallEvent(CmceEvent),
 
     // MM -> Brew/CMCE subscriber update
     MmSubscriberUpdate(MmSubscriberUpdate),

@@ -1576,11 +1576,6 @@ impl UmacBs {
 
             // UlInactivityTimeout is UMAC→CMCE only, UMAC won't receive it back
             CallControl::UlInactivityTimeout { .. } => {}
-
-            // The NetworkCall* and NetworkCircuit* messages are CMCE <-> Brew, not for UMAC.
-            _ => {
-                tracing::trace!("rx_control: ignoring CMCE-Brew notification (not for UMAC)");
-            }
         }
     }
 }

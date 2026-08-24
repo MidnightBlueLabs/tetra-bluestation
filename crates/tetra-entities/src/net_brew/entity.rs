@@ -1,89 +1,34 @@
-//! Brew protocol entity bridging a remote network backend to UMAC/MLE with hangtime-based circuit reuse
+//! Brew protocol entity bridging a remote network backend to UMAC/MLE
+//!
+//! Call state lives entirely in the global circuit store: a call this entity bridges carries
+//! the Brew session uuid on its downlink, so a signal naming that session is enough to look
+//! up everything else.
 //!
 //! Transport-agnostic: the concrete transport (WebSocket, QUIC, TCP, …) is
 //! injected at construction time via [`BrewEntity::new`].
 
 use std::collections::{HashMap, HashSet};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use tetra_pdus::cmce::enums::transmission_grant::TransmissionGrant;
+use tetra_saps::control::call_signal::{BrewEvent, CmceEvent};
 use tetra_saps::control::enums::sds_user_data::SdsUserData;
 use tetra_saps::control::sds::CmceSdsData;
 use uuid::Uuid;
 
-use crate::net_brew::components::jitter_buffer::{JitterFrame, VoiceJitterBuffer};
+use crate::net_brew::components::jitter_buffer::VoiceJitterBuffer;
 use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
-use tetra_config::bluestation::{CfgBrew, SharedConfig, StackState};
+use tetra_config::bluestation::{CfgBrew, CircuitStreamDest, NetworkCallRequest, SharedConfig, StackState, TetraCircuit};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
 use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
-use tetra_saps::{
-    SapMsg, SapMsgInner, control::call_control::CallControl, control::call_control::NetworkCircuitCall, tmd::TmdCircuitDataReq,
-};
+use tetra_saps::{SapMsg, SapMsgInner, tmd::TmdCircuitDataReq};
 
 use super::protocol::BrewCircularCall;
-use super::worker::{BrewCommand, BrewEvent, BrewWorker};
-
-/// Hangtime before releasing group call circuit to allow reuse without re-signaling.
-const GROUP_CALL_HANGTIME: Duration = Duration::from_secs(5);
-
-// ─── Active call tracking ─────────────────────────────────────────
-
-/// Tracks the state of a single active Brew group call (currently transmitting)
-#[derive(Debug)]
-struct ActiveCall {
-    /// Brew session UUID
-    uuid: Uuid,
-    /// TETRA call identifier (14-bit) - None until NetworkCallReady received
-    call_id: Option<u16>,
-    /// Allocated timeslot (2-4) - None until NetworkCallReady received
-    ts: Option<u8>,
-    /// Usage number for the channel allocation - None until NetworkCallReady received
-    usage: Option<u8>,
-    /// Calling party ISSI (from Brew)
-    source_issi: u32,
-    /// Destination GSSI (from Brew)
-    dest_gssi: u32,
-    /// Number of voice frames received
-    frame_count: u64,
-}
-
-/// Group call in hangtime with circuit still allocated.
-#[derive(Debug)]
-struct HangingCall {
-    /// Brew session UUID
-    uuid: Uuid,
-    /// TETRA call identifier (14-bit)
-    call_id: u16,
-    /// Allocated timeslot (2-4)
-    ts: u8,
-    /// Usage number for the channel allocation
-    usage: u8,
-    /// Last calling party ISSI (needed for D-SETUP re-send during late entry)
-    source_issi: u32,
-    /// Destination GSSI
-    dest_gssi: u32,
-    /// Total voice frames received during the call
-    frame_count: u64,
-    /// When the call entered hangtime (wall clock)
-    since: Instant,
-}
-
-/// Tracks a local UL call being forwarded to TetraPack
-#[derive(Debug)]
-struct UlForwardedCall {
-    /// Brew session UUID for this forwarded call
-    uuid: Uuid,
-    /// TETRA call identifier
-    call_id: u16,
-    /// Source ISSI of the calling radio
-    source_issi: u32,
-    /// Destination GSSI
-    dest_gssi: u32,
-    /// Number of voice frames forwarded
-    frame_count: u64,
-}
+// The worker speaks the wire protocol, which is session based; the SAP event of the same name
+// is the call level one signalled to CMCE.
+use super::worker::{BrewCommand, BrewEvent as WorkerEvent, BrewWorker};
 
 // ─── BrewEntity ───────────────────────────────────────────────────
 
@@ -97,25 +42,12 @@ pub struct BrewEntity {
     dltime: TdmaTime,
 
     /// Receive events from the worker thread
-    event_receiver: Receiver<BrewEvent>,
+    event_receiver: Receiver<WorkerEvent>,
     /// Send commands to the worker thread
     command_sender: Sender<BrewCommand>,
 
-    /// Active DL calls from Brew keyed by session UUID (currently transmitting)
-    active_calls: HashMap<Uuid, ActiveCall>,
-    /// Per-call jitter/playout buffer for downlink voice from Brew.
+    /// Per-session jitter/playout buffer for downlink voice from the backend.
     dl_jitter: HashMap<Uuid, VoiceJitterBuffer>,
-
-    /// DL calls in hangtime keyed by dest_gssi — circuit stays open, waiting for
-    /// new speaker or timeout. Only one hanging call per GSSI.
-    hanging_calls: HashMap<u32, HangingCall>,
-
-    /// UL calls being forwarded to TetraPack, keyed by timeslot
-    ul_forwarded: HashMap<u8, UlForwardedCall>,
-
-    /// Active circuit (individual/PBX/phone) call media, keyed by session UUID -> timeslot.
-    /// Downlink audio for these rides dl_jitter (per uuid); uplink rides ul_forwarded (per ts).
-    circuit_media: HashMap<Uuid, u8>,
 
     /// Registered subscriber groups (ISSI -> set of GSSIs)
     subscriber_groups: HashMap<u32, HashSet<u32>>,
@@ -131,7 +63,7 @@ impl BrewEntity {
     /// implementation can be used (WebSocket, QUIC, TCP, …).
     pub fn new<T: NetworkTransport + 'static>(config: SharedConfig, state: StackState, transport: T) -> Self {
         // Create channels
-        let (event_sender, event_receiver) = unbounded::<BrewEvent>();
+        let (event_sender, event_receiver) = unbounded::<WorkerEvent>();
         let (command_sender, command_receiver) = unbounded::<BrewCommand>();
 
         // Spawn worker thread with the provided transport
@@ -152,15 +84,116 @@ impl BrewEntity {
             dltime: TdmaTime::default(),
             event_receiver,
             command_sender,
-            active_calls: HashMap::new(),
             dl_jitter: HashMap::new(),
-            hanging_calls: HashMap::new(),
-            ul_forwarded: HashMap::new(),
-            circuit_media: HashMap::new(),
             subscriber_groups: HashMap::new(),
-            // connected: false,
             worker_handle: Some(handle),
         }
+    }
+
+    /// The circuit a Brew session is attached to, while the call exists.
+    fn circuit_by_uuid(&self, uuid: Uuid) -> Option<TetraCircuit> {
+        self.state.with_circuits(|c| c.get_circuit_by_uuid(uuid).cloned())
+    }
+
+    fn circuit_by_callid(&self, call_id: u16) -> Option<TetraCircuit> {
+        self.state.with_circuits(|c| c.get_circuit_by_callid(call_id).cloned())
+    }
+
+    /// The call a Brew session belongs to, once CMCE has a circuit for it.
+    fn callid_by_uuid(&self, uuid: Uuid) -> Option<u16> {
+        self.state.with_circuits(|c| c.get_callid_by_uuid(uuid))
+    }
+
+    /// The call a backend event refers to. Nothing can be done for a session without a call:
+    /// the setup that would create one is still with CMCE, or the call is long gone.
+    fn resolve_call(&self, uuid: Uuid, what: &str) -> Option<u16> {
+        let call_id = self.callid_by_uuid(uuid);
+        if call_id.is_none() {
+            tracing::debug!("BrewEntity: {} for uuid={} without a call", what, uuid);
+        }
+        call_id
+    }
+
+    /// The Brew session carrying a call: the one on its circuit, or, once the call is torn
+    /// down, the one CMCE handed over at teardown.
+    fn session_of(&self, call_id: u16) -> Option<Uuid> {
+        self.state.with_circuits(|c| {
+            let live = c
+                .get_circuit_by_callid(call_id)
+                .and_then(|circuit| circuit.brew_uuid().or(circuit.brew_origin_uuid));
+            match live {
+                Some(uuid) => Some(uuid),
+                None => c.take_closing_session(call_id),
+            }
+        })
+    }
+
+    /// The circuit whose calling party transmits on this timeslot.
+    fn circuit_by_ul_ts(&self, ts: u8) -> Option<TetraCircuit> {
+        self.state.with_circuits(|c| {
+            let call_id = c.get_callid_by_ul_ts(ts)?;
+            c.get_circuit_by_callid(call_id).cloned()
+        })
+    }
+
+    /// A session is known while its call exists, or while its parameters still await pickup
+    /// by CMCE (setup in flight).
+    fn is_known_session(&self, uuid: Uuid) -> bool {
+        self.state
+            .with_circuits(|c| c.get_callid_by_uuid(uuid).is_some() || c.has_network_request(uuid))
+    }
+
+    /// Deposit the parameters of a call for CMCE to pick up with the accompanying signal.
+    fn put_network_request(&self, uuid: Uuid, request: NetworkCallRequest) {
+        self.state.with_circuits(|c| c.put_network_request(uuid, request));
+    }
+
+    /// Collect the parameters CMCE deposited for a signalled call.
+    fn take_network_request(&self, uuid: Uuid) -> Option<NetworkCallRequest> {
+        self.state.with_circuits(|c| c.take_network_request(uuid))
+    }
+
+    /// Drop a call the backend tore down before CMCE picked it up: the deposited parameters
+    /// are all there is of it, so the call never starts.
+    fn cancel_pending_call(&self, uuid: Uuid, what: &str) {
+        if self.take_network_request(uuid).is_some() {
+            tracing::info!("BrewEntity: {} uuid={} cancels a call CMCE has not picked up yet", what, uuid);
+        } else {
+            tracing::debug!("BrewEntity: {} for unknown uuid={}", what, uuid);
+        }
+    }
+
+    /// Detach the Brew session from its call, leaving the circuit purely local. Used once the
+    /// upstream session is over while the call itself may live on (hangtime, new speaker).
+    fn detach_session(&self, uuid: Uuid) {
+        self.state.with_circuits(|c| {
+            let Some(call_id) = c.get_callid_by_uuid(uuid) else {
+                return;
+            };
+            let Some(ts) = c.get_circuit_by_callid(call_id).map(|circuit| circuit.dl_ts()) else {
+                return;
+            };
+            c.update_circuit_with(call_id, |circuit| circuit.dl1_source = CircuitStreamDest::Local(Some(ts)));
+        });
+    }
+
+    /// Signal CMCE what the backend did to a call. The event names the call and nothing else:
+    /// call parameters, where any exist, travel through the network call request store.
+    fn signal_cmce(queue: &mut MessageQueue, event: BrewEvent) {
+        queue.push_back(SapMsg {
+            sap: Sap::Control,
+            src: TetraEntity::Brew,
+            dest: TetraEntity::Cmce,
+            msg: SapMsgInner::BrewCallEvent(event),
+        });
+    }
+
+    /// Playout buffer for a session, created on first use.
+    fn jitter_buffer(&mut self, uuid: Uuid) -> &mut VoiceJitterBuffer {
+        let latency = self.brew_config.jitter_initial_latency_frames as usize;
+        self.dl_jitter
+            .entry(uuid)
+            .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(latency))
     }
 
     /// Retrieves current connection status from global state
@@ -178,17 +211,17 @@ impl BrewEntity {
     fn process_events(&mut self, queue: &mut MessageQueue) {
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
-                BrewEvent::Connected => {
+                WorkerEvent::Connected => {
                     tracing::debug!("BrewEntity: connected to TetraPack server");
                     self.state_set_connected(true);
                     self.resync_subscribers();
                 }
-                BrewEvent::Disconnected(reason) => {
+                WorkerEvent::Disconnected(reason) => {
                     tracing::debug!("BrewEntity: disconnected: {}", reason); // Already warned in worker
                     self.state_set_connected(false);
                     self.release_all_calls(queue);
                 }
-                BrewEvent::GroupCallStart {
+                WorkerEvent::GroupCallStart {
                     uuid,
                     source_issi,
                     dest_gssi,
@@ -198,61 +231,63 @@ impl BrewEntity {
                     tracing::info!("BrewEntity: GROUP_TX service={} (0=TETRA ACELP, expect 0)", service);
                     self.handle_group_call_start(queue, uuid, source_issi, dest_gssi, priority);
                 }
-                BrewEvent::GroupCallEnd { uuid, cause } => {
+                WorkerEvent::GroupCallEnd { uuid, cause } => {
                     self.handle_group_call_end(queue, uuid, cause);
                 }
-                BrewEvent::CircuitSetupRequest { uuid, call } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupRequest {
-                        brew_uuid: uuid,
-                        call: Self::brew_to_network_circuit(&call),
-                    }));
+                WorkerEvent::CircuitSetupRequest { uuid, call } => {
+                    // A call the backend offers has no circuit yet, so it is named by session.
+                    self.put_network_request(uuid, Self::brew_to_network_request(&call));
+                    Self::signal_cmce(queue, BrewEvent::SetupRequest { brew_uuid: uuid });
                 }
-                BrewEvent::CircuitSetupAccept { uuid } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupAccept { brew_uuid: uuid }));
+                WorkerEvent::CircuitSetupAccept { uuid } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "SETUP_ACCEPT") {
+                        Self::signal_cmce(queue, BrewEvent::SetupAccept { call_id });
+                    }
                 }
-                BrewEvent::CircuitSetupReject { uuid, cause } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSetupReject { brew_uuid: uuid, cause }));
-                }
-                BrewEvent::CircuitAlert { uuid } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitAlert { brew_uuid: uuid }));
-                }
-                BrewEvent::CircuitConnectRequest { uuid, call } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitConnectRequest {
-                        brew_uuid: uuid,
-                        call: Self::brew_to_network_circuit(&call),
-                    }));
-                }
-                BrewEvent::CircuitConnectConfirm { uuid, grant, permission } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitConnectConfirm {
-                        brew_uuid: uuid,
-                        grant,
-                        permission,
-                    }));
-                }
-                BrewEvent::CircuitSimplexGranted { uuid, grant, permission } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSimplexGranted {
-                        brew_uuid: uuid,
-                        grant,
-                        permission,
-                    }));
-                }
-                BrewEvent::CircuitSimplexIdle { uuid, grant, permission } => {
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitSimplexIdle {
-                        brew_uuid: uuid,
-                        grant,
-                        permission,
-                    }));
-                }
-                BrewEvent::CircuitRelease { uuid, cause } => {
-                    self.circuit_media.remove(&uuid);
+                WorkerEvent::CircuitSetupReject { uuid, cause } => {
                     self.dl_jitter.remove(&uuid);
-                    self.ul_forwarded.retain(|_, fwd| fwd.uuid != uuid);
-                    queue.push_back(Self::cmce_msg(CallControl::NetworkCircuitRelease { brew_uuid: uuid, cause }));
+                    match self.callid_by_uuid(uuid) {
+                        Some(call_id) => Self::signal_cmce(queue, BrewEvent::SetupReject { call_id, cause }),
+                        None => self.cancel_pending_call(uuid, "SETUP_REJECT"),
+                    }
                 }
-                BrewEvent::VoiceFrame { uuid, length_bits, data } => {
-                    self.handle_voice_frame(uuid, length_bits, data);
+                WorkerEvent::CircuitAlert { uuid } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "CALL_ALERT") {
+                        Self::signal_cmce(queue, BrewEvent::Alert { call_id });
+                    }
                 }
-                BrewEvent::SdsTransfer {
+                WorkerEvent::CircuitConnectRequest { uuid, call } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "CONNECT_REQUEST") {
+                        self.put_network_request(uuid, Self::brew_to_network_request(&call));
+                        Self::signal_cmce(queue, BrewEvent::ConnectRequest { call_id });
+                    }
+                }
+                WorkerEvent::CircuitConnectConfirm { uuid, .. } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "CONNECT_CONFIRM") {
+                        Self::signal_cmce(queue, BrewEvent::ConnectConfirm { call_id });
+                    }
+                }
+                WorkerEvent::CircuitSimplexGranted { uuid, .. } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "SIMPLEX_GRANTED") {
+                        Self::signal_cmce(queue, BrewEvent::SimplexGranted { call_id });
+                    }
+                }
+                WorkerEvent::CircuitSimplexIdle { uuid, .. } => {
+                    if let Some(call_id) = self.resolve_call(uuid, "SIMPLEX_IDLE") {
+                        Self::signal_cmce(queue, BrewEvent::SimplexIdle { call_id });
+                    }
+                }
+                WorkerEvent::CircuitRelease { uuid, cause } => {
+                    self.dl_jitter.remove(&uuid);
+                    match self.callid_by_uuid(uuid) {
+                        Some(call_id) => Self::signal_cmce(queue, BrewEvent::Release { call_id, cause }),
+                        None => self.cancel_pending_call(uuid, "CALL_RELEASE"),
+                    }
+                }
+                WorkerEvent::VoiceFrame { uuid, data, .. } => {
+                    self.handle_voice_frame(uuid, data);
+                }
+                WorkerEvent::SdsTransfer {
                     uuid,
                     source,
                     destination,
@@ -261,13 +296,13 @@ impl BrewEntity {
                 } => {
                     self.handle_sds_transfer(queue, uuid, source, destination, data, length_bits);
                 }
-                BrewEvent::SdsReport { uuid, status } => {
+                WorkerEvent::SdsReport { uuid, status } => {
                     tracing::debug!("BrewEntity: SDS report uuid={} status={}", uuid, status);
                 }
-                BrewEvent::SubscriberEvent { msg_type, issi, groups } => {
+                WorkerEvent::SubscriberEvent { msg_type, issi, groups } => {
                     tracing::debug!("BrewEntity: subscriber event type={} issi={} groups={:?}", msg_type, issi, groups);
                 }
-                BrewEvent::ServerError { error_type, data } => {
+                WorkerEvent::ServerError { error_type, data } => {
                     tracing::error!("BrewEntity: server error type={} data={} bytes", error_type, data.len());
                 }
             }
@@ -378,291 +413,117 @@ impl BrewEntity {
         }
     }
 
-    /// Handle new group call from Brew, reusing hanging call circuits if available.
+    /// Handle a transmission started by the backend: a new group call, or a new speaker on an
+    /// existing one. CMCE owns circuit allocation and reuse, so only the parties are handed over.
     fn handle_group_call_start(&mut self, queue: &mut MessageQueue, uuid: Uuid, source_issi: u32, dest_gssi: u32, priority: u8) {
-        // Check if this call is already active (speaker change or repeated GROUP_TX)
-        if let Some(call) = self.active_calls.get_mut(&uuid) {
-            // Only notify CMCE if the speaker actually changed
-            if call.source_issi != source_issi {
-                tracing::info!(
-                    "BrewEntity: GROUP_TX speaker change on uuid={} new_speaker={} (was {})",
-                    uuid,
-                    source_issi,
-                    call.source_issi
-                );
-                call.source_issi = source_issi;
-
-                // Forward speaker change to CMCE
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Brew,
-                    dest: TetraEntity::Cmce,
-                    msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
-                        brew_uuid: uuid,
-                        source_issi,
-                        dest_gssi,
-                        priority,
-                    }),
-                });
-            } else {
-                // Repeated GROUP_TX with same speaker - this is normal, just log at trace level
-                tracing::trace!("BrewEntity: repeated GROUP_TX on uuid={} speaker={}", uuid, source_issi);
-            }
-            return;
-        }
-
-        // New UUID on a GSSI that still has an active call. Backend started a new
-        // session without idling the old one. Evict the stale entry so active_calls
-        // and dl_jitter do not leak. Local cleanup only. Backend owns downlink
-        // teardown and CMCE reuses the existing circuit for that GSSI.
-        if let Some(stale_uuid) = self
-            .active_calls
-            .iter()
-            .find(|(u, c)| c.dest_gssi == dest_gssi && **u != uuid)
-            .map(|(u, _)| *u)
+        // Repeated GROUP_TX for a session that already holds the floor: nothing changed.
+        if let Some(circuit) = self.circuit_by_uuid(uuid)
+            && circuit.is_tx()
+            && circuit.floor == Some(source_issi)
         {
-            tracing::warn!(
-                "BrewEntity: backend started uuid={} on gssi={} without idling old uuid={}, evicting stale entry",
-                uuid,
-                dest_gssi,
-                stale_uuid
-            );
-            self.active_calls.remove(&stale_uuid);
-            self.dl_jitter.remove(&stale_uuid);
-        }
-
-        // Check if there's a hanging call we can reuse
-        if let Some(hanging) = self.hanging_calls.remove(&dest_gssi) {
-            tracing::info!(
-                "BrewEntity: reusing hanging circuit for gssi={} uuid={} (hangtime {:.1}s)",
-                dest_gssi,
-                uuid,
-                hanging.since.elapsed().as_secs_f32()
-            );
-
-            // Track the call - resources will be set by NetworkCallReady
-            let call = ActiveCall {
-                uuid,
-                call_id: None, // Set by NetworkCallReady
-                ts: None,      // Set by NetworkCallReady
-                usage: None,   // Set by NetworkCallReady
-                source_issi,
-                dest_gssi,
-                frame_count: hanging.frame_count,
-            };
-            self.active_calls.insert(uuid, call);
-            self.dl_jitter
-                .entry(uuid)
-                .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(self.brew_config.jitter_initial_latency_frames as usize));
-
-            // Forward to CMCE (will reuse circuit automatically)
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Brew,
-                dest: TetraEntity::Cmce,
-                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
-                    brew_uuid: uuid,
-                    source_issi,
-                    dest_gssi,
-                    priority,
-                }),
-            });
+            tracing::trace!("BrewEntity: repeated GROUP_TX on uuid={} speaker={}", uuid, source_issi);
             return;
         }
 
-        // New call - track it and request CMCE to allocate and set up
         tracing::info!(
-            "BrewEntity: requesting new network call uuid={} src={} gssi={}",
+            "BrewEntity: network transmission uuid={} src={} gssi={}",
             uuid,
             source_issi,
             dest_gssi
         );
 
-        // Track the call - resources will be set by NetworkCallReady
-        let call = ActiveCall {
+        self.put_network_request(
             uuid,
-            call_id: None, // Set by NetworkCallReady
-            ts: None,      // Set by NetworkCallReady
-            usage: None,   // Set by NetworkCallReady
-            source_issi,
-            dest_gssi,
-            frame_count: 0,
-        };
-        self.active_calls.insert(uuid, call);
-        self.dl_jitter
-            .entry(uuid)
-            .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(self.brew_config.jitter_initial_latency_frames as usize));
-
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Brew,
-            dest: TetraEntity::Cmce,
-            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallStart {
-                brew_uuid: uuid,
-                source_issi,
-                dest_gssi,
+            NetworkCallRequest {
+                source: source_issi,
+                destination: dest_gssi,
                 priority,
-            }),
-        });
+                ..Default::default()
+            },
+        );
+        Self::signal_cmce(queue, BrewEvent::TxStart { brew_uuid: uuid });
+
+        // Buffer downlink voice from here on: the backend streams while CMCE still sets up.
+        self.jitter_buffer(uuid);
     }
 
-    /// Handle GROUP_IDLE by forwarding to CMCE and tracking for hangtime reuse
-    fn handle_group_call_end(&mut self, queue: &mut MessageQueue, uuid: Uuid, _cause: u8) {
-        let Some(call) = self.active_calls.remove(&uuid) else {
-            tracing::debug!("BrewEntity: GROUP_IDLE for unknown uuid={}", uuid);
-            return;
-        };
+    /// Handle GROUP_IDLE: the backend transmission is over. CMCE decides whether the call
+    /// enters hangtime or is released.
+    fn handle_group_call_end(&mut self, queue: &mut MessageQueue, uuid: Uuid, cause: u8) {
         self.dl_jitter.remove(&uuid);
 
-        tracing::info!(
-            "BrewEntity: group call ended uuid={} call_id={:?} gssi={} frames={}",
-            uuid,
-            call.call_id,
-            call.dest_gssi,
-            call.frame_count
-        );
-
-        // Request CMCE to end the call
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Brew,
-            dest: TetraEntity::Cmce,
-            msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: uuid }),
-        });
-
-        // Track as hanging for potential reuse (only if resources were allocated)
-        if let (Some(call_id), Some(ts), Some(usage)) = (call.call_id, call.ts, call.usage) {
-            self.hanging_calls.insert(
-                call.dest_gssi,
-                HangingCall {
-                    uuid,
-                    call_id,
-                    ts,
-                    usage,
-                    source_issi: call.source_issi,
-                    dest_gssi: call.dest_gssi,
-                    frame_count: call.frame_count,
-                    since: Instant::now(),
-                },
-            );
-        }
-    }
-
-    /// Clean up expired hanging call tracking hints (CMCE already released circuits)
-    fn expire_hanging_calls(&mut self, _queue: &mut MessageQueue) {
-        let expired: Vec<u32> = self
-            .hanging_calls
-            .iter()
-            .filter(|(_, h)| h.since.elapsed() >= GROUP_CALL_HANGTIME)
-            .map(|(gssi, _)| *gssi)
-            .collect();
-
-        for gssi in expired {
-            if let Some(hanging) = self.hanging_calls.remove(&gssi) {
-                tracing::debug!("BrewEntity: hanging call expired gssi={} uuid={} (no reuse)", gssi, hanging.uuid);
-                // No action needed - CMCE already released the circuit
-            }
-        }
-    }
-
-    /// Handle a voice frame from Brew — inject into the downlink
-    fn handle_voice_frame(&mut self, uuid: Uuid, _length_bits: u16, data: Vec<u8>) {
-        // Circuit (individual/PBX) call: media keyed by uuid, downlink via dl_jitter.
-        if self.circuit_media.contains_key(&uuid) {
-            if data.len() < 36 {
-                tracing::warn!("BrewEntity: circuit voice frame too short ({} bytes)", data.len());
-                return;
-            }
-            let acelp_data = data[1..].to_vec();
-            self.dl_jitter
-                .entry(uuid)
-                .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(self.brew_config.jitter_initial_latency_frames as usize))
-                .push(acelp_data);
+        let Some(call_id) = self.callid_by_uuid(uuid) else {
+            // The transmission ended before CMCE turned it into a call.
+            self.cancel_pending_call(uuid, "GROUP_IDLE");
             return;
-        }
-        let Some(call) = self.active_calls.get_mut(&uuid) else {
-            // Voice frame for unknown call — might arrive before GROUP_TX or after GROUP_IDLE
+        };
+
+        tracing::info!(
+            "BrewEntity: network transmission ended uuid={} call_id={} cause={}",
+            uuid,
+            call_id,
+            cause
+        );
+        Self::signal_cmce(queue, BrewEvent::TxEnd { call_id });
+    }
+
+    /// Handle a voice frame from Brew — buffer it for downlink playout
+    fn handle_voice_frame(&mut self, uuid: Uuid, data: Vec<u8>) {
+        if !self.is_known_session(uuid) {
+            // Might arrive before the call is set up or after it was torn down.
             tracing::trace!("BrewEntity: voice frame for unknown uuid={} ({} bytes)", uuid, data.len());
             return;
-        };
-
-        call.frame_count += 1;
-
-        // Check if resources have been allocated yet
-        let Some(ts) = call.ts else {
-            // Audio arrived before NetworkCallReady - drop it
-            if call.frame_count == 1 {
-                tracing::debug!(
-                    "BrewEntity: voice frame arrived before resources allocated, uuid={}, dropping",
-                    uuid
-                );
-            }
-            return;
-        };
-
-        // Log first voice frame per call
-        if call.frame_count == 1 {
-            tracing::info!(
-                "BrewEntity: voice frame #{} uuid={} len={} bytes ts={}",
-                call.frame_count,
-                uuid,
-                data.len(),
-                ts
-            );
         }
 
         // STE format: byte 0 = header (control bits), bytes 1-35 = 274 ACELP bits for TCH/S.
-        // Strip the STE header and pass only the ACELP payload.
+        // Strip the STE header and buffer only the ACELP payload.
         if data.len() < 36 {
             tracing::warn!("BrewEntity: voice frame too short ({} bytes, expected 36 STE bytes)", data.len());
             return;
         }
         let acelp_data = data[1..].to_vec(); // 35 bytes = 280 bits, of which 274 are ACELP
 
-        self.dl_jitter
-            .entry(uuid)
-            .or_insert_with(|| VoiceJitterBuffer::with_initial_latency(self.brew_config.jitter_initial_latency_frames as usize))
-            .push(acelp_data);
+        self.jitter_buffer(uuid).push(acelp_data);
     }
 
+    /// Feed one buffered frame to every traffic slot whose call is fed from the backend.
     fn drain_jitter_playout(&mut self, queue: &mut MessageQueue) {
-        if self.dltime.f == 18 {
+        if self.dltime.f == 18 || self.dl_jitter.is_empty() {
             return;
         }
+        let ts = self.dltime.t;
 
-        let mut to_send: Vec<(u8, Uuid, usize, JitterFrame)> = Vec::new();
+        // The circuit view decides which session plays out where, and which are gone for good.
+        let (playing, stale): (Vec<Uuid>, Vec<Uuid>) = self.state.with_circuits(|c| {
+            let mut playing = Vec::new();
+            let mut stale = Vec::new();
+            for uuid in self.dl_jitter.keys().copied() {
+                match c.get_circuit_by_uuid(uuid) {
+                    Some(circuit) if circuit.dl_ts() == ts => playing.push(uuid),
+                    Some(_) => {}
+                    // No call yet: a setup is still in flight, keep buffering.
+                    None if c.has_network_request(uuid) => {}
+                    None => stale.push(uuid),
+                }
+            }
+            (playing, stale)
+        });
 
-        for (uuid, call) in &self.active_calls {
-            let Some(ts) = call.ts else {
-                continue;
-            };
-            if ts != self.dltime.t {
-                continue;
-            }
-            let Some(jitter) = self.dl_jitter.get_mut(uuid) else {
-                continue;
-            };
-            jitter.maybe_warn_unhealthy(*uuid);
-            if let Some(frame) = jitter.pop_ready() {
-                to_send.push((ts, *uuid, jitter.target_frames(), frame));
-            }
+        for uuid in stale {
+            tracing::debug!("BrewEntity: dropping playout buffer of gone session uuid={}", uuid);
+            self.dl_jitter.remove(&uuid);
         }
 
-        // Circuit (individual/PBX) calls play out on their own timeslot.
-        for (uuid, &ts) in &self.circuit_media {
-            if ts != self.dltime.t {
-                continue;
-            }
-            let Some(jitter) = self.dl_jitter.get_mut(uuid) else {
+        for uuid in playing {
+            let Some(jitter) = self.dl_jitter.get_mut(&uuid) else {
                 continue;
             };
-            jitter.maybe_warn_unhealthy(*uuid);
-            if let Some(frame) = jitter.pop_ready() {
-                to_send.push((ts, *uuid, jitter.target_frames(), frame));
-            }
-        }
+            jitter.maybe_warn_unhealthy(uuid);
+            let target_frames = jitter.target_frames();
+            let Some(frame) = jitter.pop_ready() else {
+                continue;
+            };
 
-        for (ts, uuid, target_frames, frame) in to_send {
             tracing::trace!(
                 "BrewEntity: playout uuid={} ts={} rx_seq={} age_ms={} target_frames={}",
                 uuid,
@@ -683,71 +544,33 @@ impl BrewEntity {
         }
     }
 
-    /// Release all active calls (on disconnect)
+    /// Tear down every call that rides the backhaul (on disconnect)
     fn release_all_calls(&mut self, queue: &mut MessageQueue) {
-        // Request CMCE to end all active network calls
-        let calls: Vec<(Uuid, ActiveCall)> = self.active_calls.drain().collect();
-        for (uuid, _) in calls {
-            self.dl_jitter.remove(&uuid);
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Brew,
-                dest: TetraEntity::Cmce,
-                msg: SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid: uuid }),
-            });
+        let sessions: Vec<(u16, Uuid, bool, bool)> = self.state.with_circuits(|c| {
+            c.get_circuits()
+                .values()
+                .filter_map(|circuit| {
+                    circuit
+                        .brew_uuid()
+                        .map(|uuid| (circuit.call_id, uuid, circuit.is_group_call(), circuit.ul1_source.is_local()))
+                })
+                .collect()
+        });
+
+        for (call_id, uuid, is_group, local_speaker) in sessions {
+            if !is_group {
+                // An individual/PBX call has no leg left without the backhaul.
+                Self::signal_cmce(queue, BrewEvent::Release { call_id, cause: 0 });
+            } else if local_speaker {
+                // The group call is carried on air by a local speaker: only forwarding stops.
+                self.detach_session(uuid);
+            } else {
+                // The backend fed this group call, nothing more will arrive.
+                Self::signal_cmce(queue, BrewEvent::TxEnd { call_id });
+            }
         }
 
-        // Clear hanging call tracking
-        self.hanging_calls.clear();
         self.dl_jitter.clear();
-    }
-
-    /// Handle NetworkCallReady response from CMCE
-    fn rx_network_call_ready(&mut self, brew_uuid: Uuid, call_id: u16, ts: u8, usage: u8) {
-        tracing::info!(
-            "BrewEntity: network call ready uuid={} call_id={} ts={} usage={}",
-            brew_uuid,
-            call_id,
-            ts,
-            usage
-        );
-
-        // Update active call with CMCE-allocated resources
-        if let Some(call) = self.active_calls.get_mut(&brew_uuid) {
-            call.call_id = Some(call_id);
-            call.ts = Some(ts);
-            call.usage = Some(usage);
-        } else {
-            tracing::warn!("BrewEntity: NetworkCallReady for unknown uuid={}", brew_uuid);
-        }
-    }
-
-    fn drop_network_call(&mut self, brew_uuid: Uuid) {
-        if let Some(call) = self.active_calls.remove(&brew_uuid) {
-            tracing::info!(
-                "BrewEntity: dropping network call uuid={} gssi={} (CMCE request)",
-                brew_uuid,
-                call.dest_gssi
-            );
-            self.dl_jitter.remove(&brew_uuid);
-            self.hanging_calls.remove(&call.dest_gssi);
-
-            // Downlink call owned by the server. It rejects a BS idle (type=1 RESTRICTED)
-            // and ends the session itself, so local cleanup is enough.
-            return;
-        }
-
-        let hanging_gssi = self
-            .hanging_calls
-            .iter()
-            .find_map(|(gssi, hanging)| if hanging.uuid == brew_uuid { Some(*gssi) } else { None });
-        if let Some(gssi) = hanging_gssi {
-            // Hanging entry only: backend already sent GROUP_IDLE, no upstream notify needed.
-            tracing::info!("BrewEntity: dropping hanging call uuid={} gssi={} (CMCE request)", brew_uuid, gssi);
-            self.hanging_calls.remove(&gssi);
-        } else {
-            tracing::debug!("BrewEntity: drop requested for unknown uuid={}", brew_uuid);
-        }
     }
 }
 
@@ -768,130 +591,17 @@ impl TetraEntityTrait for BrewEntity {
         self.process_events(queue);
         // Feed one buffered frame at each traffic playout opportunity.
         self.drain_jitter_playout(queue);
-        // Expire hanging calls that have exceeded hangtime
-        self.expire_hanging_calls(queue);
     }
 
     fn rx_prim(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
         match message.msg {
-            // UL voice from UMAC — forward to TetraPack if this timeslot is being forwarded
+            // UL voice from UMAC — forward to the backend if this timeslot is being forwarded
             SapMsgInner::TmdCircuitDataInd(prim) => {
                 self.handle_ul_voice(prim.ts, prim.data);
             }
-            // Floor-control and call lifecycle notifications from CMCE
-            SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                call_id,
-                source_issi,
-                dest_gssi,
-                ts,
-            }) => {
-                self.handle_local_call_start(call_id, source_issi, dest_gssi, ts);
-            }
-            SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }) => {
-                self.handle_local_call_tx_stopped(call_id, ts);
-            }
-            SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }) => {
-                self.handle_local_call_end(call_id, ts);
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCallEnd { brew_uuid }) => {
-                self.drop_network_call(brew_uuid);
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCallReady {
-                brew_uuid,
-                call_id,
-                ts,
-                usage,
-            }) => {
-                self.rx_network_call_ready(brew_uuid, call_id, ts, usage);
-            }
-            // UlInactivityTimeout is UMAC→CMCE only; Brew handles FloorReleased instead
-            SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { .. }) => {}
-            // Circuit (individual/PBX/phone) call control from CMCE -> backend.
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupRequest { brew_uuid, call }) => {
-                let _ = self.command_sender.send(BrewCommand::SendSetupRequest {
-                    uuid: brew_uuid,
-                    call: Self::network_to_brew_circuit(&call),
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupAccept { brew_uuid }) => {
-                let _ = self.command_sender.send(BrewCommand::SendSetupAccept { uuid: brew_uuid });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSetupReject { brew_uuid, cause }) => {
-                let _ = self.command_sender.send(BrewCommand::SendSetupReject { uuid: brew_uuid, cause });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitAlert { brew_uuid }) => {
-                let _ = self.command_sender.send(BrewCommand::SendCallAlert { uuid: brew_uuid });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectRequest { brew_uuid, call }) => {
-                let _ = self.command_sender.send(BrewCommand::SendConnectRequest {
-                    uuid: brew_uuid,
-                    call: Self::network_to_brew_circuit(&call),
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitConnectConfirm {
-                brew_uuid,
-                grant,
-                permission,
-            }) => {
-                let _ = self.command_sender.send(BrewCommand::SendConnectConfirm {
-                    uuid: brew_uuid,
-                    grant,
-                    permission,
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexGranted {
-                brew_uuid,
-                grant,
-                permission,
-            }) => {
-                let _ = self.command_sender.send(BrewCommand::SendSimplexGranted {
-                    uuid: brew_uuid,
-                    grant,
-                    permission,
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitSimplexIdle {
-                brew_uuid,
-                grant,
-                permission,
-            }) => {
-                let _ = self.command_sender.send(BrewCommand::SendSimplexIdle {
-                    uuid: brew_uuid,
-                    grant,
-                    permission,
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitMediaReady { brew_uuid, call_id, ts }) => {
-                tracing::info!("BrewEntity: circuit media ready uuid={} call_id={} ts={}", brew_uuid, call_id, ts);
-                self.circuit_media.insert(brew_uuid, ts);
-                // Forward the MS uplink on this slot to the backend under the same session.
-                self.ul_forwarded.insert(
-                    ts,
-                    UlForwardedCall {
-                        uuid: brew_uuid,
-                        call_id,
-                        source_issi: 0,
-                        dest_gssi: 0,
-                        frame_count: 0,
-                    },
-                );
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitDtmf {
-                brew_uuid,
-                length_bits,
-                data,
-            }) => {
-                let _ = self.command_sender.send(BrewCommand::SendDtmf {
-                    uuid: brew_uuid,
-                    length_bits,
-                    data,
-                });
-            }
-            SapMsgInner::CmceCallControl(CallControl::NetworkCircuitRelease { brew_uuid, cause }) => {
-                self.circuit_media.remove(&brew_uuid);
-                self.dl_jitter.remove(&brew_uuid);
-                self.ul_forwarded.retain(|_, fwd| fwd.uuid != brew_uuid);
-                let _ = self.command_sender.send(BrewCommand::SendCallRelease { uuid: brew_uuid, cause });
+            // Call lifecycle notifications from CMCE
+            SapMsgInner::CmceCallEvent(event) => {
+                self.rx_cmce_event(event);
             }
             SapMsgInner::MmSubscriberUpdate(update) => {
                 self.handle_subscriber_update(update);
@@ -906,16 +616,87 @@ impl TetraEntityTrait for BrewEntity {
     }
 }
 
-// ─── UL call forwarding to TetraPack ──────────────────────────────
+// ─── Call events from CMCE ────────────────────────────────────────
 
 impl BrewEntity {
-    /// Handle notification that a local UL group call has started.
-    /// If the group is subscribed (in config.groups), start forwarding to TetraPack.
-    fn handle_local_call_start(&mut self, call_id: u16, source_issi: u32, dest_gssi: u32, ts: u8) {
+    fn rx_cmce_event(&mut self, event: CmceEvent) {
+        match event {
+            // A call the backend offered that never became one: it is named by its session.
+            CmceEvent::SetupReject { brew_uuid, cause } => {
+                self.dl_jitter.remove(&brew_uuid);
+                let _ = self.command_sender.send(BrewCommand::SendSetupReject { uuid: brew_uuid, cause });
+                return;
+            }
+            // A local party taking the floor is what opens a session in the first place.
+            CmceEvent::TxStart { call_id } => {
+                self.handle_local_tx_start(call_id);
+                return;
+            }
+            _ => {}
+        }
+
+        let call_id = event.get_call_id().expect("only the reject names no call");
+        let Some(uuid) = self.session_of(call_id) else {
+            tracing::warn!("BrewEntity: {:?} for a call without a Brew session", event);
+            return;
+        };
+
+        match event {
+            CmceEvent::TxStart { .. } | CmceEvent::SetupReject { .. } => unreachable!("handled above"),
+            CmceEvent::TxEnd { .. } => {
+                self.handle_local_tx_end(uuid);
+            }
+            CmceEvent::SetupRequest { .. } | CmceEvent::ConnectRequest { .. } => {
+                let Some(request) = self.take_network_request(uuid) else {
+                    tracing::warn!("BrewEntity: {:?} without call parameters", event);
+                    return;
+                };
+                let call = Self::network_request_to_brew(&request);
+                let _ = if matches!(event, CmceEvent::SetupRequest { .. }) {
+                    self.command_sender.send(BrewCommand::SendSetupRequest { uuid, call })
+                } else {
+                    self.command_sender.send(BrewCommand::SendConnectRequest { uuid, call })
+                };
+            }
+            CmceEvent::SetupAccept { .. } => {
+                let _ = self.command_sender.send(BrewCommand::SendSetupAccept { uuid });
+            }
+            CmceEvent::Alert { .. } => {
+                let _ = self.command_sender.send(BrewCommand::SendCallAlert { uuid });
+            }
+            CmceEvent::ConnectConfirm { .. } => {
+                let _ = self.command_sender.send(BrewCommand::SendConnectConfirm {
+                    uuid,
+                    grant: TransmissionGrant::Granted.into_raw() as u8,
+                    // ETSI Table 14.81: 0 = allowed to request transmission.
+                    permission: 0,
+                });
+            }
+            CmceEvent::Release { cause, .. } => {
+                self.dl_jitter.remove(&uuid);
+                let _ = self.command_sender.send(BrewCommand::SendCallRelease { uuid, cause });
+            }
+        }
+    }
+}
+
+// ─── UL call forwarding to the backend ────────────────────────────
+
+impl BrewEntity {
+    /// Handle notification that a local party started transmitting. If the party is routable,
+    /// open (or reuse) a Brew session on the call and forward the transmission upstream.
+    fn handle_local_tx_start(&mut self, call_id: u16) {
         if !self.state_is_connected() {
-            tracing::trace!("BrewEntity: not connected, ignoring local call start");
+            tracing::trace!("BrewEntity: not connected, ignoring local transmission start");
             return;
         }
+        let Some(circuit) = self.circuit_by_callid(call_id) else {
+            tracing::warn!("BrewEntity: transmission start for unknown call_id={}", call_id);
+            return;
+        };
+
+        let source_issi = circuit.floor.unwrap_or(circuit.caller);
+        let dest_gssi = circuit.callee;
         if !super::is_brew_issi_routable(&self.config, source_issi) {
             tracing::debug!(
                 "BrewEntity: suppressing GROUP_TX for source_issi={} (filtered, not sent to Brew)",
@@ -924,47 +705,29 @@ impl BrewEntity {
             return;
         }
 
-        // If we're already forwarding on this timeslot, treat as a talker change/update
-        if let Some(fwd) = self.ul_forwarded.get_mut(&ts) {
-            if fwd.call_id != call_id || fwd.dest_gssi != dest_gssi {
-                tracing::warn!(
-                    "BrewEntity: updating forwarded call on ts={} (was call_id={} gssi={}) -> (call_id={} gssi={})",
-                    ts,
-                    fwd.call_id,
-                    fwd.dest_gssi,
-                    call_id,
-                    dest_gssi
-                );
+        // Keep the session while we are the ones feeding it; a session fed by the backend
+        // belongs to the previous speaker, so a talker change starts a fresh one.
+        let uuid = match circuit.brew_uuid() {
+            Some(uuid) if circuit.ul1_source.is_local() => uuid,
+            _ => {
+                let uuid = Uuid::new_v4();
+                let ts = circuit.dl_ts();
+                self.state.with_circuits(|c| {
+                    c.update_circuit_with(call_id, |circ| {
+                        circ.dl1_source = CircuitStreamDest::LocalAndRemote(Some(ts), Some(uuid))
+                    })
+                });
+                uuid
             }
+        };
 
-            fwd.call_id = call_id;
-            fwd.source_issi = source_issi;
-            fwd.dest_gssi = dest_gssi;
-            fwd.frame_count = 0;
-
-            // Send GROUP_TX update for the new talker
-            let _ = self.command_sender.send(BrewCommand::SendGroupTx {
-                uuid: fwd.uuid,
-                source_issi,
-                dest_gssi,
-                priority: 0,
-                service: 0, // TETRA encoded speech
-            });
-            return;
-        }
-
-        // Generate a UUID for this Brew session
-        let uuid = Uuid::new_v4();
         tracing::info!(
-            "BrewEntity: forwarding local call to TetraPack: call_id={} src={} gssi={} ts={} uuid={}",
+            "BrewEntity: forwarding local transmission call_id={} src={} dest={} uuid={}",
             call_id,
             source_issi,
             dest_gssi,
-            ts,
             uuid
         );
-
-        // Send GROUP_TX to TetraPack
         let _ = self.command_sender.send(BrewCommand::SendGroupTx {
             uuid,
             source_issi,
@@ -972,72 +735,29 @@ impl BrewEntity {
             priority: 0,
             service: 0, // TETRA encoded speech
         });
-
-        // Track this forwarded call
-        self.ul_forwarded.insert(
-            ts,
-            UlForwardedCall {
-                uuid,
-                call_id,
-                source_issi,
-                dest_gssi,
-                frame_count: 0,
-            },
-        );
     }
 
-    /// Handle notification that a local UL call has ended.
-    fn handle_local_call_tx_stopped(&mut self, call_id: u16, ts: u8) {
-        if let Some(fwd) = self.ul_forwarded.remove(&ts) {
-            if fwd.call_id != call_id {
-                tracing::warn!(
-                    "BrewEntity: call_id mismatch on ts={}: expected {} got {}",
-                    ts,
-                    fwd.call_id,
-                    call_id
-                );
-            }
-            tracing::info!(
-                "BrewEntity: local call transmission stopped, sending GROUP_IDLE to TetraPack: uuid={} frames={}",
-                fwd.uuid,
-                fwd.frame_count
-            );
-            let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
-                uuid: fwd.uuid,
-                cause: 0, // Normal release
-            });
-        }
+    /// Handle notification that the transmission we forward has stopped. The call itself may
+    /// live on (hangtime, new speaker), so only the upstream session is closed.
+    fn handle_local_tx_end(&mut self, uuid: Uuid) {
+        tracing::info!("BrewEntity: local transmission stopped, sending GROUP_IDLE uuid={}", uuid);
+        let _ = self.command_sender.send(BrewCommand::SendGroupIdle {
+            uuid,
+            cause: 0, // Normal release
+        });
+        self.dl_jitter.remove(&uuid);
+        self.detach_session(uuid);
     }
 
-    fn handle_local_call_end(&mut self, call_id: u16, ts: u8) {
-        // Check if ul_forwarded entry still exists (might have been removed by handle_local_call_tx_stopped)
-        if let Some(fwd) = self.ul_forwarded.remove(&ts) {
-            if fwd.call_id != call_id {
-                tracing::warn!(
-                    "BrewEntity: call_id mismatch on ts={}: expected {} got {}",
-                    ts,
-                    fwd.call_id,
-                    call_id
-                );
-            }
-            tracing::debug!(
-                "BrewEntity: local call ended (already sent GROUP_IDLE during tx_stopped): uuid={} frames={}",
-                fwd.uuid,
-                fwd.frame_count
-            );
-        } else {
-            tracing::debug!("BrewEntity: local call ended on ts={} (already cleaned up during tx_stopped)", ts);
-        }
-    }
-
-    /// Handle UL voice data from UMAC. If the timeslot is being forwarded to TetraPack,
+    /// Handle UL voice data from UMAC. If the call on this timeslot has a Brew session,
     /// convert to STE format and send.
     fn handle_ul_voice(&mut self, ts: u8, acelp_bits: Vec<u8>) {
-        let Some(fwd) = self.ul_forwarded.get_mut(&ts) else {
-            return; // Not forwarded to TetraPack
+        let Some(circuit) = self.circuit_by_ul_ts(ts) else {
+            return; // No call transmitting on this timeslot
         };
-
-        fwd.frame_count += 1;
+        let Some(uuid) = circuit.brew_uuid() else {
+            return; // Not forwarded to the backend
+        };
 
         // Convert ACELP bits to STE format.
         // Supported inputs:
@@ -1076,7 +796,7 @@ impl BrewEntity {
         };
 
         let _ = self.command_sender.send(BrewCommand::SendVoiceFrame {
-            uuid: fwd.uuid,
+            uuid,
             length_bits: (ste_data.len() * 8) as u16,
             data: ste_data,
         });
@@ -1200,19 +920,9 @@ impl Drop for BrewEntity {
 // Circuit (individual/PBX/phone) call helpers
 
 impl BrewEntity {
-    /// Build a CallControl message from Brew to CMCE.
-    fn cmce_msg(cc: CallControl) -> SapMsg {
-        SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Brew,
-            dest: TetraEntity::Cmce,
-            msg: SapMsgInner::CmceCallControl(cc),
-        }
-    }
-
-    fn brew_to_network_circuit(c: &BrewCircularCall) -> NetworkCircuitCall {
-        NetworkCircuitCall {
-            source_issi: c.source,
+    fn brew_to_network_request(c: &BrewCircularCall) -> NetworkCallRequest {
+        NetworkCallRequest {
+            source: c.source,
             destination: c.destination,
             number: c.number.clone(),
             priority: c.priority,
@@ -1229,9 +939,9 @@ impl BrewEntity {
         }
     }
 
-    fn network_to_brew_circuit(c: &NetworkCircuitCall) -> BrewCircularCall {
+    fn network_request_to_brew(c: &NetworkCallRequest) -> BrewCircularCall {
         BrewCircularCall {
-            source: c.source_issi,
+            source: c.source,
             destination: c.destination,
             number: c.number.clone(),
             priority: c.priority,

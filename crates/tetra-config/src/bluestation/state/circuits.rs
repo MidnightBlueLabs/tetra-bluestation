@@ -157,6 +157,41 @@ impl CircuitStreamDest {
     }
 }
 
+/// Parameters of a call being set up over the network bridge, exchanged between the Brew
+/// entity and CMCE while the receiver cannot derive them from a circuit yet. Keyed by Brew
+/// session uuid, since the signal announcing the call carries nothing but that uuid.
+#[derive(Debug, Clone, Default)]
+pub struct NetworkCallRequest {
+    /// Calling party ISSI
+    pub source: u32,
+    /// Called party ISSI or GSSI, zero for a number-dialed call
+    pub destination: u32,
+    /// External subscriber number for a PBX/phone call, empty otherwise
+    pub number: String,
+    /// Call priority
+    pub priority: u8,
+    /// Speech service (ETSI Table 14.79)
+    pub service: u8,
+    /// Circuit mode (ETSI Table 14.52)
+    pub mode: u8,
+    /// 0 = simplex, 1 = duplex
+    pub duplex: u8,
+    /// Hook method (ETSI Table 14.62)
+    pub method: u8,
+    /// Communication type (ETSI Table 14.54)
+    pub communication: u8,
+    /// Transmission grant (ETSI Table 14.80)
+    pub grant: u8,
+    /// Transmission request permission (ETSI Table 14.81)
+    pub permission: u8,
+    /// Call timeout (ETSI Table 14.50)
+    pub timeout: u8,
+    /// Call ownership (ETSI Table 14.38)
+    pub ownership: u8,
+    /// Call queued (ETSI Table 14.48)
+    pub queued: u8,
+}
+
 /// MLE routing back to a local MS over its already established LLC link. Downlink PDUs that
 /// must reach one specific MS (rather than a group broadcast) have to carry these.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -180,8 +215,10 @@ impl MleRoute {
 pub struct TetraCircuit {
     /// Current state of the call. Element contains data associated uniquely with this state, e.g. elapsed time in setup or hangtime in tx ceased.
     pub state: CircuitState,
+
     /// Time the circuit entered its current state. Drives hangtime, setup and release timers.
     pub t_state: TdmaTime,
+
     /// Source of the downlink stream. Can be local, remote or both, depending on who's subscribed.
     pub dl1_source: CircuitStreamDest,
     /// Source of the local or remote "uplink" stream.
@@ -234,7 +271,7 @@ pub struct TetraCircuit {
     /// Brew session of the party that opened the call. The stream sources carry the *current*
     /// Brew session, which the backend re-issues per speaker and which is cleared in hangtime,
     /// so this is kept separately for the final teardown notification.
-    pub origin_brew_uuid: Option<uuid::Uuid>,
+    pub brew_origin_uuid: Option<uuid::Uuid>,
 
     /// MLE routing back to the local calling MS. Unset for a network originated call.
     pub caller_route: MleRoute,
@@ -416,7 +453,10 @@ pub struct CircuitMap {
 #[derive(Debug, Clone, Default)]
 pub struct CircuitStore {
     circuits: HashMap<CallId, TetraCircuit>,
-    map: CircuitMap,
+    circuit_map: CircuitMap,
+    uuid_map: HashMap<uuid::Uuid, CallId>,
+    network_requests: HashMap<uuid::Uuid, NetworkCallRequest>,
+    closing_sessions: HashMap<CallId, uuid::Uuid>,
     pub allocator: TimeslotAllocator,
 }
 
@@ -467,14 +507,54 @@ impl CircuitStore {
         map
     }
 
+    fn build_uuid_map(&self) -> HashMap<uuid::Uuid, CallId> {
+        let mut ret: HashMap<uuid::Uuid, CallId> = HashMap::new();
+
+        // The same Brew session commonly feeds both the uplink and the downlink of one
+        // circuit, so a repeat is only a conflict when it points at a different call.
+        let mut insert = |uuid: Option<uuid::Uuid>, call_id: CallId| {
+            let Some(uuid) = uuid else {
+                return;
+            };
+            let previous = ret.insert(uuid, call_id);
+            assert!(
+                previous.is_none_or(|prev| prev == call_id),
+                "uuid {} used by call_id {} and {}",
+                uuid,
+                previous.unwrap(),
+                call_id
+            );
+        };
+
+        for (call_id, circuit) in &self.circuits {
+            if let CircuitStreamDest::Remote(uuid) | CircuitStreamDest::LocalAndRemote(_, uuid) = circuit.dl1_source {
+                insert(uuid, *call_id);
+            }
+
+            if let CircuitStreamSrc::Remote(uuid) = circuit.ul1_source {
+                insert(uuid, *call_id);
+            }
+
+            if let Some(CircuitStreamDest::Remote(uuid) | CircuitStreamDest::LocalAndRemote(_, uuid)) = circuit.dl2_source {
+                insert(uuid, *call_id);
+            }
+
+            if let Some(CircuitStreamSrc::Remote(uuid)) = circuit.ul2_source {
+                insert(uuid, *call_id);
+            }
+        }
+        ret
+    }
+
     /// Updates the cached timeslot map, computed from the circuits
-    fn update_timeslot_map(&mut self) {
-        self.map = self.build_timeslot_map()
+    fn update_maps(&mut self) {
+        self.circuit_map = self.build_timeslot_map();
+        self.uuid_map = self.build_uuid_map();
     }
 
     /// Retrieves a copy of the timeslot map
     pub fn get_timeslot_map(&self) -> CircuitMap {
-        self.map.clone()
+        self.circuit_map.clone()
     }
 
     pub fn is_circuit_on_dl_ts(&self, ts: u8) -> bool {
@@ -482,11 +562,48 @@ impl CircuitStore {
     }
 
     pub fn get_callid_by_dl_ts(&self, ts: u8) -> Option<CallId> {
-        self.map.dl[ts as usize]
+        self.circuit_map.dl[ts as usize]
     }
 
     pub fn get_callid_by_ul_ts(&self, ts: u8) -> Option<CallId> {
-        self.map.ul[ts as usize]
+        self.circuit_map.ul[ts as usize]
+    }
+
+    pub fn get_callid_by_uuid(&self, uuid: uuid::Uuid) -> Option<CallId> {
+        self.uuid_map.get(&uuid).copied()
+    }
+
+    pub fn get_circuit_by_uuid(&self, uuid: uuid::Uuid) -> Option<&TetraCircuit> {
+        let call_id = self.get_callid_by_uuid(uuid)?;
+        self.get_circuit_by_callid(call_id)
+    }
+
+    /// Deposits the parameters of a call announced over the network bridge, for the entity
+    /// handling the accompanying signal to pick up.
+    pub fn put_network_request(&mut self, uuid: uuid::Uuid, request: NetworkCallRequest) {
+        self.network_requests.insert(uuid, request);
+    }
+
+    pub fn has_network_request(&self, uuid: uuid::Uuid) -> bool {
+        self.network_requests.contains_key(&uuid)
+    }
+
+    /// Collects the deposited parameters of a network call. They are consumed, so a signal is
+    /// always accompanied by a fresh deposit.
+    pub fn take_network_request(&mut self, uuid: uuid::Uuid) -> Option<NetworkCallRequest> {
+        self.network_requests.remove(&uuid)
+    }
+
+    /// Hands the network bridge session of a call over to the entity that has to close it
+    /// upstream. Deposited by the entity destroying the circuit, so the session outlives the
+    /// call it belonged to just long enough to be signalled by call id.
+    pub fn put_closing_session(&mut self, call_id: CallId, uuid: uuid::Uuid) {
+        self.closing_sessions.insert(call_id, uuid);
+    }
+
+    /// Collects the network bridge session left behind by a destroyed call.
+    pub fn take_closing_session(&mut self, call_id: CallId) -> Option<uuid::Uuid> {
+        self.closing_sessions.remove(&call_id)
     }
 
     /// First circuit matching the predicate. Iteration order is unspecified, so the predicate
@@ -532,7 +649,7 @@ impl CircuitStore {
             return false;
         };
         f(circuit);
-        self.update_timeslot_map();
+        self.update_maps();
         true
     }
 
@@ -576,7 +693,7 @@ impl CircuitStore {
     /// Returns None if call_id not found
     pub fn take_circuit(&mut self, call_id: CallId) -> Option<TetraCircuit> {
         let ret = self.circuits.remove(&call_id);
-        self.update_timeslot_map();
+        self.update_maps();
         ret
     }
 
@@ -609,14 +726,14 @@ impl CircuitStore {
         }
 
         self.circuits.insert(call_id, circuit);
-        self.update_timeslot_map();
+        self.update_maps();
     }
 
     /// Destroys an existing call. Panics if call_id doesnt exist
     pub fn destroy_circuit_by_callid(&mut self, call_id: CallId) -> TetraCircuit {
         let ret = self.circuits.remove(&call_id);
         assert!(ret.is_some(), "circuit for call_id {} not found", call_id);
-        self.update_timeslot_map();
+        self.update_maps();
         ret.unwrap() // Never fails after assertion was checked
     }
 }

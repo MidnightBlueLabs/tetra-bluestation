@@ -32,8 +32,8 @@ pub struct CachedSetup {
     pub receipt: Option<TxReporter>,
 }
 
-/// Everything needed to open a circuit. The timeslots, call id and usage markers are assigned
-/// by the manager.
+/// Everything needed to open, change and close a circuit. The timeslots, call id and usage
+/// markers are assigned by the manager.
 pub struct CircuitRequest {
     pub caller: u32,
     pub callee: u32,
@@ -283,7 +283,7 @@ impl CircuitMgr {
             callee: req.callee,
             is_local_origin: req.is_local_origin,
             is_mobile_terminated: req.is_mobile_terminated,
-            origin_brew_uuid: req.origin_brew_uuid,
+            brew_origin_uuid: req.origin_brew_uuid,
             caller_route: req.caller_route,
             is_etee_encrypted: false,
             t_start: self.dltime,

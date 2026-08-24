@@ -19,7 +19,7 @@ use super::protocol::*;
 
 // ─── Events passed from worker to entity ─────────────────────────
 
-/// Events the Brew worker sends to the BrewEntity
+/// Events the BrewWorker sends to the BrewEntity
 #[derive(Debug)]
 pub enum BrewEvent {
     /// Successfully connected to TetraPack server
