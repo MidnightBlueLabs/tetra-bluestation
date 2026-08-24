@@ -19,10 +19,10 @@ use tetra_pdus::cmce::{
 use tetra_saps::{
     SapMsg, SapMsgInner,
     control::{
-        brew::{BrewSubscriberAction, MmSubscriberUpdate},
         call_control::{CallControl, Circuit, CircuitDlMediaSource},
         call_signal::{BrewEvent, CmceEvent},
         enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
+        subscriber::MmSubscriberEvent,
     },
     lcmc::{
         LcmcMleUnitdataReq,
@@ -263,63 +263,48 @@ impl CcBsSubentity {
         }
     }
 
-    pub fn handle_subscriber_update(&mut self, queue: &mut MessageQueue, update: MmSubscriberUpdate) {
-        let issi = update.issi;
-        let groups = update.groups;
-
-        match update.action {
-            BrewSubscriberAction::Register => {
-                // Registering an already known subscriber would wipe its group attachments,
-                // so a repeat registration is a no-op.
-                let known = self.state.with_subscribers(|s| {
-                    let known = s.is_registered(issi);
-                    if !known {
-                        s.register(issi);
-                    }
-                    known
-                });
-                tracing::info!("CMCE: subscriber register issi={} known={}", issi, known);
+    /// MM owns the subscriber store; CMCE only reacts to what a subscriber change means for the
+    /// calls it holds. A subscriber leaving is announced as a deaffiliation of its groups
+    /// followed by a deregistration, so group listener checks happen on the first event.
+    pub fn rx_subscriber_event(&mut self, queue: &mut MessageQueue, event: MmSubscriberEvent) {
+        match event {
+            MmSubscriberEvent::Register { issi } => {
+                tracing::debug!("CMCE: subscriber register issi={}", issi);
             }
-            BrewSubscriberAction::Deregister => {
-                let existing = self.state.with_subscribers(|s| s.deregister(issi).map(|sub| sub.attached_groups));
-                if let Some(existing) = existing {
-                    for gssi in existing {
-                        self.drop_group_calls_if_unlistened(queue, gssi);
-                    }
+            MmSubscriberEvent::Affiliate { issi, groups } => {
+                tracing::debug!("CMCE: subscriber affiliate issi={} groups={:?}", issi, groups);
+            }
+            MmSubscriberEvent::Deaffiliate { issi, groups } => {
+                tracing::info!("CMCE: subscriber deaffiliate issi={} groups={:?}", issi, groups);
+                for gssi in groups {
+                    self.drop_group_calls_if_unlistened(queue, gssi);
                 }
+            }
+            MmSubscriberEvent::Deregister { issi } => {
                 tracing::info!("CMCE: subscriber deregister issi={}", issi);
-            }
-            BrewSubscriberAction::Affiliate => {
-                let new_groups: Vec<u32> = self.state.with_subscribers(|s| {
-                    groups
-                        .into_iter()
-                        .filter(|gssi| s.group_attach(issi, *gssi) == Some(true))
-                        .collect()
-                });
 
-                if new_groups.is_empty() {
-                    tracing::debug!("CMCE: affiliate ignored (no new groups) issi={}", issi);
-                } else {
-                    tracing::info!("CMCE: subscriber affiliate issi={} groups={:?}", issi, new_groups);
+                // An individual call has no party left to talk to.
+                let orphaned: Vec<u16> = self
+                    .circuits
+                    .find_circuits(|c| c.is_individual_call() && !c.is_releasing() && (c.caller == issi || c.callee == issi))
+                    .into_iter()
+                    .map(|c| c.call_id)
+                    .collect();
+                for call_id in orphaned {
+                    tracing::info!("CMCE: releasing individual call_id={}, party issi={} left the cell", call_id, issi);
+                    self.release_individual_call(queue, call_id, DisconnectCause::SwmiRequestedDisconnection);
                 }
-            }
-            BrewSubscriberAction::Deaffiliate => {
-                // An unknown ISSI detaches nothing, but the requested groups are still
-                // re-checked for listeners in case this is a stale attachment.
-                let removed_groups: Vec<u32> = self.state.with_subscribers(|s| {
-                    if !s.is_registered(issi) {
-                        return groups;
-                    }
-                    groups.into_iter().filter(|gssi| s.group_detach(issi, *gssi).is_some()).collect()
-                });
 
-                if removed_groups.is_empty() {
-                    tracing::debug!("CMCE: deaffiliate ignored (no matching groups) issi={}", issi);
-                } else {
-                    tracing::info!("CMCE: subscriber deaffiliate issi={} groups={:?}", issi, removed_groups);
-                    for gssi in &removed_groups {
-                        self.drop_group_calls_if_unlistened(queue, *gssi);
-                    }
+                // A group call outlives its talker, it only loses its floor.
+                let talking: Vec<u16> = self
+                    .circuits
+                    .find_circuits(|c| c.is_group_call() && !c.is_releasing() && c.is_tx() && c.floor == Some(issi))
+                    .into_iter()
+                    .map(|c| c.call_id)
+                    .collect();
+                for call_id in talking {
+                    tracing::info!("CMCE: floor holder issi={} of group call_id={} left the cell", issi, call_id);
+                    self.group_tx_ceased(queue, call_id);
                 }
             }
         }
@@ -2574,12 +2559,25 @@ impl CcBsSubentity {
         let call_id = circuit.call_id;
 
         tracing::warn!("UL inactivity timeout on ts={}, forcing TX ceased for call_id={}", ts, call_id);
+        self.group_tx_ceased(queue, call_id);
+    }
 
-        let dest_gssi = circuit.callee;
+    /// The talker of a group call is gone: cease the transmission on air and put the timeslot
+    /// into hangtime. The call stays up with a free floor for the next talker.
+    fn group_tx_ceased(&mut self, queue: &mut MessageQueue, call_id: u16) {
+        let Some(circuit) = self.live_group_circuit(call_id) else {
+            return;
+        };
+        let Some(ts) = circuit.dl1_source.get_ts() else {
+            tracing::warn!("group call_id={} ceased transmission without a timeslot", call_id);
+            return;
+        };
+
+        self.circuits.set_floor(call_id, None);
         self.circuits.set_state(call_id, CircuitState::TxCeased(0));
 
         // Send D-TX CEASED via FACCH to all group members
-        self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
+        self.send_d_tx_ceased_facch(queue, call_id, circuit.callee, ts);
 
         // Notify UMAC to enter hangtime signalling mode
         queue.push_back(SapMsg {
@@ -2593,6 +2591,7 @@ impl CcBsSubentity {
         if circuit.brew_uuid().is_some() {
             Self::signal_brew(queue, CmceEvent::TxEnd { call_id });
         }
+        tracing::info!("group call_id={} floor released", call_id);
     }
 
     /// Send D-TX CEASED via FACCH stealing

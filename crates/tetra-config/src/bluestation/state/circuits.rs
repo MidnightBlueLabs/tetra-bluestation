@@ -252,7 +252,9 @@ pub struct TetraCircuit {
     /// Duplex channel MAC layer usage ID
     pub usage2_id: Option<u8>,
 
-    /// ISSI that currently holds the floor. Always populated unless for duplex calls
+    /// ISSI that currently holds the floor. Always populated unless for duplex calls, and
+    /// cleared once the talker ceases or leaves the cell, leaving the call free to be taken
+    /// over by another party.
     pub floor: Option<u32>,
 
     /// ISSI that opened the call. Does not equal the one who now has the floor!

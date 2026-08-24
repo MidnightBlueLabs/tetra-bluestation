@@ -42,6 +42,11 @@ impl SubscriberStore {
         self.subscribers.contains_key(&issi)
     }
 
+    /// All locally registered subscribers, keyed by ISSI.
+    pub fn get_subscribers(&self) -> &HashMap<u32, Subscriber> {
+        &self.subscribers
+    }
+
     /// Registers a new subscriber with default settings. Overwrites existing subscriber if already registered
     pub fn register(&mut self, issi: u32) {
         // To be sure, do clean remove

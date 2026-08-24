@@ -6,9 +6,9 @@ use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, TxState, debug
 use tetra_pdus::cmce::enums::party_type_identifier::PartyTypeIdentifier;
 use tetra_pdus::cmce::fields::basic_service_information::BasicServiceInformation;
 use tetra_pdus::cmce::pdus::u_setup::USetup;
-use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
 use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
 use tetra_saps::control::enums::communication_type::CommunicationType;
+use tetra_saps::control::subscriber::MmSubscriberEvent;
 use tetra_saps::lcmc::LcmcMleUnitdataInd;
 use tetra_saps::sapmsg::{SapMsg, SapMsgInner};
 
@@ -18,16 +18,14 @@ const TEST_GSSI: u32 = 91;
 const TEST_ISSI: u32 = 1000001;
 
 /// Helper: register a subscriber on a GSSI so CMCE accepts calls for that group.
+// TODO: MM owns the subscriber store now, so these events no longer register anything. The
+// harness has to seed the StackState directly once it carries one.
 fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
     let register = SapMsg {
         sap: Sap::Control,
         src: TetraEntity::Mm,
         dest: TetraEntity::Cmce,
-        msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
-            issi,
-            groups: vec![],
-            action: BrewSubscriberAction::Register,
-        }),
+        msg: SapMsgInner::MmSubscriberEvent(MmSubscriberEvent::Register { issi }),
     };
     test.submit_message(register);
     test.run_stack(Some(1));
@@ -36,11 +34,7 @@ fn register_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
         sap: Sap::Control,
         src: TetraEntity::Mm,
         dest: TetraEntity::Cmce,
-        msg: SapMsgInner::MmSubscriberUpdate(MmSubscriberUpdate {
-            issi,
-            groups: vec![gssi],
-            action: BrewSubscriberAction::Affiliate,
-        }),
+        msg: SapMsgInner::MmSubscriberEvent(MmSubscriberEvent::Affiliate { issi, groups: vec![gssi] }),
     };
     test.submit_message(affiliate);
     test.run_stack(Some(1));

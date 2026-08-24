@@ -7,7 +7,7 @@ use tetra_config::bluestation::{SharedConfig, StackState, Subscriber};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
 use tetra_pdus::mm::fields::class_of_ms::ClassOfMs;
-use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_saps::control::subscriber::MmSubscriberEvent;
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
@@ -145,48 +145,50 @@ impl MmBs {
         true
     }
 
-    fn emit_subscriber_update(&self, queue: &mut MessageQueue, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
-        tracing::warn!("emitting deprecated subscriber update {} {:?} {:?}", issi, groups, action);
-        // If brew is active, forward subscriber updates to the Brew entity.
-        // Register/Deregister must always be sent for brew-routable ISSIs,
-        // even when there are no group affiliations yet. The Brew worker
-        // decides whether to send REGISTER or REREGISTER based on its own state.
-        // Affiliate/Deaffiliate only sent when there are brew-routable groups.
+    fn emit_subscriber_event(&self, queue: &mut MessageQueue, event: MmSubscriberEvent) {
+        tracing::trace!("emitting subscriber event {:?}", event);
+
+        // Brew only hears about what it can route. Register/Deregister go out even when the
+        // subscriber holds no groups; the Brew worker decides between REGISTER and REREGISTER
+        // from its own state. Group events only go out for brew-routable groups.
         if net_brew::is_active(&self.config) {
-            let brew_groups = groups
-                .iter()
-                .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
-                .copied()
-                .collect::<Vec<u32>>();
-            let should_send = match action {
-                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => net_brew::is_brew_issi_routable(&self.config, issi),
-                BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
+            let routable_groups = |groups: &[u32]| {
+                groups
+                    .iter()
+                    .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
+                    .copied()
+                    .collect::<Vec<u32>>()
             };
-            if should_send {
-                let brew_update = MmSubscriberUpdate {
-                    issi,
-                    groups: brew_groups,
-                    action,
-                };
-                let msg = SapMsg {
+            let brew_event = match &event {
+                MmSubscriberEvent::Register { issi } | MmSubscriberEvent::Deregister { issi } => {
+                    net_brew::is_brew_issi_routable(&self.config, *issi).then(|| event.clone())
+                }
+                MmSubscriberEvent::Affiliate { issi, groups } => {
+                    let groups = routable_groups(groups);
+                    (!groups.is_empty()).then_some(MmSubscriberEvent::Affiliate { issi: *issi, groups })
+                }
+                MmSubscriberEvent::Deaffiliate { issi, groups } => {
+                    let groups = routable_groups(groups);
+                    (!groups.is_empty()).then_some(MmSubscriberEvent::Deaffiliate { issi: *issi, groups })
+                }
+            };
+            if let Some(brew_event) = brew_event {
+                queue.push_back(SapMsg {
                     sap: Sap::Control,
                     src: TetraEntity::Mm,
                     dest: TetraEntity::Brew,
-                    msg: SapMsgInner::MmSubscriberUpdate(brew_update),
-                };
-                queue.push_back(msg);
+                    msg: SapMsgInner::MmSubscriberEvent(brew_event),
+                });
             }
         }
 
-        // Always emit an update to the Cmce entity
-        let mm_update = MmSubscriberUpdate { issi, groups, action };
-        let msg = SapMsg {
+        // CMCE sees every subscriber on the cell, unfiltered.
+        queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Mm,
             dest: TetraEntity::Cmce,
-            msg: SapMsgInner::MmSubscriberUpdate(mm_update),
-        };
-        queue.push_back(msg);
+            msg: SapMsgInner::MmSubscriberEvent(event),
+        });
     }
 
     fn rx_u_itsi_detach(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
@@ -218,9 +220,9 @@ impl MmBs {
                 // self.config.state_write().subscribers.deregister(ssi);
                 if !client.attached_groups.is_empty() {
                     let groups: Vec<u32> = client.attached_groups.iter().copied().collect();
-                    self.emit_subscriber_update(queue, ssi, groups, BrewSubscriberAction::Deaffiliate);
+                    self.emit_subscriber_event(queue, MmSubscriberEvent::Deaffiliate { issi: ssi, groups });
                 }
-                self.emit_subscriber_update(queue, ssi, Vec::new(), BrewSubscriberAction::Deregister);
+                self.emit_subscriber_event(queue, MmSubscriberEvent::Deregister { issi: ssi });
             }
             None => {
                 tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
@@ -300,7 +302,7 @@ impl MmBs {
         let is_new = !self.state_is_registered(issi);
         self.state_register_subscriber(issi);
         if is_new {
-            self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
+            self.emit_subscriber_event(queue, MmSubscriberEvent::Register { issi });
         } else {
             tracing::warn!("Registered already-known MS {}", issi);
             return;
@@ -321,7 +323,13 @@ impl MmBs {
                     Some(detached_groups) => {
                         let prior_groups: Vec<u32> = detached_groups.iter().copied().collect();
                         if !prior_groups.is_empty() {
-                            self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                            self.emit_subscriber_event(
+                                queue,
+                                MmSubscriberEvent::Deaffiliate {
+                                    issi,
+                                    groups: prior_groups,
+                                },
+                            );
                         }
                     }
                     None => {
@@ -566,12 +574,18 @@ impl MmBs {
                 // TODO FIXME this should not happen if we demand attachment first!
                 tracing::warn!("unregistered MS tries to attach/detach group");
                 self.state_register_subscriber(issi);
-                self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
+                self.emit_subscriber_event(queue, MmSubscriberEvent::Register { issi });
             } else {
                 // Client is known — detach all existing groups first
                 let prior_groups: Vec<u32> = self.state_group_detach_all(issi).unwrap().iter().copied().collect();
                 if !prior_groups.is_empty() {
-                    self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                    self.emit_subscriber_event(
+                        queue,
+                        MmSubscriberEvent::Deaffiliate {
+                            issi,
+                            groups: prior_groups,
+                        },
+                    );
                 }
             }
         } else {
@@ -697,10 +711,16 @@ impl MmBs {
         }
 
         if !aff_groups.is_empty() {
-            self.emit_subscriber_update(queue, issi, aff_groups, BrewSubscriberAction::Affiliate);
+            self.emit_subscriber_event(queue, MmSubscriberEvent::Affiliate { issi, groups: aff_groups });
         }
         if !deaff_groups.is_empty() {
-            self.emit_subscriber_update(queue, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
+            self.emit_subscriber_event(
+                queue,
+                MmSubscriberEvent::Deaffiliate {
+                    issi,
+                    groups: deaff_groups,
+                },
+            );
         }
 
         accepted_groups

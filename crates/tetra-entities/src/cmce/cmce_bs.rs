@@ -132,8 +132,8 @@ impl TetraEntityTrait for CmceBs {
                 SapMsgInner::BrewCallEvent(event) => {
                     self.cc.rx_brew_event(queue, event);
                 }
-                SapMsgInner::MmSubscriberUpdate(update) => {
-                    self.cc.handle_subscriber_update(queue, update);
+                SapMsgInner::MmSubscriberEvent(event) => {
+                    self.cc.rx_subscriber_event(queue, event);
                 }
                 SapMsgInner::CmceSdsData(_) => {
                     self.sds.rx_sds_from_brew(queue, message);

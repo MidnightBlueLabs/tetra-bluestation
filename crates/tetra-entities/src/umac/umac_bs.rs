@@ -59,7 +59,6 @@ pub struct UmacBs {
     pending_stch: Option<PendingStch>,
     // event_label_store: EventLabelStore,
     /// Contains UL/DL scheduling logic
-    /// Access to this field is used only by testing code
     pub channel_scheduler: BsChannelScheduler,
     // ulrx_scheduler: UlScheduler,
     /// Timestamp of last received UL voice frame per timeslot (0-indexed: ts1..ts4).

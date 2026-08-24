@@ -7,7 +7,7 @@
 //! Transport-agnostic: the concrete transport (WebSocket, QUIC, TCP, …) is
 //! injected at construction time via [`BrewEntity::new`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -22,7 +22,7 @@ use crate::network::transports::NetworkTransport;
 use crate::{MessageQueue, TetraEntityTrait};
 use tetra_config::bluestation::{CfgBrew, CircuitStreamDest, NetworkCallRequest, SharedConfig, StackState, TetraCircuit};
 use tetra_core::{Sap, TdmaTime, tetra_entities::TetraEntity};
-use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_saps::control::subscriber::MmSubscriberEvent;
 use tetra_saps::{SapMsg, SapMsgInner, tmd::TmdCircuitDataReq};
 
 use super::protocol::BrewCircularCall;
@@ -48,9 +48,6 @@ pub struct BrewEntity {
 
     /// Per-session jitter/playout buffer for downlink voice from the backend.
     dl_jitter: HashMap<Uuid, VoiceJitterBuffer>,
-
-    /// Registered subscriber groups (ISSI -> set of GSSIs)
-    subscriber_groups: HashMap<u32, HashSet<u32>>,
 
     /// Worker thread handle for graceful shutdown
     worker_handle: Option<thread::JoinHandle<()>>,
@@ -85,7 +82,6 @@ impl BrewEntity {
             event_receiver,
             command_sender,
             dl_jitter: HashMap::new(),
-            subscriber_groups: HashMap::new(),
             worker_handle: Some(handle),
         }
     }
@@ -309,106 +305,50 @@ impl BrewEntity {
         }
     }
 
-    fn handle_subscriber_update(&mut self, update: MmSubscriberUpdate) {
-        let issi = update.issi;
-        let groups = update.groups;
-        let routable = super::is_brew_issi_routable(&self.config, issi);
+    /// MM owns the subscriber store; Brew only forwards the change upstream. A subscriber
+    /// leaving is announced as a deaffiliation of its groups followed by a deregistration, so
+    /// the backend sees DEAFFILIATE before DEREGISTER without Brew tracking any groups itself.
+    fn rx_subscriber_event(&mut self, event: MmSubscriberEvent) {
+        let (issi, command) = match event {
+            MmSubscriberEvent::Register { issi } => (issi, BrewCommand::RegisterSubscriber { issi }),
+            MmSubscriberEvent::Deregister { issi } => (issi, BrewCommand::DeregisterSubscriber { issi }),
+            MmSubscriberEvent::Affiliate { issi, groups } => (issi, BrewCommand::AffiliateGroups { issi, groups }),
+            MmSubscriberEvent::Deaffiliate { issi, groups } => (issi, BrewCommand::DeaffiliateGroups { issi, groups }),
+        };
 
-        match update.action {
-            BrewSubscriberAction::Register => {
-                self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                if routable {
-                    tracing::info!("BrewEntity: subscriber register issi={} → REGISTER", issi);
-                    let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
-                } else {
-                    tracing::debug!("BrewEntity: subscriber register issi={} (filtered, not sent to Brew)", issi);
-                }
-            }
-            BrewSubscriberAction::Deregister => {
-                let existing_groups: Vec<u32> = self
-                    .subscriber_groups
-                    .remove(&issi)
-                    .map(|g| g.into_iter().collect())
-                    .unwrap_or_default();
-                if routable {
-                    tracing::info!("BrewEntity: subscriber deregister issi={} → DEAFFILIATE + DEREGISTER", issi);
-                    if !existing_groups.is_empty() {
-                        let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
-                            issi,
-                            groups: existing_groups,
-                        });
-                    }
-                    let _ = self.command_sender.send(BrewCommand::DeregisterSubscriber { issi });
-                } else {
-                    tracing::debug!("BrewEntity: subscriber deregister issi={} (filtered, not sent to Brew)", issi);
-                }
-            }
-            BrewSubscriberAction::Affiliate => {
-                let entry = self.subscriber_groups.entry(issi).or_insert_with(HashSet::new);
-                let mut new_groups = Vec::new();
-                for gssi in groups {
-                    if entry.insert(gssi) {
-                        new_groups.push(gssi);
-                    }
-                }
-                if !new_groups.is_empty() && routable {
-                    tracing::info!("BrewEntity: affiliate issi={} → AFFILIATE groups={:?}", issi, new_groups);
-                    let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups: new_groups });
-                } else if !routable {
-                    tracing::debug!(
-                        "BrewEntity: affiliate issi={} groups={:?} (filtered, not sent to Brew)",
-                        issi,
-                        new_groups
-                    );
-                }
-            }
-            BrewSubscriberAction::Deaffiliate => {
-                let mut removed_groups = Vec::new();
-                if let Some(entry) = self.subscriber_groups.get_mut(&issi) {
-                    for gssi in groups {
-                        if entry.remove(&gssi) {
-                            removed_groups.push(gssi);
-                        }
-                    }
-                }
-                if !removed_groups.is_empty() && routable {
-                    tracing::info!("BrewEntity: deaffiliate issi={} → DEAFFILIATE groups={:?}", issi, removed_groups);
-                    let _ = self.command_sender.send(BrewCommand::DeaffiliateGroups {
-                        issi,
-                        groups: removed_groups,
-                    });
-                } else if !routable {
-                    tracing::debug!(
-                        "BrewEntity: deaffiliate issi={} groups={:?} (filtered, not sent to Brew)",
-                        issi,
-                        removed_groups
-                    );
-                }
-            }
+        if !super::is_brew_issi_routable(&self.config, issi) {
+            tracing::debug!("BrewEntity: subscriber event {:?} (filtered, not sent to Brew)", command);
+            return;
         }
+
+        tracing::info!("BrewEntity: subscriber event → {:?}", command);
+        let _ = self.command_sender.send(command);
     }
 
     fn resync_subscribers(&self) {
-        for (issi, groups) in &self.subscriber_groups {
-            if !super::is_brew_issi_routable(&self.config, *issi) {
+        let subscribers: Vec<(u32, Vec<u32>)> = self.state.with_subscribers(|s| {
+            s.get_subscribers()
+                .values()
+                .map(|sub| (sub.issi, sub.attached_groups.iter().copied().collect()))
+                .collect()
+        });
+
+        for (issi, groups) in subscribers {
+            if !super::is_brew_issi_routable(&self.config, issi) {
                 tracing::debug!("BrewEntity: resync skipping issi={} (filtered)", issi);
                 continue;
             }
-            let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi: *issi });
+            let _ = self.command_sender.send(BrewCommand::RegisterSubscriber { issi });
             if groups.is_empty() {
                 tracing::info!("BrewEntity: resync issi={} — registered, no group affiliations", issi);
             } else {
-                let gssi_list: Vec<u32> = groups.iter().copied().collect();
                 tracing::info!(
                     "BrewEntity: resync issi={} — registered, affiliating {} groups: {:?}",
                     issi,
-                    gssi_list.len(),
-                    gssi_list
+                    groups.len(),
+                    groups
                 );
-                let _ = self.command_sender.send(BrewCommand::AffiliateGroups {
-                    issi: *issi,
-                    groups: gssi_list,
-                });
+                let _ = self.command_sender.send(BrewCommand::AffiliateGroups { issi, groups });
             }
         }
     }
@@ -603,8 +543,8 @@ impl TetraEntityTrait for BrewEntity {
             SapMsgInner::CmceCallEvent(event) => {
                 self.rx_cmce_event(event);
             }
-            SapMsgInner::MmSubscriberUpdate(update) => {
-                self.handle_subscriber_update(update);
+            SapMsgInner::MmSubscriberEvent(event) => {
+                self.rx_subscriber_event(event);
             }
             SapMsgInner::CmceSdsData(sds) => {
                 self.handle_sds_send(sds);
