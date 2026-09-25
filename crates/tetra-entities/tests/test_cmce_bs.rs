@@ -50,7 +50,7 @@ fn build_u_setup_msg(calling_issi: u32, dest_gssi: u32) -> SapMsg {
         basic_service_information: BasicServiceInformation {
             circuit_mode_type: CircuitModeType::TchS,
             encryption_flag: false,
-            communication_type: CommunicationType::P2Mp,
+            communication_type: CommunicationType::P2mp,
             slots_per_frame: None,
             speech_service: Some(0),
         },

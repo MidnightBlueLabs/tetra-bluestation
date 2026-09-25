@@ -1,8 +1,8 @@
 use tetra_config::bluestation::{
-    CircuitState, CircuitStreamDest, CircuitStreamSrc, MleRoute, NetworkCallRequest, SharedConfig, StackState, TetraCircuit,
+    CircuitState, CircuitStreamDest, CircuitStreamSrc, NetworkCallRequest, SharedConfig, StackState, TetraCircuit,
 };
-use tetra_core::{BitBuffer, Direction, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
-use tetra_core::{Layer2Service, TxReporter, TxState};
+use tetra_core::{BitBuffer, Sap, SsiType, TdmaTime, TetraAddress, tetra_entities::TetraEntity, unimplemented_log};
+use tetra_core::{Layer2Service, TxReporter};
 use tetra_pdus::cmce::enums::disconnect_cause::DisconnectCause;
 use tetra_pdus::cmce::{
     enums::{
@@ -19,7 +19,6 @@ use tetra_pdus::cmce::{
 use tetra_saps::{
     SapMsg, SapMsgInner,
     control::{
-        call_control::{CallControl, Circuit, CircuitDlMediaSource},
         call_signal::{BrewEvent, CmceEvent},
         enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
         subscriber::MmSubscriberEvent,
@@ -45,7 +44,6 @@ use crate::{
 pub struct CcBsSubentity {
     config: SharedConfig,
     state: StackState,
-
     dltime: TdmaTime,
     circuits: CircuitMgr,
 }
@@ -53,37 +51,13 @@ pub struct CcBsSubentity {
 /// ===== Global circuit view queries =====
 ///
 /// A call stays in the store until its circuit is actually torn down, which is a few frames
-/// after the release starts. The queries below skip circuits in `Releasing` so that a call
-/// already being torn down can never be re-keyed, reused or answered.
+/// after the release starts. The live-circuit queries on the `circuits` manager skip circuits
+/// in `Releasing` so that a call already being torn down can never be re-keyed, reused or
+/// answered.
 impl CcBsSubentity {
-    /// Snapshot of a live circuit by call id.
-    fn live_circuit(&self, call_id: u16) -> Option<TetraCircuit> {
-        self.circuits.get_circuit_by_callid(call_id).filter(|c| !c.is_releasing())
-    }
-
-    /// Snapshot of the first live circuit matching `pred`.
-    fn find_live_circuit(&self, pred: impl Fn(&TetraCircuit) -> bool) -> Option<TetraCircuit> {
-        self.circuits.find_circuit(|c| !c.is_releasing() && pred(c))
-    }
-
-    /// True if any live circuit matches `pred`.
-    fn any_live_circuit(&self, pred: impl Fn(&TetraCircuit) -> bool) -> bool {
-        self.circuits.any_circuit(|c| !c.is_releasing() && pred(c))
-    }
-
-    /// Snapshot of a live individual (point-to-point) call.
-    fn live_individual_circuit(&self, call_id: u16) -> Option<TetraCircuit> {
-        self.live_circuit(call_id).filter(|c| c.is_individual_call())
-    }
-
-    /// Snapshot of a live group call.
-    fn live_group_circuit(&self, call_id: u16) -> Option<TetraCircuit> {
-        self.live_circuit(call_id).filter(|c| c.is_group_call())
-    }
-
     /// True if the call id belongs to a live individual call.
     fn is_individual_call_id(&self, call_id: u16) -> bool {
-        self.live_individual_circuit(call_id).is_some()
+        self.circuits.live_individual_circuit(call_id).is_some()
     }
 
     /// Verbose dump of the global circuit view, for diagnosing call state from the log alone.
@@ -357,40 +331,6 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
-    /// Put a traffic timeslot into service. `peer_ts` cross-routes the uplink of this slot to
-    /// the downlink of another one, which a duplex call needs so both parties hear each other.
-    fn signal_umac_circuit_open(queue: &mut MessageQueue, ts: u8, usage: u8, peer_ts: Option<u8>, dl_media_source: CircuitDlMediaSource) {
-        let circuit = Circuit {
-            direction: Direction::Both,
-            ts,
-            peer_ts,
-            usage,
-            // Only speech is supported for now, TETRA ACELP encoded, without E2EE.
-            circuit_mode: CircuitModeType::TchS,
-            speech_service: Some(0),
-            etee_encrypted: false,
-            dl_media_source,
-        };
-        let cmd = SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::Open(circuit)),
-        };
-        queue.push_back(cmd);
-    }
-
-    /// Take a traffic timeslot out of service.
-    fn signal_umac_circuit_close(queue: &mut MessageQueue, ts: u8) {
-        let cmd = SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::Close(Direction::Both, ts)),
-        };
-        queue.push_back(cmd);
-    }
-
     fn rx_u_setup(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_setup: {:?}", message);
         let SapMsgInner::LcmcMleUnitdataInd(prim) = &mut message.msg else {
@@ -409,19 +349,192 @@ impl CcBsSubentity {
             }
         };
 
-        // Individual (point-to-point) or group (point-to-multipoint), per the
-        // communication type the MS declares in the basic service information.
-        // Individual calls run their own path and state map (ETSI 14.5.1).
-        if pdu.basic_service_information.communication_type == CommunicationType::P2p {
-            self.setup_individual_call(queue, &message, pdu, calling_party);
-            return;
-        }
-
         // Check if we can satisfy this request
         if !Self::feature_check_u_setup(&pdu) {
             tracing::error!("Unsupported critical features in USetup");
             return;
         }
+
+        // TODO FIXME: permissions check:
+        // Is user registered
+        // May user place call
+        // May user place call to callee
+
+        // Dispatch remainder of handling to specific handler for group / individual call
+        match pdu.basic_service_information.communication_type {
+            CommunicationType::P2mp => {
+                self.setup_group_call(queue, message, pdu, calling_party);
+            }
+            CommunicationType::P2p => self.setup_individual_call(queue, message, pdu, calling_party),
+            _ => {
+                unreachable!("unsupported communication type")
+            }
+        };
+    }
+
+    /// True if the ISSI is registered on this cell, so we can reach it for a local call.
+    fn is_individual_registered(&self, issi: u32) -> bool {
+        self.state.with_subscribers(|s| s.is_registered(issi))
+    }
+
+    /// True if the ISSI is already a party to an individual call.
+    fn issi_in_individual_call(&self, issi: u32) -> bool {
+        self.circuits
+            .any_live_circuit(|c| c.is_individual_call() && (c.caller == issi || c.callee == issi))
+    }
+
+    /// Duplex flag of an individual call, as negotiated on air. Over Brew a duplex call still
+    /// runs on a single local slot, so this cannot be derived from the second channel.
+    fn individual_is_duplex(&self, call_id: u16) -> bool {
+        self.circuits.live_individual_circuit(call_id).map(|c| c.is_duplex).unwrap_or(false)
+    }
+
+    /// Send a downlink PDU to the calling party. MLE routes by address; the link handle and
+    /// endpoint are not tracked per call.
+    fn send_to_caller(&self, queue: &mut MessageQueue, call: &TetraCircuit, sdu: BitBuffer, chan_alloc: Option<CmceChanAllocReq>) {
+        queue.push_back(SapMsg {
+            sap: Sap::LcmcSap,
+            src: TetraEntity::Cmce,
+            dest: TetraEntity::Mle,
+            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
+                sdu,
+                handle: 0,
+                endpoint_id: 0,
+                link_id: 0,
+                layer2service: Layer2Service::Unacknowledged,
+                pdu_prio: 0,
+                layer2_qos: 0,
+                stealing_permission: false,
+                stealing_repeats_flag: false,
+                chan_alloc,
+                main_address: call.caller_addr(),
+                tx_reporter: None,
+            }),
+        });
+    }
+
+    /// Set up an individual (point-to-point) call. ETSI EN 300 392-2 clause 14.5.1.
+    /// Local on-cell simplex call with either hook method, ISSI-addressed.
+    fn setup_individual_call(&mut self, queue: &mut MessageQueue, message: SapMsg, pdu: USetup, calling_party: TetraAddress) {
+        let calling_ssi = calling_party.ssi;
+        let duplex = pdu.simplex_duplex_selection;
+        let called_ssi = pdu.called_party_ssi.map(|s| s as u32);
+
+        // A locally registered ISSI is reached on-air. Anything else (an off-cell ISSI or a
+        // PBX/phone number) is reached over Brew if it is configured, otherwise rejected.
+        let is_local = called_ssi.map(|s| self.is_individual_registered(s)).unwrap_or(false);
+        if !is_local {
+            if net_brew::is_active(&self.config) {
+                self.setup_individual_call_over_brew(queue, &message, &pdu, calling_party, duplex);
+            } else {
+                tracing::warn!("individual call to non-local target and no Brew, rejecting");
+                self.reject_individual_setup(queue, &message, DisconnectCause::CalledPartyNotReachable);
+            }
+            return;
+        }
+        let called_ssi = called_ssi.expect("local target has an ISSI");
+
+        if self.issi_in_individual_call(calling_ssi) {
+            tracing::warn!("calling ISSI {} already in a call, rejecting", calling_ssi);
+            self.reject_individual_setup(queue, &message, DisconnectCause::ConcurrentSetUpNotSupported);
+            return;
+        }
+        if self.issi_in_individual_call(called_ssi) {
+            tracing::warn!("called ISSI {} busy, rejecting", called_ssi);
+            self.reject_individual_setup(queue, &message, DisconnectCause::CalledPartyBusy);
+            return;
+        }
+
+        let comm_type = pdu.basic_service_information.communication_type;
+        let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
+        let hook_on_off = pdu.hook_method_selection;
+
+        // Initial permission to transmit. Duplex grants both parties (talk and receive at
+        // once), no floor. Simplex names one speaker via the U-SETUP request to transmit bit
+        // (ETSI Table 14.74): value 0 is the caller, value 1 the other party. A hook radio
+        // sets it to let the called speak first. The hook method only drives alerting.
+        let (floor_holder, called_grant) = if duplex {
+            (None, TransmissionGrant::Granted)
+        } else {
+            let caller_first = !pdu.request_to_transmit_send_data;
+            let holder = if caller_first { calling_ssi } else { called_ssi };
+            let grant = if caller_first {
+                TransmissionGrant::GrantedToOtherUser
+            } else {
+                TransmissionGrant::Granted
+            };
+            (Some(holder), grant)
+        };
+
+        // A duplex call needs a second channel so the called party can transmit at the same
+        // time as the caller. Simplex shares one channel (both parties on the same slot).
+        let Some(call_id) = self.circuits.allocate_circuit(CircuitRequest {
+            caller: calling_ssi,
+            callee: called_ssi,
+            comm_type,
+            state: CircuitState::Alerting { age: 0 },
+            is_duplex: duplex,
+            second_channel: duplex,
+            over_brew: false,
+            hook_on_off,
+            is_local_origin: true,
+            is_mobile_terminated: false,
+            origin_brew_uuid: None,
+            floor: floor_holder,
+        }) else {
+            tracing::error!("Failed to allocate circuit for individual U-SETUP: no free timeslot");
+            self.reject_individual_setup(queue, &message, DisconnectCause::CongestionInInfrastructure);
+            return;
+        };
+        let circuit = self.circuits.get_circuit_by_callid(call_id).expect("just allocated");
+        let caller_ts = circuit.ul_ts();
+        let called_ts = circuit.callee_ts();
+        let called_usage = circuit.callee_usage_id();
+
+        tracing::info!(
+            "individual call ISSI {} to ISSI {} ts={} called_ts={} call_id={} hook_on_off={} duplex={}",
+            calling_ssi,
+            called_ssi,
+            caller_ts,
+            called_ts,
+            call_id,
+            hook_on_off,
+            duplex
+        );
+
+        // D-CALL-PROCEEDING acknowledges the U-SETUP to the caller.
+        self.send_d_call_proceeding(queue, &message, &pdu, call_id);
+
+        // D-SETUP to the called party. No channel allocation here: in a hangtime
+        // (quasi-transmission-trunked) call ETSI Table 14.1 does not allow early
+        // assignment, so the called MS stays on the control channel and answers there.
+        // The traffic channel is assigned later in the D-CONNECT ACKNOWLEDGE.
+        let d_setup = DSetup {
+            call_identifier: call_id,
+            call_time_out: CallTimeout::T5m,
+            hook_method_selection: hook_on_off,
+            simplex_duplex_selection: duplex,
+            basic_service_information: pdu.basic_service_information.clone(),
+            transmission_grant: called_grant,
+            transmission_request_permission: false,
+            call_priority: pdu.call_priority,
+            notification_indicator: None,
+            temporary_address: None,
+            calling_party_address_ssi: Some(calling_ssi),
+            calling_party_extension: None,
+            external_subscriber_number: None,
+            facility: None,
+            dm_ms_address: None,
+            proprietary: None,
+        };
+        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, called_usage, called_ts, UlDlAssignment::Both);
+        let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
+        queue.push_back(setup_msg);
+    }
+
+    /// Set up a group (point-to-multipoint) call.
+    fn setup_group_call(&mut self, queue: &mut MessageQueue, message: SapMsg, pdu: USetup, calling_party: TetraAddress) {
+        // Feature check and sanity checks have already been done
 
         // Get destination GSSI (called party)
         let Some(dest_gssi) = pdu.called_party_ssi else {
@@ -456,7 +569,7 @@ impl CcBsSubentity {
             caller: calling_party.ssi,
             callee: dest_gssi,
             comm_type: pdu.basic_service_information.communication_type,
-            state: CircuitState::Tx(0),
+            state: CircuitState::new_tx(),
             is_duplex: false,
             second_channel: false,
             over_brew: false,
@@ -464,7 +577,6 @@ impl CcBsSubentity {
             is_local_origin: true,
             is_mobile_terminated: false,
             origin_brew_uuid: None,
-            caller_route: MleRoute::new(ul_handle, ul_link_id, ul_endpoint_id),
             floor: Some(calling_party.ssi),
         }) else {
             tracing::error!("Failed to allocate circuit for U-SETUP: no free timeslot");
@@ -482,9 +594,6 @@ impl CcBsSubentity {
             call_id,
             usage
         );
-
-        // Signal UMAC to open DL+UL circuits
-        Self::signal_umac_circuit_open(queue, ts, usage, None, CircuitDlMediaSource::LocalLoopback);
 
         // Build channel allocation timeslot mask for this call
         let mut timeslots = [false; 4];
@@ -572,7 +681,17 @@ impl CcBsSubentity {
         let d_setup_ref = &self.circuits.get_setup(call_id).unwrap().pdu;
 
         let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
+        // First of the initial D-SETUP transmissions; the retransmission schedule follows up
+        // once this one is confirmed sent.
+        let reporter = TxReporter::new_unacked();
+        self.circuits.record_setup_send(call_id, reporter.clone());
+        let setup_msg = Self::build_sapmsg(
+            setup_sdu,
+            Some(setup_chan_alloc),
+            dest_addr,
+            Layer2Service::Unacknowledged,
+            Some(reporter),
+        );
         queue.push_back(setup_msg);
 
         // Notify Brew entity about this local call if Brew is loaded and the SSI is cleared for Brew
@@ -580,185 +699,6 @@ impl CcBsSubentity {
         if net_brew::is_brew_gssi_routable(&self.config, dest_gssi) {
             Self::signal_brew(queue, CmceEvent::TxStart { call_id });
         }
-    }
-
-    /// True if the ISSI is registered on this cell, so we can reach it for a local call.
-    fn is_individual_registered(&self, issi: u32) -> bool {
-        self.state.with_subscribers(|s| s.is_registered(issi))
-    }
-
-    /// True if the ISSI is already a party to an individual call.
-    fn issi_in_individual_call(&self, issi: u32) -> bool {
-        self.any_live_circuit(|c| c.is_individual_call() && (c.caller == issi || c.callee == issi))
-    }
-
-    /// Duplex flag of an individual call, as negotiated on air. Over Brew a duplex call still
-    /// runs on a single local slot, so this cannot be derived from the second channel.
-    fn individual_is_duplex(&self, call_id: u16) -> bool {
-        self.live_individual_circuit(call_id).map(|c| c.is_duplex).unwrap_or(false)
-    }
-
-    /// Send a downlink PDU to the calling party over its established LLC link.
-    fn send_to_caller(&self, queue: &mut MessageQueue, call: &TetraCircuit, sdu: BitBuffer, chan_alloc: Option<CmceChanAllocReq>) {
-        queue.push_back(SapMsg {
-            sap: Sap::LcmcSap,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Mle,
-            msg: SapMsgInner::LcmcMleUnitdataReq(LcmcMleUnitdataReq {
-                sdu,
-                handle: call.caller_route.handle,
-                endpoint_id: call.caller_route.endpoint_id,
-                link_id: call.caller_route.link_id,
-                layer2service: Layer2Service::Unacknowledged,
-                pdu_prio: 0,
-                layer2_qos: 0,
-                stealing_permission: false,
-                stealing_repeats_flag: false,
-                chan_alloc,
-                main_address: call.caller_addr(),
-                tx_reporter: None,
-            }),
-        });
-    }
-
-    /// Set up an individual (point-to-point) call. ETSI EN 300 392-2 clause 14.5.1.
-    /// Local on-cell simplex call with either hook method, ISSI-addressed.
-    fn setup_individual_call(&mut self, queue: &mut MessageQueue, message: &SapMsg, pdu: USetup, calling_party: TetraAddress) {
-        let SapMsgInner::LcmcMleUnitdataInd(prim) = &message.msg else {
-            panic!()
-        };
-        let (handle, link_id, endpoint_id) = (prim.handle, prim.link_id, prim.endpoint_id);
-
-        let calling_ssi = calling_party.ssi;
-        let duplex = pdu.simplex_duplex_selection;
-        let called_ssi = pdu.called_party_ssi.map(|s| s as u32);
-
-        // A locally registered ISSI is reached on-air. Anything else (an off-cell ISSI or a
-        // PBX/phone number) is reached over Brew if it is configured, otherwise rejected.
-        let is_local = called_ssi.map(|s| self.is_individual_registered(s)).unwrap_or(false);
-        if !is_local {
-            if net_brew::is_active(&self.config) {
-                self.setup_individual_call_over_brew(queue, message, &pdu, calling_party, duplex, handle, link_id, endpoint_id);
-            } else {
-                tracing::warn!("individual call to non-local target and no Brew, rejecting");
-                self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyNotReachable);
-            }
-            return;
-        }
-        let called_ssi = called_ssi.expect("local target has an ISSI");
-
-        if self.issi_in_individual_call(calling_ssi) {
-            tracing::warn!("calling ISSI {} already in a call, rejecting", calling_ssi);
-            self.reject_individual_setup(queue, message, DisconnectCause::ConcurrentSetUpNotSupported);
-            return;
-        }
-        if self.issi_in_individual_call(called_ssi) {
-            tracing::warn!("called ISSI {} busy, rejecting", called_ssi);
-            self.reject_individual_setup(queue, message, DisconnectCause::CalledPartyBusy);
-            return;
-        }
-
-        let comm_type = pdu.basic_service_information.communication_type;
-        let called_addr = TetraAddress::new(called_ssi, SsiType::Issi);
-        let hook_on_off = pdu.hook_method_selection;
-
-        // Initial permission to transmit. Duplex grants both parties (talk and receive at
-        // once), no floor. Simplex names one speaker via the U-SETUP request to transmit bit
-        // (ETSI Table 14.74): value 0 is the caller, value 1 the other party. A hook radio
-        // sets it to let the called speak first. The hook method only drives alerting.
-        let (floor_holder, called_grant) = if duplex {
-            (None, TransmissionGrant::Granted)
-        } else {
-            let caller_first = !pdu.request_to_transmit_send_data;
-            let holder = if caller_first { calling_ssi } else { called_ssi };
-            let grant = if caller_first {
-                TransmissionGrant::GrantedToOtherUser
-            } else {
-                TransmissionGrant::Granted
-            };
-            (Some(holder), grant)
-        };
-
-        // A duplex call needs a second channel so the called party can transmit at the same
-        // time as the caller. Simplex shares one channel (both parties on the same slot).
-        let Some(call_id) = self.circuits.allocate_circuit(CircuitRequest {
-            caller: calling_ssi,
-            callee: called_ssi,
-            comm_type,
-            state: CircuitState::Setup(0),
-            is_duplex: duplex,
-            second_channel: duplex,
-            over_brew: false,
-            hook_on_off,
-            is_local_origin: true,
-            is_mobile_terminated: false,
-            origin_brew_uuid: None,
-            caller_route: MleRoute::new(handle, link_id, endpoint_id),
-            floor: floor_holder,
-        }) else {
-            tracing::error!("Failed to allocate circuit for individual U-SETUP: no free timeslot");
-            self.reject_individual_setup(queue, message, DisconnectCause::CongestionInInfrastructure);
-            return;
-        };
-        let circuit = self.circuits.get_circuit_by_callid(call_id).expect("just allocated");
-        let caller_ts = circuit.ul_ts();
-        let called_ts = circuit.callee_ts();
-        let called_usage = circuit.callee_usage_id();
-
-        tracing::info!(
-            "individual call ISSI {} to ISSI {} ts={} called_ts={} call_id={} hook_on_off={} duplex={}",
-            calling_ssi,
-            called_ssi,
-            caller_ts,
-            called_ts,
-            call_id,
-            hook_on_off,
-            duplex
-        );
-
-        // Open the traffic channel(s). For duplex, cross-link the two slots so each party's
-        // uplink voice loops to the other party's downlink.
-        if duplex {
-            Self::signal_umac_circuit_open(
-                queue,
-                caller_ts,
-                circuit.usage_id,
-                Some(called_ts),
-                CircuitDlMediaSource::LocalLoopback,
-            );
-            Self::signal_umac_circuit_open(queue, called_ts, called_usage, Some(caller_ts), CircuitDlMediaSource::LocalLoopback);
-        } else {
-            Self::signal_umac_circuit_open(queue, caller_ts, circuit.usage_id, None, CircuitDlMediaSource::LocalLoopback);
-        }
-
-        // D-CALL-PROCEEDING acknowledges the U-SETUP to the caller.
-        self.send_d_call_proceeding(queue, message, &pdu, call_id);
-
-        // D-SETUP to the called party. No channel allocation here: in a hangtime
-        // (quasi-transmission-trunked) call ETSI Table 14.1 does not allow early
-        // assignment, so the called MS stays on the control channel and answers there.
-        // The traffic channel is assigned later in the D-CONNECT ACKNOWLEDGE.
-        let d_setup = DSetup {
-            call_identifier: call_id,
-            call_time_out: CallTimeout::T5m,
-            hook_method_selection: hook_on_off,
-            simplex_duplex_selection: duplex,
-            basic_service_information: pdu.basic_service_information.clone(),
-            transmission_grant: called_grant,
-            transmission_request_permission: false,
-            call_priority: pdu.call_priority,
-            notification_indicator: None,
-            temporary_address: None,
-            calling_party_address_ssi: Some(calling_ssi),
-            calling_party_extension: None,
-            external_subscriber_number: None,
-            facility: None,
-            dm_ms_address: None,
-            proprietary: None,
-        };
-        let (setup_sdu, _) = Self::build_d_setup_prim(&d_setup, called_usage, called_ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(setup_sdu, None, called_addr, Layer2Service::Unacknowledged, None);
-        queue.push_back(setup_msg);
     }
 
     /// Decode an external subscriber number Type3 element into a dial string. 4-bit BCD nibbles,
@@ -791,7 +731,6 @@ impl CcBsSubentity {
     /// PBX/phone number). One traffic channel is opened for the local caller with network
     /// downlink media, and a SETUP REQUEST is sent to the backend. The caller is through
     /// connected later when the backend sends a CONNECT REQUEST.
-    #[allow(clippy::too_many_arguments)]
     fn setup_individual_call_over_brew(
         &mut self,
         queue: &mut MessageQueue,
@@ -799,9 +738,6 @@ impl CcBsSubentity {
         pdu: &USetup,
         calling_party: TetraAddress,
         duplex: bool,
-        handle: u32,
-        link_id: u32,
-        endpoint_id: u32,
     ) {
         let calling_ssi = calling_party.ssi;
         if self.issi_in_individual_call(calling_ssi) {
@@ -824,7 +760,7 @@ impl CcBsSubentity {
             caller: calling_ssi,
             callee: called_ssi,
             comm_type: pdu.basic_service_information.communication_type,
-            state: CircuitState::Setup(0),
+            state: CircuitState::Alerting { age: 0 },
             is_duplex: duplex,
             second_channel: false,
             over_brew: true,
@@ -832,7 +768,6 @@ impl CcBsSubentity {
             is_local_origin: true,
             is_mobile_terminated: false,
             origin_brew_uuid: Some(brew_uuid),
-            caller_route: MleRoute::new(handle, link_id, endpoint_id),
             // Duplex grants both. Simplex over Brew: the backend drives the floor with
             // SIMPLEX GRANTED/IDLE, so start with nobody holding it.
             floor: None,
@@ -855,10 +790,6 @@ impl CcBsSubentity {
             brew_uuid
         );
 
-        // Open the traffic channel now with network downlink media so the local loopback is
-        // suppressed. Audio comes from the backend, the caller's uplink goes to the backend.
-        Self::signal_umac_circuit_open(queue, ts, circuit.usage_id, None, CircuitDlMediaSource::Network);
-
         self.send_d_call_proceeding(queue, message, pdu, call_id);
 
         let call = NetworkCallRequest {
@@ -870,7 +801,7 @@ impl CcBsSubentity {
             // An individual call is point-to-point (14.54 = 0); ETSI 14.5.3.1 mandates it.
             service: pdu.basic_service_information.speech_service.unwrap_or(0),
             mode: pdu.basic_service_information.circuit_mode_type.into_raw() as u8,
-            duplex: duplex as u8,
+            is_duplex: duplex as u8,
             method: pdu.hook_method_selection as u8,
             communication: pdu.basic_service_information.communication_type.into_raw() as u8,
             grant: 0,
@@ -886,11 +817,15 @@ impl CcBsSubentity {
 
     /// Backend is alerting (ringing) on an over-Brew call. Relay D-ALERT to the caller.
     fn rx_network_circuit_alert(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
-        if call.is_setup() {
-            self.circuits.set_state(call_id, CircuitState::Alerting(0));
+        if call.is_alerting() && !call.has_alerted {
+            // First alert: mark it and restart the no-answer timer.
+            self.circuits.update_circuit(call_id, |c| {
+                c.has_alerted = true;
+                c.state = CircuitState::Alerting { age: 0 };
+            });
         }
         let d_alert = DAlert {
             call_identifier: call.call_id,
@@ -914,7 +849,7 @@ impl CcBsSubentity {
     /// holds the floor). Only the local caller is on air, and the slot stays in traffic so the
     /// backend downlink keeps playing either way.
     fn brew_simplex_floor(&mut self, queue: &mut MessageQueue, call_id: u16, caller_talks: bool) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
         if call.is_duplex {
@@ -933,13 +868,13 @@ impl CcBsSubentity {
     /// Backend connected an over-Brew call. Through-connect the local caller: D-CONNECT with
     /// the channel allocation, then tell Brew media is ready and confirm the connect.
     fn rx_network_circuit_connect_request(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
         if call.is_tx() {
             return;
         }
-        self.circuits.set_state(call_id, CircuitState::Tx(0));
+        self.circuits.set_state(call_id, CircuitState::new_tx());
 
         let ts = call.dl_ts();
         let mut timeslots = [false; 4];
@@ -1008,14 +943,14 @@ impl CcBsSubentity {
             return;
         }
 
-        let duplex = call.duplex != 0;
+        let duplex = call.is_duplex != 0;
         let hook = call.method != 0;
         // Over Brew the far leg is the backend, so a single local slot carries the call.
         let Some(call_id) = self.circuits.allocate_circuit(CircuitRequest {
             caller: call.source,
             callee: dest,
             comm_type: CommunicationType::P2p,
-            state: CircuitState::Setup(0),
+            state: CircuitState::Alerting { age: 0 },
             is_duplex: duplex,
             second_channel: false,
             over_brew: true,
@@ -1023,8 +958,6 @@ impl CcBsSubentity {
             is_local_origin: false,
             is_mobile_terminated: true,
             origin_brew_uuid: Some(brew_uuid),
-            // Backend caller has no local LLC link.
-            caller_route: MleRoute::default(),
             floor: None,
         }) else {
             tracing::error!("Failed to allocate circuit for terminated over-Brew call: no free timeslot");
@@ -1044,9 +977,6 @@ impl CcBsSubentity {
             duplex,
             brew_uuid
         );
-
-        // Downlink audio from the backend, MS uplink forwarded to it.
-        Self::signal_umac_circuit_open(queue, ts, circuit.usage_id, None, CircuitDlMediaSource::Network);
 
         Self::signal_brew(queue, CmceEvent::SetupAccept { call_id });
 
@@ -1136,15 +1066,19 @@ impl CcBsSubentity {
                 return;
             }
         };
-        let Some(call) = self.live_individual_circuit(pdu.call_identifier) else {
+        let Some(call) = self.circuits.live_individual_circuit(pdu.call_identifier) else {
             tracing::warn!("U-ALERT for unknown individual call_id={}", pdu.call_identifier);
             return;
         };
-        if !call.is_setup() || !call.hook_on_off {
+        if !call.is_alerting() || call.has_alerted || !call.hook_on_off {
             tracing::warn!("U-ALERT ignored for call_id={} in state {:?}", call.call_id, call.state);
             return;
         }
-        self.circuits.set_state(pdu.call_identifier, CircuitState::Alerting(0));
+        // First alert: mark it and restart the no-answer timer.
+        self.circuits.update_circuit(pdu.call_identifier, |c| {
+            c.has_alerted = true;
+            c.state = CircuitState::Alerting { age: 0 };
+        });
 
         // Terminated call: the on-air party is the called MS, so relay alerting to the backend.
         if call.is_mobile_terminated {
@@ -1154,9 +1088,9 @@ impl CcBsSubentity {
 
         // ETSI 14.5.1.1.1: the called party offers simplex when it cannot do the duplex call.
         if !pdu.simplex_duplex_selection {
-            self.downgrade_individual_to_simplex(queue, pdu.call_identifier);
+            self.downgrade_individual_to_simplex(pdu.call_identifier);
         }
-        let call = self.live_individual_circuit(pdu.call_identifier).unwrap();
+        let call = self.circuits.live_individual_circuit(pdu.call_identifier).unwrap();
 
         // D-ALERT to caller. The old hook field is now Reserved and shall be 1 (ETSI Table 14.4).
         let d_alert = DAlert {
@@ -1190,9 +1124,9 @@ impl CcBsSubentity {
         };
         // ETSI 14.5.1.1.1: the called party offers simplex when it cannot do the duplex call.
         if !pdu.simplex_duplex_selection {
-            self.downgrade_individual_to_simplex(queue, pdu.call_identifier);
+            self.downgrade_individual_to_simplex(pdu.call_identifier);
         }
-        let Some(call) = self.live_individual_circuit(pdu.call_identifier) else {
+        let Some(call) = self.circuits.live_individual_circuit(pdu.call_identifier) else {
             tracing::warn!("U-CONNECT for unknown individual call_id={}", pdu.call_identifier);
             return;
         };
@@ -1200,7 +1134,7 @@ impl CcBsSubentity {
             tracing::warn!("U-CONNECT for already-active call_id={}, ignoring", pdu.call_identifier);
             return;
         }
-        self.circuits.set_state(pdu.call_identifier, CircuitState::Tx(0));
+        self.circuits.set_state(pdu.call_identifier, CircuitState::new_tx());
 
         // Terminated call: through-connect the MS and relay the answer to the backend. The MS
         // may have offered simplex if it could not do the requested duplex (ETSI 14.5.1.1.1).
@@ -1208,11 +1142,11 @@ impl CcBsSubentity {
             self.circuits.update_circuit(pdu.call_identifier, |c| {
                 c.is_duplex &= pdu.simplex_duplex_selection;
             });
-            let call = self.live_individual_circuit(pdu.call_identifier).unwrap();
+            let call = self.circuits.live_individual_circuit(pdu.call_identifier).unwrap();
             self.connect_terminated(queue, &call);
             return;
         }
-        let call = self.live_individual_circuit(pdu.call_identifier).unwrap();
+        let call = self.circuits.live_individual_circuit(pdu.call_identifier).unwrap();
 
         let caller_has_floor = call.floor == Some(call.caller);
 
@@ -1288,23 +1222,8 @@ impl CcBsSubentity {
             None,
         ));
 
-        // Put the timeslot in traffic mode for the initial floor holder so its uplink
-        // voice is looped to the peer on the downlink.
-        if let Some(holder) = call.floor {
-            let peer = if holder == call.caller { call.callee } else { call.caller };
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                    call_id: call.call_id,
-                    source_issi: holder,
-                    dest_gssi: peer,
-                    ts: call.ul_ts(),
-                }),
-            });
-        }
-
+        // UMAC derives the traffic mode and the uplink expectation for the initial floor
+        // holder from the circuit state, so nothing more to signal here.
         tracing::info!("individual call_id={} active", call.call_id);
     }
 
@@ -1358,7 +1277,7 @@ impl CcBsSubentity {
             priority: 0,
             service: 0,
             mode: 0,
-            duplex: call.is_duplex as u8,
+            is_duplex: call.is_duplex as u8,
             method: call.hook_on_off as u8,
             communication: 0,
             grant: TransmissionGrant::Granted.into_raw() as u8,
@@ -1373,25 +1292,20 @@ impl CcBsSubentity {
     }
 
     /// ETSI 14.5.1.1.1: a called MS that cannot do the requested duplex call offers simplex in
-    /// its U-ALERT or U-CONNECT. Honor it by collapsing the call onto the caller's slot, closing
-    /// the second traffic channel, and dropping the duplex cross-route so it runs as simplex.
-    fn downgrade_individual_to_simplex(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+    /// its U-ALERT or U-CONNECT. Honor it by collapsing the call onto the caller's slot and
+    /// dropping the duplex cross-route so it runs as simplex; UMAC picks the new routing up
+    /// from the shared circuit state.
+    fn downgrade_individual_to_simplex(&mut self, call_id: u16) {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
-        let caller_ts = call.ul_ts();
-        let caller_usage = call.usage_id;
         let Some(second_ts) = self.circuits.downgrade_duplex_to_simplex(call_id) else {
             return;
         };
         // Hook call: the answering called party transmits first (ETSI 14.5.1.2.1 a).
         self.circuits.set_floor(call_id, Some(call.callee));
 
-        Self::signal_umac_circuit_close(queue, second_ts);
         self.circuits.release_timeslot(second_ts);
-
-        // Re-open the caller slot as a shared simplex channel without the duplex peer route.
-        Self::signal_umac_circuit_open(queue, caller_ts, caller_usage, None, CircuitDlMediaSource::LocalLoopback);
         tracing::info!("individual call_id={} downgraded to simplex, called offered simplex", call_id);
     }
 
@@ -1405,7 +1319,7 @@ impl CcBsSubentity {
     /// call the called leg is the backend, so it gets no D-RELEASE; instead Brew is notified
     /// when notify_brew is set (false when the release originated from Brew).
     fn release_individual_call_inner(&mut self, queue: &mut MessageQueue, call_id: u16, cause: DisconnectCause, notify_brew: bool) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
         // Once active both parties are on the traffic channel, so steal the D-RELEASE onto
@@ -1450,40 +1364,14 @@ impl CcBsSubentity {
 
         // Defer teardown so the stolen D-RELEASE goes out. finalize_release only emits Brew
         // group notifications for group circuits, so an individual call stays inert there.
-        self.circuits.set_state(call_id, CircuitState::Releasing(0));
-    }
-
-    /// Release individual calls that pass their setup/no-answer or call-length timeout.
-    fn process_individual_timeouts(&mut self, queue: &mut MessageQueue) {
-        // ETSI 14.6: T303 calling set-up timer 60 s, T310 call length min 30 s.
-        // Values in timeslots, since TdmaTime ages in timeslots (~14 ms each).
-        const SETUP_TIMEOUT_TS: i32 = 4235; // ~60 s
-        const ACTIVE_TIMEOUT_TS: i32 = 21176; // ~300 s
-
-        let now = self.dltime;
-        let expired: Vec<u16> = self
-            .circuits
-            .find_circuits(|c| {
-                if !c.is_individual_call() || c.is_releasing() {
-                    return false;
-                }
-                let limit = if c.is_tx() { ACTIVE_TIMEOUT_TS } else { SETUP_TIMEOUT_TS };
-                c.t_state.age(now) >= limit
-            })
-            .into_iter()
-            .map(|c| c.call_id)
-            .collect();
-        for id in expired {
-            tracing::info!("individual call_id={} timed out, releasing", id);
-            self.release_individual_call(queue, id, DisconnectCause::ExpiryOfTimer);
-        }
+        self.circuits.begin_release(call_id);
     }
 
     /// Floor holder of a simplex individual call released. Send D-TX CEASED to the on-air
-    /// parties and put the timeslot into hangtime. ETSI 14.5.1.2. An over-Brew call has only
-    /// the local caller on air, so the backend leg gets no D-TX CEASED.
+    /// parties; the freed floor puts the timeslot into hangtime. ETSI 14.5.1.2. An over-Brew
+    /// call has only the local caller on air, so the backend leg gets no D-TX CEASED.
     fn individual_tx_ceased(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(call) = self.live_individual_circuit(call_id) else {
+        let Some(call) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
         let ts = call.ul_ts();
@@ -1509,19 +1397,13 @@ impl CcBsSubentity {
             queue.push_back(Self::build_sapmsg_stealing(sdu, addr, ts));
         }
 
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-        });
         tracing::info!("individual call_id={} floor released", call_id);
     }
 
     /// A party of a simplex individual call requests the floor. Grant it if free, send
     /// D-TX GRANTED to the requester and the peer, and resume traffic. ETSI 14.5.1.2.
     fn individual_tx_demand(&mut self, queue: &mut MessageQueue, call_id: u16, requester: u32) {
-        let Some(circuit) = self.live_individual_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_individual_circuit(call_id) else {
             return;
         };
         if requester != circuit.caller && requester != circuit.callee {
@@ -1556,17 +1438,6 @@ impl CcBsSubentity {
             self.send_individual_tx_granted(queue, call_id, requester, peer, TransmissionGrant::GrantedToOtherUser, ts);
         }
 
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                call_id,
-                source_issi: requester,
-                dest_gssi: peer.ssi,
-                ts,
-            }),
-        });
         tracing::info!("individual call_id={} floor granted to ISSI {}", call_id, requester);
     }
 
@@ -1638,123 +1509,97 @@ impl CcBsSubentity {
     pub fn tick_start(&mut self, queue: &mut MessageQueue, dltime: TdmaTime) {
         self.dltime = dltime;
 
-        // Check hangtime expiry for active local calls
-        self.check_hangtime_expiry(queue);
+        // The circuit manager runs the call timers and the D-SETUP schedule; this only turns
+        // its commands into PDUs and signals.
+        let Some(tasks) = self.circuits.tick_start(dltime) else {
+            return;
+        };
+        for task in tasks {
+            match task {
+                CircuitMgrCmd::HangtimeExpired(call_id) => {
+                    tracing::info!("Hangtime expired for call_id={}, releasing", call_id);
+                    self.release_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
+                }
 
-        // Drive deferred D-RELEASE teardown
-        self.process_releasing_calls(queue);
+                CircuitMgrCmd::FinalizeRelease(call_id) => {
+                    self.finalize_release(queue, call_id);
+                }
 
-        // Release individual calls that pass their setup or call-length timeout
-        self.process_individual_timeouts(queue);
+                CircuitMgrCmd::IndividualTimeout(call_id) => {
+                    tracing::info!("individual call_id={} timed out, releasing", call_id);
+                    self.release_individual_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
+                }
 
-        if let Some(tasks) = self.circuits.tick_start(dltime) {
-            for task in tasks {
-                match task {
-                    CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
-                        // Skip late-entry D-SETUP during hangtime. The traffic channel is still
-                        // allocated and sending D-SETUP with NotGranted can prevent floor requests.
-                        let Some(group_circuit) = self.live_group_circuit(call_id) else {
-                            continue;
-                        };
-                        if group_circuit.is_tx_ceased() {
-                            continue;
+                CircuitMgrCmd::SendDSetup(call_id, usage, ts) => {
+                    // The schedule already gated on liveness, receipts and hangtime; the
+                    // circuit is only read back for the current transmission grant.
+                    let Some(group_circuit) = self.circuits.live_group_circuit(call_id) else {
+                        continue;
+                    };
+
+                    // Get our cached D-SETUP, build a prim and send it down the stack
+                    let Some(cached) = self.circuits.get_setup_mut(call_id) else {
+                        tracing::error!("No cached D-SETUP for call id {}", call_id);
+                        continue;
+                    };
+
+                    // Update transmission_grant based on current call state.
+                    cached.pdu.transmission_grant = if group_circuit.is_tx() {
+                        TransmissionGrant::GrantedToOtherUser
+                    } else {
+                        TransmissionGrant::NotGranted
+                    };
+                    let dest_addr = cached.dest_addr;
+                    let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
+
+                    // The receipt drives the schedule: the next D-SETUP waits until this one
+                    // is confirmed sent or lost.
+                    let reporter = TxReporter::new_unacked();
+                    self.circuits.record_setup_send(call_id, reporter.clone());
+
+                    let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, Some(reporter));
+                    queue.push_back(prim);
+                }
+
+                CircuitMgrCmd::SendClose(call_id) => {
+                    tracing::warn!("need to send CLOSE for call id {}", call_id);
+                    // Get our cached D-SETUP, build D-RELEASE and send
+                    match self.circuits.get_setup(call_id) {
+                        Some(cached) => {
+                            let dest_addr = cached.dest_addr;
+                            let sdu = Self::build_d_release_from_d_setup(&cached.pdu, DisconnectCause::ExpiryOfTimer);
+                            let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
+                            queue.push_back(prim);
                         }
-
-                        // Get our cached D-SETUP, build a prim and send it down the stack
-                        let Some(cached) = self.circuits.get_setup_mut(call_id) else {
-                            tracing::error!("No cached D-SETUP for call id {}", call_id);
-                            continue;
-                        };
-
-                        // Throttle: if the previous D-SETUP hasn't reached a final state yet
-                        // (still queued in UMAC), skip this re-send to avoid flooding the MCCH.
-                        if let Some(r) = cached.receipt.as_ref() {
-                            if !r.is_in_final_state() {
-                                tracing::trace!(
-                                    "Suppressing D-SETUP re-send for call_id={} (previous still {:?})",
-                                    call_id,
-                                    r.get_state()
-                                );
-                                continue;
-                            }
-                            if r.get_state() == TxState::Discarded {
-                                tracing::debug!("Previous D-SETUP for call_id={} was discarded by UMAC, retrying", call_id);
-                            }
-                        }
-
-                        // Update transmission_grant based on current call state:
-                        // During hangtime (nobody transmitting), use NotGranted;
-                        // during active TX, use GrantedToOtherUser.
-                        cached.pdu.transmission_grant = if group_circuit.is_tx() {
-                            TransmissionGrant::GrantedToOtherUser
-                        } else {
-                            TransmissionGrant::NotGranted
-                        };
-                        let dest_addr = cached.dest_addr;
-                        let (sdu, chan_alloc) = Self::build_d_setup_prim(&cached.pdu, usage, ts, UlDlAssignment::Both);
-
-                        // Create a fresh txreporter for this re-send
-                        let reporter = TxReporter::new_unacked();
-
-                        // Cache the reporter so we can check its state on the next tick and
-                        // throttle if it is still pending in UMAC.
-                        cached.receipt = Some(reporter.clone());
-
-                        let prim = Self::build_sapmsg(sdu, Some(chan_alloc), dest_addr, Layer2Service::Unacknowledged, Some(reporter));
-                        queue.push_back(prim);
+                        None => tracing::error!("No cached D-SETUP for call id {}", call_id),
                     }
 
-                    CircuitMgrCmd::SendClose(call_id, ts) => {
-                        tracing::warn!("need to send CLOSE for call id {}", call_id);
-                        // Get our cached D-SETUP, build D-RELEASE and send
-                        match self.circuits.get_setup(call_id) {
-                            Some(cached) => {
-                                let dest_addr = cached.dest_addr;
-                                let sdu = Self::build_d_release_from_d_setup(&cached.pdu, DisconnectCause::ExpiryOfTimer);
-                                let prim = Self::build_sapmsg(sdu, None, dest_addr, Layer2Service::Unacknowledged, None);
-                                queue.push_back(prim);
-                            }
-                            None => tracing::error!("No cached D-SETUP for call id {}", call_id),
-                        }
+                    // Clean up call state, which also drops the cached setup and frees the slot
+                    self.circuits.begin_release(call_id);
+                    self.circuits.destroy_circuit(call_id);
+                }
 
-                        // Clean up call state, which also drops the cached setup and frees the slot
-                        self.circuits.set_state(call_id, CircuitState::Releasing(0));
-                        self.circuits.destroy_circuit(call_id);
-
-                        // Signal UMAC to release the circuit
-                        Self::signal_umac_circuit_close(queue, ts);
+                CircuitMgrCmd::UlInactive(call_id) => {
+                    // The talker vanished mid-transmission: treat like a U-TX CEASED.
+                    if self.is_individual_call_id(call_id) {
+                        tracing::warn!("UL inactivity: releasing floor for individual call_id={}", call_id);
+                        self.individual_tx_ceased(queue, call_id);
+                    } else {
+                        tracing::warn!("UL inactivity: forcing TX ceased for group call_id={}", call_id);
+                        self.group_tx_ceased(queue, call_id);
                     }
                 }
             }
         }
     }
 
-    /// Check if any active calls in hangtime have expired, and if so, release them
-    fn check_hangtime_expiry(&mut self, queue: &mut MessageQueue) {
-        // Hangtime: 5 multiframes = ~5 seconds
-        const HANGTIME_FRAMES: i32 = 5 * 18 * 4;
-
-        let now = self.dltime;
-        let expired: Vec<u16> = self
-            .circuits
-            .find_circuits(|c| c.is_group_call() && c.is_tx_ceased() && c.t_state.age(now) > HANGTIME_FRAMES)
-            .into_iter()
-            .map(|c| c.call_id)
-            .collect();
-
-        for call_id in expired {
-            tracing::info!("Hangtime expired for call_id={}, releasing", call_id);
-            self.release_call(queue, call_id, DisconnectCause::ExpiryOfTimer);
-        }
-    }
-
     /// Release a group call. Moves it to Releasing immediately so it cannot be re-keyed or
-    /// reused, steals one D-RELEASE onto the traffic channel, and leaves the teardown to
-    /// process_releasing_calls. The circuit and timeslot stay allocated until then, which lets
-    /// the stolen D-RELEASE transmit before the slot leaves traffic mode. With no cached
-    /// D-SETUP there is no D-RELEASE to send, so it tears down at once.
+    /// reused, steals one D-RELEASE onto the traffic channel, and leaves the teardown to the
+    /// circuit manager's FinalizeRelease command. The circuit and timeslot stay allocated
+    /// until then, which lets the stolen D-RELEASE transmit before the slot leaves traffic
+    /// mode. With no cached D-SETUP there is no D-RELEASE to send, so it tears down at once.
     fn release_call(&mut self, queue: &mut MessageQueue, call_id: u16, disconnect_cause: DisconnectCause) {
-        let Some(call) = self.live_group_circuit(call_id) else {
+        let Some(call) = self.circuits.live_group_circuit(call_id) else {
             return;
         };
         let ts = call.dl_ts();
@@ -1763,33 +1608,13 @@ impl CcBsSubentity {
             Some(cached) => {
                 let sdu = Self::build_d_release_from_d_setup(&cached.pdu, disconnect_cause);
                 queue.push_back(Self::build_sapmsg_stealing(sdu, cached.dest_addr, ts));
-                self.circuits.set_state(call_id, CircuitState::Releasing(0));
+                self.circuits.begin_release(call_id);
             }
             None => {
                 tracing::warn!("No cached D-SETUP for call_id={}, cleaning up without D-RELEASE", call_id);
-                self.circuits.set_state(call_id, CircuitState::Releasing(0));
+                self.circuits.begin_release(call_id);
                 self.finalize_release(queue, call_id);
             }
-        }
-    }
-
-    /// Close a releasing call's circuit once enough frames have passed since the D-RELEASE
-    /// was stolen for it to transmit. Driven once per tick.
-    fn process_releasing_calls(&mut self, queue: &mut MessageQueue) {
-        // Two TDMA frames: the stolen D-RELEASE drains over the next frame while the slot
-        // is still in traffic mode, then teardown one frame later.
-        const CLOSE_AFTER_SEND_TS: i32 = 8;
-
-        let now = self.dltime;
-        let ready: Vec<u16> = self
-            .circuits
-            .find_circuits(|c| c.is_releasing() && c.t_state.age(now) >= CLOSE_AFTER_SEND_TS)
-            .into_iter()
-            .map(|c| c.call_id)
-            .collect();
-
-        for call_id in ready {
-            self.finalize_release(queue, call_id);
         }
     }
 
@@ -1799,7 +1624,6 @@ impl CcBsSubentity {
             tracing::warn!("finalize_release for unknown call_id={}", call_id);
             return;
         };
-        let ts = call.dl_ts();
         // Tell Brew the transmission is over, if a Brew session we opened is attached to this
         // call. A session opened for a local speaker has to be idled towards the backend; a
         // network-owned one is ended by the backend itself, so Brew only drops its local state
@@ -1812,29 +1636,9 @@ impl CcBsSubentity {
             self.put_closing_session(call_id, uuid);
         }
 
-        // A local duplex call also frees its second slot (over-Brew uses one slot).
-        if let Some(peer_ts) = call.peer_ts() {
-            Self::signal_umac_circuit_close(queue, peer_ts);
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts: peer_ts }),
-            });
-        }
-
-        Self::signal_umac_circuit_close(queue, ts);
-
-        // Ensure UMAC clears hangtime even if the CMCE circuit was already closed above.
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::CallEnded { call_id, ts }),
-        });
-
         // The call is fully gone at this point: drop it from the global circuit view, which
-        // also frees its timeslot(s) and any cached D-SETUP.
+        // also frees its timeslot(s) and any cached D-SETUP. UMAC notices the vacated slots
+        // through the shared state.
         self.circuits.destroy_circuit(call_id);
 
         if closing_session.is_some() {
@@ -1850,18 +1654,17 @@ impl CcBsSubentity {
             supported = false;
         };
         if pdu.hook_method_selection == true {
-            unimplemented_log!("Hook method selection not supported: {}", pdu.hook_method_selection);
+            unimplemented_log!("Hook method selection not fully supported: {}", pdu.hook_method_selection);
+            //     supported = false;
+        };
+        if !matches!(
+            pdu.basic_service_information.communication_type,
+            CommunicationType::P2mp | CommunicationType::P2p
+        ) {
+            unimplemented_log!("Only individual or group calls supported");
             supported = false;
         };
-        if pdu.simplex_duplex_selection != false {
-            unimplemented_log!("Only simplex calls supported: {}", pdu.simplex_duplex_selection);
-            supported = false;
-        };
-        // if pdu.basic_service_information != 0xFC {
-        //     // TODO FIXME implement parsing
-        //     tracing::error!("Basic service information not supported: {}", pdu.basic_service_information);
-        //     return;
-        // };
+
         // request_to_transmit_send_data can be false for speech group calls — the MS
         // implicitly requests to transmit by initiating the call. No action needed.
         if pdu.clir_control != 0 {
@@ -1917,7 +1720,7 @@ impl CcBsSubentity {
         }
 
         // Look up the group call in the global circuit view
-        let Some(circuit) = self.live_group_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_group_circuit(call_id) else {
             tracing::warn!("U-TX CEASED for unknown call_id={}", call_id);
             return;
         };
@@ -1931,7 +1734,7 @@ impl CcBsSubentity {
         tracing::info!("U-TX CEASED: PTT released on call_id={}, entering hangtime", call_id);
 
         let ts = circuit.dl_ts();
-        self.circuits.set_state(call_id, CircuitState::TxCeased(0));
+        self.circuits.set_state(call_id, CircuitState::TxCeased { age: 0 });
 
         // Get dest address from cached setup
         let Some(cached) = self.circuits.get_setup(call_id) else {
@@ -1958,14 +1761,6 @@ impl CcBsSubentity {
         // Send via FACCH (stealing channel) so radios on the traffic channel hear the beep
         let msg = Self::build_sapmsg_stealing(sdu, dest_addr, ts);
         queue.push_back(msg);
-
-        // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-        });
 
         // Notify Brew to stop forwarding audio. Only a session Brew opened for this call has
         // a uuid on the circuit, so no further routing check is needed.
@@ -2004,7 +1799,7 @@ impl CcBsSubentity {
             return;
         }
 
-        let Some(circuit) = self.live_group_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_group_circuit(call_id) else {
             tracing::warn!("U-TX DEMAND for unknown call_id={}", call_id);
             return;
         };
@@ -2026,7 +1821,7 @@ impl CcBsSubentity {
         // Grant the floor to the requesting MS. A local-origin call also transfers ownership
         // to the new talker, matching the legacy caller_addr update.
         let ts = circuit.dl_ts();
-        self.circuits.set_state(call_id, CircuitState::Tx(0));
+        self.circuits.set_state(call_id, CircuitState::new_tx());
         self.circuits.update_circuit(call_id, |c| {
             c.floor = Some(requesting_party.ssi);
             if c.is_local_origin {
@@ -2068,19 +1863,6 @@ impl CcBsSubentity {
 
         // ETSI 14.5.2.2.1 b): Send group D-TX GRANTED (GrantedToOtherUser) to GSSI
         self.send_d_tx_granted_facch(queue, call_id, requesting_party.ssi, dest_addr.ssi, ts);
-
-        // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                call_id,
-                source_issi: requesting_party.ssi,
-                dest_gssi: dest_addr.ssi,
-                ts,
-            }),
-        });
 
         // Notify Brew of speaker change (local MS taking floor)
         if net_brew::is_brew_gssi_routable(&self.config, dest_addr.ssi) {
@@ -2148,7 +1930,7 @@ impl CcBsSubentity {
             return;
         }
 
-        let Some(circuit) = self.live_group_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_group_circuit(call_id) else {
             tracing::debug!("U-DISCONNECT for unknown call_id={} (likely duplicate)", call_id);
             return;
         };
@@ -2205,22 +1987,6 @@ impl CcBsSubentity {
                 }),
             };
             queue.push_back(msg);
-        }
-    }
-
-    /// Handle CallControl messages from UMAC
-    pub fn rx_call_control(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        let SapMsgInner::CmceCallControl(call_control) = message.msg else {
-            panic!("Expected CmceCallControl message");
-        };
-
-        match call_control {
-            CallControl::UlInactivityTimeout { ts } => {
-                self.handle_ul_inactivity_timeout(queue, ts);
-            }
-            _ => {
-                tracing::warn!("Unexpected CallControl message: {:?}", call_control);
-            }
         }
     }
 
@@ -2292,7 +2058,7 @@ impl CcBsSubentity {
         }
 
         // Check if there is an active call for this GSSI (speaker change scenario)
-        if let Some(circuit) = self.find_live_circuit(|c| c.is_group_call() && c.callee == dest_gssi) {
+        if let Some(circuit) = self.circuits.find_live_circuit(|c| c.is_group_call() && c.callee == dest_gssi) {
             // Reject speaker change if a local MS is already transmitting
             if circuit.is_tx() {
                 tracing::warn!(
@@ -2316,7 +2082,7 @@ impl CcBsSubentity {
 
             // The backend issues a fresh UUID for each speaker, so re-point the media routes
             // at the new session: downlink is local plus the Brew peer, uplink comes from it.
-            self.circuits.set_state(call_id_val, CircuitState::Tx(0));
+            self.circuits.set_state(call_id_val, CircuitState::new_tx());
             self.circuits.update_circuit(call_id_val, |c| {
                 c.floor = Some(source_issi);
                 c.dl1_source = CircuitStreamDest::LocalAndRemote(Some(ts), Some(brew_uuid));
@@ -2329,19 +2095,6 @@ impl CcBsSubentity {
             // Send D-TX GRANTED via FACCH to notify radios of new speaker
             self.send_d_tx_granted_facch(queue, call_id_val, source_issi, dest_gssi, ts);
 
-            // Notify UMAC to resume traffic mode (exit hangtime) for this timeslot.
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                msg: SapMsgInner::CmceCallControl(CallControl::FloorGranted {
-                    call_id: call_id_val,
-                    source_issi,
-                    dest_gssi,
-                    ts,
-                }),
-            });
-
             // Nothing to answer Brew: the circuit now carries the new session, which is all
             // Brew needs to play the backend audio out on this call.
             return;
@@ -2351,8 +2104,8 @@ impl CcBsSubentity {
         let Some(call_id) = self.circuits.allocate_circuit(CircuitRequest {
             caller: 0,
             callee: dest_gssi,
-            comm_type: CommunicationType::P2Mp,
-            state: CircuitState::Tx(0),
+            comm_type: CommunicationType::P2mp,
+            state: CircuitState::new_tx(),
             is_duplex: false,
             second_channel: false,
             over_brew: true,
@@ -2360,7 +2113,6 @@ impl CcBsSubentity {
             is_local_origin: false,
             is_mobile_terminated: false,
             origin_brew_uuid: Some(brew_uuid),
-            caller_route: MleRoute::default(),
             floor: Some(source_issi),
         }) else {
             tracing::warn!("CMCE: failed to allocate circuit for network call: no free timeslot");
@@ -2382,9 +2134,6 @@ impl CcBsSubentity {
             call_id
         );
 
-        // Signal UMAC to open DL and UL circuits
-        Self::signal_umac_circuit_open(queue, ts, usage, None, CircuitDlMediaSource::LocalLoopback);
-
         tracing::debug!(
             "CMCE: sending D-SETUP for NEW call call_id={} gssi={} (network-initiated)",
             call_id,
@@ -2401,7 +2150,7 @@ impl CcBsSubentity {
             basic_service_information: BasicServiceInformation {
                 circuit_mode_type: CircuitModeType::TchS,
                 encryption_flag: false,
-                communication_type: CommunicationType::P2Mp,
+                communication_type: CommunicationType::P2mp,
                 slots_per_frame: None,
                 speech_service: Some(0),
             },
@@ -2423,7 +2172,17 @@ impl CcBsSubentity {
         let d_setup_ref = &self.circuits.get_setup(call_id).unwrap().pdu;
 
         let (setup_sdu, setup_chan_alloc) = Self::build_d_setup_prim(d_setup_ref, usage, ts, UlDlAssignment::Both);
-        let setup_msg = Self::build_sapmsg(setup_sdu, Some(setup_chan_alloc), dest_addr, Layer2Service::Unacknowledged, None);
+        // First of the initial D-SETUP transmissions; the retransmission schedule follows up
+        // once this one is confirmed sent.
+        let reporter = TxReporter::new_unacked();
+        self.circuits.record_setup_send(call_id, reporter.clone());
+        let setup_msg = Self::build_sapmsg(
+            setup_sdu,
+            Some(setup_chan_alloc),
+            dest_addr,
+            Layer2Service::Unacknowledged,
+            Some(reporter),
+        );
         queue.push_back(setup_msg);
 
         // Send D-CONNECT to group
@@ -2471,7 +2230,7 @@ impl CcBsSubentity {
 
     /// Handle network call end: the backend transmission feeding this call stopped.
     fn rx_network_call_end(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(circuit) = self.live_group_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_group_circuit(call_id) else {
             tracing::debug!("CMCE: network call end for unknown group call_id={}", call_id);
             return;
         };
@@ -2486,21 +2245,13 @@ impl CcBsSubentity {
         if tx_active {
             // The network speaker is gone: drop the Brew leg and put the slot back on local
             // media, so a local MS can take the floor during hangtime.
-            self.circuits.set_state(call_id, CircuitState::TxCeased(0));
+            self.circuits.set_state(call_id, CircuitState::TxCeased { age: 0 });
             self.circuits.update_circuit(call_id, |c| {
                 c.dl1_source = CircuitStreamDest::Local(Some(ts));
                 c.ul1_source = CircuitStreamSrc::Local(Some(ts));
             });
             // Send D-TX CEASED via FACCH
             self.send_d_tx_ceased_facch(queue, call_id, dest_gssi, ts);
-
-            // Notify UMAC to enter hangtime signalling mode on this traffic timeslot.
-            queue.push_back(SapMsg {
-                sap: Sap::Control,
-                src: TetraEntity::Cmce,
-                dest: TetraEntity::Umac,
-                msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-            });
         } else {
             // Already in hangtime or idle, release immediately
             self.release_call(queue, call_id, DisconnectCause::SwmiRequestedDisconnection);
@@ -2535,37 +2286,10 @@ impl CcBsSubentity {
         queue.push_back(msg);
     }
 
-    /// Handle UL inactivity timeout from UMAC: a radio disappeared mid-transmission.
-    /// Treat identically to rx_u_tx_ceased — force TX ceased, enter hangtime.
-    fn handle_ul_inactivity_timeout(&mut self, queue: &mut MessageQueue, ts: u8) {
-        // Individual call: the floor holder went silent. Release the floor and enter hangtime.
-        // Only for a connected call. During setup and alerting there is no floor on the air
-        // yet, so an inactivity timeout there is the ringing delay, not a silent talker. Ceasing
-        // then would clear the floor holder and leave the slot in hangtime at through-connect.
-        if let Some(id) = self
-            .find_live_circuit(|c| c.is_individual_call() && c.ul1_source.get_ts() == Some(ts) && c.is_tx() && c.floor.is_some())
-            .map(|c| c.call_id)
-        {
-            tracing::warn!("UL inactivity timeout on ts={}, releasing floor for individual call_id={}", ts, id);
-            self.individual_tx_ceased(queue, id);
-            return;
-        }
-
-        // Find the group call on this timeslot that is transmitting
-        let Some(circuit) = self.find_live_circuit(|c| c.is_group_call() && c.dl1_source.get_ts() == Some(ts) && c.is_tx()) else {
-            tracing::debug!("UL inactivity timeout on ts={} but no active transmitting call found", ts);
-            return;
-        };
-        let call_id = circuit.call_id;
-
-        tracing::warn!("UL inactivity timeout on ts={}, forcing TX ceased for call_id={}", ts, call_id);
-        self.group_tx_ceased(queue, call_id);
-    }
-
     /// The talker of a group call is gone: cease the transmission on air and put the timeslot
     /// into hangtime. The call stays up with a free floor for the next talker.
     fn group_tx_ceased(&mut self, queue: &mut MessageQueue, call_id: u16) {
-        let Some(circuit) = self.live_group_circuit(call_id) else {
+        let Some(circuit) = self.circuits.live_group_circuit(call_id) else {
             return;
         };
         let Some(ts) = circuit.dl1_source.get_ts() else {
@@ -2574,18 +2298,10 @@ impl CcBsSubentity {
         };
 
         self.circuits.set_floor(call_id, None);
-        self.circuits.set_state(call_id, CircuitState::TxCeased(0));
+        self.circuits.set_state(call_id, CircuitState::TxCeased { age: 0 });
 
         // Send D-TX CEASED via FACCH to all group members
         self.send_d_tx_ceased_facch(queue, call_id, circuit.callee, ts);
-
-        // Notify UMAC to enter hangtime signalling mode
-        queue.push_back(SapMsg {
-            sap: Sap::Control,
-            src: TetraEntity::Cmce,
-            dest: TetraEntity::Umac,
-            msg: SapMsgInner::CmceCallControl(CallControl::FloorReleased { call_id, ts }),
-        });
 
         // Notify Brew to stop forwarding audio
         if circuit.brew_uuid().is_some() {

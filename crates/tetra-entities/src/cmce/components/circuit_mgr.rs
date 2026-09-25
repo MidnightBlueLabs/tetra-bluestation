@@ -1,35 +1,49 @@
 use std::collections::HashMap;
 
-use tetra_config::bluestation::{CircuitState, CircuitStreamDest, CircuitStreamSrc, MleRoute, StackState, TetraCircuit};
-use tetra_core::{TdmaTime, TetraAddress, TimeslotOwner, TxReporter, frames, multiframes};
+use tetra_config::bluestation::{CircuitState, CircuitStreamDest, CircuitStreamSrc, StackState, TetraCircuit};
+use tetra_core::{TdmaTime, TetraAddress, TimeslotOwner, TxReporter};
 use tetra_pdus::cmce::pdus::d_setup::DSetup;
 use tetra_pdus::cmce::structs::cmce_circuit::CallId;
 use tetra_saps::control::enums::communication_type::CommunicationType;
 
-/// D-SETUP is sent once more within this many frames of circuit creation, as the back-up
-/// transmission of ETSI Annex D Figure D.2.
-const D_SETUP_REPEATS: i32 = 1;
-/// Late entry D-SETUP interval for group calls, so a radio that missed the start can join.
-const LATE_ENTRY_INTERVAL_TIMESLOTS: i32 = multiframes!(5);
 /// Absolute circuit lifetime safety net, beyond the 5-minute call timeout T5m. Live calls
 /// are normally torn down much earlier by the hangtime and release logic.
 const CIRCUIT_EXPIRY_TIMESLOTS: i32 = 6 * 60 * 18 * 4; // 6 minutes
+/// Group call hangtime: 5 multiframes ≈ 5 s of free floor before the call is released.
+const HANGTIME_TIMESLOTS: u32 = 5 * 18 * 4;
+/// Timeslots between the start of a release and teardown: the stolen D-RELEASE drains over
+/// the next frame while the slot is still in its previous mode, then teardown a frame later.
+const CLOSE_AFTER_RELEASE_TIMESLOTS: u32 = 8;
+/// ETSI 14.6: T303 calling set-up timer 60 s. In timeslots (~14 ms each).
+const SETUP_TIMEOUT_TIMESLOTS: u32 = 4235; // ~60 s
+/// ETSI 14.6: call length timer T310. In timeslots (~14 ms each).
+const ACTIVE_TIMEOUT_TIMESLOTS: u32 = 21176; // ~300 s
+/// Uplink silence after which a talker counts as stuck or gone.
+/// 3 multiframes ~ 3 s, above T.213 (1 s) to tolerate DTX and brief RF fading.
+const UL_INACTIVITY_TIMESLOTS: u32 = 3 * 18 * 4;
 
 /// Work the circuit manager wants CMCE to carry out on this tick.
 pub enum CircuitMgrCmd {
-    /// Repeat the cached D-SETUP for a group call. Call id, usage marker, timeslot.
+    /// Send (or repeat) the cached D-SETUP of a group call. Call id, usage marker, timeslot.
     SendDSetup(CallId, u8, u8),
-    /// Circuit exceeded its absolute lifetime. Call id, timeslot.
-    SendClose(CallId, u8),
+    /// Circuit exceeded its absolute lifetime.
+    SendClose(CallId),
+    /// Group call spent its hangtime without a new talker and should be released.
+    HangtimeExpired(CallId),
+    /// Releasing circuit's D-RELEASE had time to transmit; tear the circuit down.
+    FinalizeRelease(CallId),
+    /// Individual call passed its setup/no-answer or call-length timeout.
+    IndividualTimeout(CallId),
+    /// The talker went silent mid-transmission; cease its transmission.
+    UlInactive(CallId),
 }
 
 /// The D-SETUP of a group call, kept so it can be repeated for late entry and turned into a
-/// D-RELEASE at teardown. Holds the PDU itself and the transmit receipt of the last re-send,
-/// which throttles the next one, so it stays out of the shared circuit view.
+/// D-RELEASE at teardown. The transmission accounting that throttles re-sends lives on the
+/// circuit itself (`SetupRetransmissions`).
 pub struct CachedSetup {
     pub pdu: DSetup,
     pub dest_addr: TetraAddress,
-    pub receipt: Option<TxReporter>,
 }
 
 /// Everything needed to open, change and close a circuit. The timeslots, call id and usage
@@ -52,7 +66,6 @@ pub struct CircuitRequest {
     pub is_local_origin: bool,
     pub is_mobile_terminated: bool,
     pub origin_brew_uuid: Option<uuid::Uuid>,
-    pub caller_route: MleRoute,
     /// ISSI that starts out holding the floor, if any.
     pub floor: Option<u32>,
 }
@@ -97,6 +110,38 @@ impl CircuitMgr {
         self.state.with_circuits(|x| x.get_circuit_by_callid(call_id).cloned())
     }
 
+    /// Snapshot of a live circuit by call id. A circuit in `Releasing` is not live, so a call
+    /// already being torn down can never be re-keyed, reused or answered.
+    pub fn live_circuit(&self, call_id: CallId) -> Option<TetraCircuit> {
+        self.state.with_circuits(|x| x.live_circuit(call_id).cloned())
+    }
+
+    /// Snapshot of the first live circuit matching the predicate.
+    pub fn find_live_circuit<F>(&self, pred: F) -> Option<TetraCircuit>
+    where
+        F: Fn(&TetraCircuit) -> bool,
+    {
+        self.state.with_circuits(|x| x.find_live_circuit(pred).cloned())
+    }
+
+    /// True if any live circuit matches the predicate.
+    pub fn any_live_circuit<F>(&self, pred: F) -> bool
+    where
+        F: Fn(&TetraCircuit) -> bool,
+    {
+        self.state.with_circuits(|x| x.any_live_circuit(pred))
+    }
+
+    /// Snapshot of a live individual (point-to-point) call.
+    pub fn live_individual_circuit(&self, call_id: CallId) -> Option<TetraCircuit> {
+        self.state.with_circuits(|x| x.live_individual_circuit(call_id).cloned())
+    }
+
+    /// Snapshot of a live group call.
+    pub fn live_group_circuit(&self, call_id: CallId) -> Option<TetraCircuit> {
+        self.state.with_circuits(|x| x.live_group_circuit(call_id).cloned())
+    }
+
     /// Returns a clone of the first circuit matching the predicate.
     pub fn find_circuit<F>(&self, pred: F) -> Option<TetraCircuit>
     where
@@ -134,33 +179,40 @@ impl CircuitMgr {
         updated
     }
 
-    /// Moves a circuit to a new state and restarts its state timer.
+    /// Moves a circuit to a new state, which restarts its time-in-state counter.
     pub fn set_state(&self, call_id: CallId, state: CircuitState) {
-        let now = self.dltime;
         self.update_circuit(call_id, |c| {
             c.state = state;
-            c.t_state = now;
         });
     }
 
-    /// Sets the floor holder of a circuit.
+    /// Starts the teardown of a circuit. The channel mode it was in (traffic or hangtime
+    /// signalling) is frozen so the stolen D-RELEASE goes out the way the slot was running.
+    pub fn begin_release(&self, call_id: CallId) {
+        self.update_circuit(call_id, |c| {
+            c.hangtime_at_release = c.in_hangtime();
+            c.state = CircuitState::Releasing { age: 0 };
+        });
+    }
+
+    /// Sets the floor holder of a circuit. A grant restarts the uplink inactivity timer.
     pub fn set_floor(&self, call_id: CallId, floor: Option<u32>) {
-        self.update_circuit(call_id, |c| c.floor = floor);
+        let updated = self.state.with_circuits(|c| c.set_circuit_floor(call_id, floor));
+        if !updated {
+            tracing::warn!("CircuitMgr: set_floor for unknown call_id {}", call_id);
+        }
+    }
+
+    /// Records a D-SETUP handed to the MAC, so the retransmission schedule waits for its
+    /// receipt before the next send.
+    pub fn record_setup_send(&self, call_id: CallId, receipt: TxReporter) {
+        self.state.with_circuits(|c| c.record_dsetup_send(call_id, receipt));
     }
 
     /// Caches the D-SETUP of a group call for late-entry re-sends and teardown.
     /// Can also be used to update pre-existing cached D-SETUP
     pub fn cache_setup(&mut self, call_id: CallId, pdu: DSetup, dest_addr: TetraAddress) {
-        self.cached_setups.insert(
-            call_id,
-            CachedSetup {
-                pdu,
-                dest_addr,
-                // Starts as None so the back-up send triggered on the next tick is not
-                // throttled by this initial transmission.
-                receipt: None,
-            },
-        );
+        self.cached_setups.insert(call_id, CachedSetup { pdu, dest_addr });
     }
 
     pub fn get_setup(&self, call_id: CallId) -> Option<&CachedSetup> {
@@ -219,13 +271,6 @@ impl CircuitMgr {
         }
     }
 
-    //     self.next_usage_id = candidate + 1;
-    //     if self.next_usage_id > 63 {
-    //         self.next_usage_id = 4;
-    //     }
-    //     candidate as u8
-    // }
-
     /// Opens a circuit and reserves its traffic timeslot(s). Returns the call id, or None when
     /// no timeslot is free, in which case nothing has been reserved.
     ///
@@ -267,7 +312,9 @@ impl CircuitMgr {
 
         let circuit = TetraCircuit {
             state: req.state,
-            t_state: self.dltime,
+            setup_retrans: Default::default(),
+            has_alerted: false,
+            hangtime_at_release: false,
             call_id,
             usage_id,
             usage2_id,
@@ -284,7 +331,6 @@ impl CircuitMgr {
             is_local_origin: req.is_local_origin,
             is_mobile_terminated: req.is_mobile_terminated,
             brew_origin_uuid: req.origin_brew_uuid,
-            caller_route: req.caller_route,
             is_etee_encrypted: false,
             t_start: self.dltime,
         };
@@ -348,58 +394,72 @@ impl CircuitMgr {
         Some(circuit)
     }
 
-    /// Per-tick housekeeping. Only acts on the first timeslot of each frame, so the D-SETUP
-    /// schedule is counted in whole frames.
+    /// Per-tick housekeeping: advances the time-in-state counters, runs the call timers and
+    /// schedules D-SETUP transmissions. The D-SETUP schedule and the lifetime safety net only
+    /// act on the first timeslot of each frame, so they are counted in whole frames.
     pub fn tick_start(&mut self, dltime: TdmaTime) -> Option<Vec<CircuitMgrCmd>> {
         self.dltime = dltime;
-        if dltime.t != 1 {
-            return None;
-        }
 
-        let mut tasks: Option<Vec<CircuitMgrCmd>> = None;
+        let mut tasks: Vec<CircuitMgrCmd> = Vec::new();
 
-        // Snapshot what the schedule needs, so the store is not borrowed while queueing work.
-        let circuits: Vec<(CallId, u8, u8, bool, i32, bool)> = self.state.with_circuits(|c| {
-            c.get_circuits()
-                .values()
-                .map(|x| {
-                    (
-                        x.call_id,
-                        x.usage_id,
-                        x.dl_ts(),
-                        x.is_group_call(),
-                        x.t_start.age(dltime),
-                        x.is_releasing(),
-                    )
-                })
-                .collect()
+        self.state.with_circuits(|c| {
+            // Advance every circuit's time-in-state counter.
+            c.tick();
+
+            // Group call hangtime expiry.
+            for call_id in c.find_call_ids(|x| x.is_group_call() && x.is_tx_ceased() && x.state.get_age() > HANGTIME_TIMESLOTS) {
+                tasks.push(CircuitMgrCmd::HangtimeExpired(call_id));
+            }
+
+            // Deferred teardown, once the stolen D-RELEASE had time to transmit.
+            for call_id in c.find_call_ids(|x| x.is_releasing() && x.state.get_age() >= CLOSE_AFTER_RELEASE_TIMESLOTS) {
+                tasks.push(CircuitMgrCmd::FinalizeRelease(call_id));
+            }
+
+            // Individual call setup/no-answer and call-length timeouts.
+            for call_id in c.find_call_ids(|x| {
+                if !x.is_individual_call() || x.is_releasing() {
+                    return false;
+                }
+                let limit = if x.is_tx() {
+                    ACTIVE_TIMEOUT_TIMESLOTS
+                } else {
+                    SETUP_TIMEOUT_TIMESLOTS
+                };
+                x.state.get_age() >= limit
+            }) {
+                tasks.push(CircuitMgrCmd::IndividualTimeout(call_id));
+            }
+
+            // Stuck-talker detection: local uplink voice expected but none arriving.
+            for call_id in c.take_ul_inactive_calls(UL_INACTIVITY_TIMESLOTS) {
+                tasks.push(CircuitMgrCmd::UlInactive(call_id));
+            }
         });
 
-        for (call_id, usage_id, ts, is_group, age, is_releasing) in circuits {
-            // Safety net for a circuit that outlived every call timer.
-            if age > CIRCUIT_EXPIRY_TIMESLOTS {
-                tasks.get_or_insert_with(Vec::new).push(CircuitMgrCmd::SendClose(call_id, ts));
-                continue;
+        if dltime.t == 1 {
+            // Safety net for circuits that outlived every call timer.
+            let expired: Vec<CallId> = self.state.with_circuits(|c| {
+                c.get_circuits()
+                    .values()
+                    .filter(|x| x.t_start.age(dltime) > CIRCUIT_EXPIRY_TIMESLOTS)
+                    .map(|x| x.call_id)
+                    .collect()
+            });
+            for call_id in &expired {
+                tasks.push(CircuitMgrCmd::SendClose(*call_id));
             }
 
-            // Only group calls are repeated: an individual call is point-to-point, so it has no
-            // late joiners, and a circuit already in teardown must not be advertised again.
-            if !is_group || is_releasing {
-                continue;
-            }
-
-            // Back-up transmission shortly after setup (ETSI Annex D Figure D.2), then late
-            // entry every few seconds. Ages are compared in frames because this only runs on
-            // t == 1 while the circuit may have been created on any timeslot.
-            let repeat = age < frames!(D_SETUP_REPEATS) || (age / 4) % (LATE_ENTRY_INTERVAL_TIMESLOTS / 4) == 0;
-            if repeat {
-                tracing::debug!("CircuitMgr: scheduling D-SETUP for call_id={} (age {} timeslots)", call_id, age);
-                tasks
-                    .get_or_insert_with(Vec::new)
-                    .push(CircuitMgrCmd::SendDSetup(call_id, usage_id, ts));
+            // D-SETUP initial retransmissions and late-entry repeats for group calls.
+            for (call_id, usage, ts) in self.state.with_circuits(|c| c.dsetup_sends_due(dltime)) {
+                if expired.contains(&call_id) {
+                    continue;
+                }
+                tracing::debug!("CircuitMgr: scheduling D-SETUP for call_id={}", call_id);
+                tasks.push(CircuitMgrCmd::SendDSetup(call_id, usage, ts));
             }
         }
 
-        tasks
+        if tasks.is_empty() { None } else { Some(tasks) }
     }
 }

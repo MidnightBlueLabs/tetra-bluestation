@@ -3,7 +3,6 @@ use core::fmt::Display;
 use tetra_core::Sap;
 use tetra_core::tetra_entities::TetraEntity;
 
-use crate::control::call_control::CallControl;
 use crate::control::call_signal::{BrewEvent, CmceEvent};
 use crate::control::sds::CmceSdsData;
 use crate::control::subscriber::MmSubscriberEvent;
@@ -74,9 +73,6 @@ pub enum SapMsgInner {
     // LCMC-SAP (MLE-CMCE)
     LcmcMleUnitdataInd(LcmcMleUnitdataInd),
     LcmcMleUnitdataReq(LcmcMleUnitdataReq),
-
-    // CMCE -> UMAC control
-    CmceCallControl(CallControl),
 
     // Brew -> CMCE call signalling
     BrewCallEvent(BrewEvent),

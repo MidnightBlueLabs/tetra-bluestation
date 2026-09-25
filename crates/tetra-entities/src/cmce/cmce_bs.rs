@@ -126,9 +126,6 @@ impl TetraEntityTrait for CmceBs {
                 }
             },
             Sap::Control => match message.msg {
-                SapMsgInner::CmceCallControl(_) => {
-                    self.cc.rx_call_control(queue, message);
-                }
                 SapMsgInner::BrewCallEvent(event) => {
                     self.cc.rx_brew_event(queue, event);
                 }

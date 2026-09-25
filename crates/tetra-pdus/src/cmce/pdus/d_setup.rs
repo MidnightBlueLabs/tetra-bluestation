@@ -270,7 +270,7 @@ mod tests {
 
         assert_eq!(pdu.basic_service_information.circuit_mode_type, CircuitModeType::TchS);
         assert_eq!(pdu.basic_service_information.encryption_flag, false);
-        assert_eq!(pdu.basic_service_information.communication_type, CommunicationType::P2Mp);
+        assert_eq!(pdu.basic_service_information.communication_type, CommunicationType::P2mp);
         assert_eq!(pdu.basic_service_information.slots_per_frame, None);
         assert_eq!(pdu.basic_service_information.speech_service, Some(0));
 
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(pdu.simplex_duplex_selection, false);
         assert_eq!(pdu.basic_service_information.circuit_mode_type, CircuitModeType::TchS);
         assert_eq!(pdu.basic_service_information.encryption_flag, false);
-        assert_eq!(pdu.basic_service_information.communication_type, CommunicationType::P2Mp);
+        assert_eq!(pdu.basic_service_information.communication_type, CommunicationType::P2mp);
         assert_eq!(pdu.basic_service_information.slots_per_frame, None);
         assert_eq!(pdu.basic_service_information.speech_service, Some(0));
         assert_eq!(pdu.transmission_grant, TransmissionGrant::GrantedToOtherUser);

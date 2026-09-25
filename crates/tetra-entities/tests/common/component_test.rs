@@ -1,4 +1,4 @@
-use tetra_config::bluestation::{SharedConfig, StackConfig, StackMode};
+use tetra_config::bluestation::{SharedConfig, StackConfig, StackMode, StackState};
 use tetra_core::TdmaTime;
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_entities::{MessageRouter, TetraEntityTrait};
@@ -28,6 +28,7 @@ use super::sink::Sink;
 /// Supports optional sinks for collecting messages for later inspection
 pub struct ComponentTest {
     pub config: SharedConfig,
+    pub state: StackState,
     pub router: MessageRouter,
     // components: Vec<TetraEntity>,
     pub sinks: Vec<TetraEntity>,
@@ -46,17 +47,19 @@ impl ComponentTest {
     }
 
     /// Create a new ComponentTest instance with the given config and optional start downlink time.
-    pub fn from_config(config: StackConfig, start_dl_time: Option<TdmaTime>) -> Self {
-        let shared_config = SharedConfig::new(config, None);
-        let config_clone = shared_config.clone();
-        let mut mr = MessageRouter::new(config_clone);
+    pub fn from_config(stack_config: StackConfig, start_dl_time: Option<TdmaTime>) -> Self {
+        
+        let config = SharedConfig::from_parts(stack_config);
+        let state = StackState::from_config(config.clone());
+        let mut router = MessageRouter::new(config.clone());
 
         let start_dl_time = start_dl_time.unwrap_or_default();
-        mr.set_dl_time(start_dl_time);
+        router.set_dl_time(start_dl_time);
 
         Self {
-            config: shared_config,
-            router: mr,
+            config,
+            state,
+            router,
             sinks: vec![],
             start_dl_time,
         }
@@ -95,36 +98,39 @@ impl ComponentTest {
 
     fn create_components_bs(&mut self, components: Vec<TetraEntity>) {
         // Setup the stack with all requested components, performing set-up where needed
+        let c = self.config.clone();
+        let s = self.state.clone();
+        
         for component in components.iter() {
             match component {
                 TetraEntity::Lmac => {
-                    let lmac = LmacBs::new(self.config.clone());
+                    let lmac = LmacBs::new(c.clone());
                     self.register_entity(lmac);
                 }
                 TetraEntity::Umac => {
-                    let mut umac = UmacBs::new(self.config.clone());
+                    let mut umac = UmacBs::new(c.clone(), s.clone());
                     // Prepare channel scheduler for next tick_start
                     umac.channel_scheduler.set_dl_time(self.start_dl_time.add_timeslots(-1));
                     self.router.register_entity(Box::new(umac));
                 }
                 TetraEntity::Llc => {
-                    let llc = Llc::new(self.config.clone());
+                    let llc = Llc::new(c.clone());
                     self.router.register_entity(Box::new(llc));
                 }
                 TetraEntity::Mle => {
-                    let mle = MleBs::new(self.config.clone());
+                    let mle = MleBs::new(c.clone());
                     self.router.register_entity(Box::new(mle));
                 }
                 TetraEntity::Mm => {
-                    let mm = MmBs::new(self.config.clone(), None, None);
+                    let mm = MmBs::new(c.clone(), s.clone(), None, None);
                     self.router.register_entity(Box::new(mm));
                 }
                 TetraEntity::Sndcp => {
-                    let sndcp = Sndcp::new(self.config.clone());
+                    let sndcp = Sndcp::new(c.clone());
                     self.router.register_entity(Box::new(sndcp));
                 }
                 TetraEntity::Cmce => {
-                    let cmce = CmceBs::new(self.config.clone(), None, None, None);
+                    let cmce = CmceBs::new(c.clone(), s.clone(), None, None);
                     self.router.register_entity(Box::new(cmce));
                 }
                 _ => {

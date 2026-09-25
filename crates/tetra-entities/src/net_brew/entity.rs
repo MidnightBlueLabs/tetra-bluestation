@@ -135,8 +135,7 @@ impl BrewEntity {
     /// A session is known while its call exists, or while its parameters still await pickup
     /// by CMCE (setup in flight).
     fn is_known_session(&self, uuid: Uuid) -> bool {
-        self.state
-            .with_circuits(|c| c.get_callid_by_uuid(uuid).is_some() || c.has_network_request(uuid))
+        self.state.with_circuits(|c| c.is_known_session(uuid))
     }
 
     /// Deposit the parameters of a call for CMCE to pick up with the accompanying signal.
@@ -162,15 +161,7 @@ impl BrewEntity {
     /// Detach the Brew session from its call, leaving the circuit purely local. Used once the
     /// upstream session is over while the call itself may live on (hangtime, new speaker).
     fn detach_session(&self, uuid: Uuid) {
-        self.state.with_circuits(|c| {
-            let Some(call_id) = c.get_callid_by_uuid(uuid) else {
-                return;
-            };
-            let Some(ts) = c.get_circuit_by_callid(call_id).map(|circuit| circuit.dl_ts()) else {
-                return;
-            };
-            c.update_circuit_with(call_id, |circuit| circuit.dl1_source = CircuitStreamDest::Local(Some(ts)));
-        });
+        self.state.with_circuits(|c| c.detach_session(uuid));
     }
 
     /// Signal CMCE what the backend did to a call. The event names the call and nothing else:
@@ -868,7 +859,7 @@ impl BrewEntity {
             priority: c.priority,
             service: c.service,
             mode: c.mode,
-            duplex: c.duplex,
+            is_duplex: c.duplex,
             method: c.method,
             communication: c.communication,
             grant: c.grant,
@@ -887,7 +878,7 @@ impl BrewEntity {
             priority: c.priority,
             service: c.service,
             mode: c.mode,
-            duplex: c.duplex,
+            duplex: c.is_duplex,
             method: c.method,
             communication: c.communication,
             grant: c.grant,
