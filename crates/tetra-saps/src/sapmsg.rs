@@ -3,9 +3,9 @@ use core::fmt::Display;
 use tetra_core::Sap;
 use tetra_core::tetra_entities::TetraEntity;
 
-use crate::control::brew::MmSubscriberUpdate;
-use crate::control::call_control::CallControl;
+use crate::control::call_signal::{BrewEvent, CmceEvent};
 use crate::control::sds::CmceSdsData;
+use crate::control::subscriber::MmSubscriberEvent;
 use crate::tmd::TmdCircuitDataInd;
 use crate::tmd::TmdCircuitDataReq;
 use crate::tnmm::TnmmTestDemand;
@@ -74,11 +74,14 @@ pub enum SapMsgInner {
     LcmcMleUnitdataInd(LcmcMleUnitdataInd),
     LcmcMleUnitdataReq(LcmcMleUnitdataReq),
 
-    // CMCE -> UMAC control
-    CmceCallControl(CallControl),
+    // Brew -> CMCE call signalling
+    BrewCallEvent(BrewEvent),
 
-    // MM -> Brew/CMCE subscriber update
-    MmSubscriberUpdate(MmSubscriberUpdate),
+    // CMCE -> Brew call signalling
+    CmceCallEvent(CmceEvent),
+
+    // MM -> Brew/CMCE subscriber signalling
+    MmSubscriberEvent(MmSubscriberEvent),
 
     // CMCE SDS <-> Brew SDS routing
     CmceSdsData(CmceSdsData),
@@ -112,7 +115,7 @@ impl Display for SapMsgInner {
             SapMsgInner::TlmbSysinfoInd(_) => write!(f, "TmbSysinfoInd"),
 
             // Control/Brew
-            SapMsgInner::MmSubscriberUpdate(_) => write!(f, "MmSubscriberUpdate"),
+            SapMsgInner::MmSubscriberEvent(_) => write!(f, "MmSubscriberEvent"),
 
             // TLB-SAP
             // SapMsgInner::TlbTlSyncInd(_) => write!(f, "TlbTlSyncInd"),

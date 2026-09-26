@@ -1,9 +1,9 @@
 use std::panic;
 
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{SharedConfig, StackState};
 use tetra_core::freqs::FreqInfo;
 use tetra_core::tetra_entities::TetraEntity;
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
+use tetra_core::{BitBuffer, PhyBlockNum, Sap, SsiType, TdmaTime, TetraAddress, Todo, unimplemented_log};
 use tetra_pdus::mle::fields::bs_service_details::BsServiceDetails;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
@@ -22,7 +22,6 @@ use tetra_pdus::umac::pdus::mac_sync::MacSync;
 use tetra_pdus::umac::pdus::mac_sysinfo::MacSysinfo;
 use tetra_pdus::umac::pdus::mac_u_blck::MacUBlck;
 use tetra_pdus::umac::pdus::mac_u_signal::MacUSignal;
-use tetra_saps::control::call_control::{CallControl, Circuit};
 use tetra_saps::lcmc::enums::alloc_type::ChanAllocType;
 use tetra_saps::lcmc::enums::ul_dl_assignment::UlDlAssignment;
 use tetra_saps::lcmc::fields::chan_alloc_req::CmceChanAllocReq;
@@ -41,12 +40,13 @@ use super::subcomp::bs_defrag::BsDefrag;
 pub struct UmacBs {
     self_component: TetraEntity,
     config: SharedConfig,
-    dltime: TdmaTime,
-    system_wide_services: bool,
+    state: StackState,
 
-    /// This MAC's endpoint ID, for addressing by the higher layers
-    /// When using only a single base radio, we can set this to a fixed value
-    endpoint_id: u32,
+    /// Maintains previous setting for system wide services
+    /// We'll update cached sysinfo messages if it changes
+    old_sws_setting: bool,
+
+    dltime: TdmaTime,
 
     /// Subcomponents
     defrag: BsDefrag,
@@ -54,12 +54,8 @@ pub struct UmacBs {
     pending_stch: Option<PendingStch>,
     // event_label_store: EventLabelStore,
     /// Contains UL/DL scheduling logic
-    /// Access to this field is used only by testing code
     pub channel_scheduler: BsChannelScheduler,
     // ulrx_scheduler: UlScheduler,
-    /// Timestamp of last received UL voice frame per timeslot (0-indexed: ts1..ts4).
-    /// Used to detect UL inactivity when a radio disappears mid-transmission.
-    last_ul_voice: [Option<TdmaTime>; 4],
 }
 
 struct PendingStch {
@@ -71,29 +67,27 @@ struct PendingStch {
 }
 
 impl UmacBs {
-    pub fn new(config: SharedConfig) -> Self {
+    pub fn new(config: SharedConfig, state: StackState) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
-        let system_wide_services = Self::get_system_wide_services_state(&config);
-        let precomps = Self::generate_precomps(&config);
+        let precomps = Self::generate_precomps(&config, false);
         Self {
             self_component: TetraEntity::Umac,
             config,
+            state: state.clone(),
+            old_sws_setting: false,
             dltime: TdmaTime::default(),
-            system_wide_services,
-            endpoint_id: 1,
             defrag: BsDefrag::new(),
             pending_stch: None,
             // event_label_store: EventLabelStore::new(),
-            channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps),
-            last_ul_voice: [None; 4],
+            channel_scheduler: BsChannelScheduler::new(scrambling_code, precomps, state),
         }
     }
 
     /// Precomputes SYNC, SYSINFO messages (and subfield variants) for faster TX msg building
     /// Precomputed PDUs are passed to scheduler
     /// Needs to be re-invoked if any network parameter changes
-    pub fn generate_precomps(config: &SharedConfig) -> PrecomputedUmacPdus {
+    pub fn generate_precomps(config: &SharedConfig, system_wide_services: bool) -> PrecomputedUmacPdus {
         let c = config.config();
 
         // TODO FIXME make more/all parameters configurable
@@ -160,7 +154,6 @@ impl UmacBs {
             ext_services: Some(ext_services),
         };
 
-        let system_wide_services = Self::get_system_wide_services_state(config);
         let mle_sysinfo_pdu = DMleSysinfo {
             location_area: c.cell.location_area,
             subscriber_class: c.cell.subscriber_class,
@@ -208,23 +201,21 @@ impl UmacBs {
 
     /// Retrieve currently set value of system-wide services. If SwMI is active, this governs connection state
     /// Otherwise, value from config is used.
-    fn get_system_wide_services_state(config: &SharedConfig) -> bool {
-        let cfg = config.config();
-        if cfg.brew.is_some() {
-            config.state_read().network_connected
-        } else {
-            cfg.cell.system_wide_services
-        }
+    fn get_system_wide_services_state(&self) -> bool {
+        self.state.with_global_state(|g| g.network_connected)
     }
 
+    /// Each tick, check if sws changed
     fn refresh_system_wide_services(&mut self) {
-        let is_effective = Self::get_system_wide_services_state(&self.config);
-        if is_effective != self.system_wide_services {
-            self.system_wide_services = is_effective;
-            self.channel_scheduler.set_system_wide_services_state(is_effective);
-
+        let current_sws_setting = self.get_system_wide_services_state();
+        if self.old_sws_setting != current_sws_setting {
+            self.channel_scheduler.set_system_wide_services_state(current_sws_setting);
             // Should already be signalled at SwMI interface level
-            tracing::debug!("UmacBs: system_wide_services {}", if is_effective { "ENABLED" } else { "DISABLED" });
+            tracing::debug!(
+                "UmacBs: system_wide_services {}",
+                if current_sws_setting { "ENABLED" } else { "DISABLED" }
+            );
+            self.old_sws_setting = current_sws_setting;
         }
     }
 
@@ -656,8 +647,15 @@ impl UmacBs {
         // access and acking it would steal an extra MAC-RESOURCE onto the traffic channel.
         // Hangtime and control-channel access (floor requests) are still acked.
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago.
-        let in_active_over =
-            self.channel_scheduler.circuit_is_active(Direction::Dl, msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
+
+        // A fresh MAC-ACCESS landed on a slot we still had reserved for someone else's
+        // continuation. ETSI 23.4.3.1.2 treats this as a supersession, not a timeout, so
+        // release the stale reservation and continue processing this as a new access.
+        if self.channel_scheduler.ul_get_slot_owner(msg_dltime, prim.block_num).is_some() {
+            self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
+        }
+
+        let in_active_over = self.channel_scheduler.circuit_is_active(msg_dltime.t) && !self.channel_scheduler.is_hangtime(msg_dltime.t);
         if !in_active_over {
             self.channel_scheduler.dl_enqueue_random_access_ack(msg_dltime.t, addr);
         }
@@ -775,6 +773,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
 
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented_log!("rx_mac_frag_ul: Encryption not supported");
@@ -842,6 +842,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_ul: Encryption not supported");
         }
@@ -958,6 +960,8 @@ impl UmacBs {
             self.channel_scheduler.dump_ul_schedule_full(true);
             return;
         };
+        // Release now rather than waiting on the abandonment backstop.
+        self.channel_scheduler.ul_release_slot(msg_dltime, prim.block_num);
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
             unimplemented!("rx_mac_end_hu: Encryption not supported");
         }
@@ -1111,7 +1115,7 @@ impl UmacBs {
                 .chan_alloc
                 .as_ref()
                 .and_then(|ca| ca.timeslots.iter().enumerate().find(|&(_, &set)| set).map(|(i, _)| (i + 1) as u8))
-                .or_else(|| (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(Direction::Dl, t)));
+                .or_else(|| (2..=4u8).find(|&t| self.channel_scheduler.circuit_is_active(t)));
 
             if let Some(ts) = traffic_ts {
                 // Build MAC-RESOURCE PDU for the STCH half-slot (124 type1 bits).
@@ -1253,12 +1257,7 @@ impl UmacBs {
             // DL voice from Brew/upper layer → schedule for DL transmission
             SapMsgInner::TmdCircuitDataReq(prim) => {
                 let ts = prim.ts;
-                // Refresh UL inactivity timer when DL voice is being fed (network call scenario).
-                // This prevents false timeout when Brew is the speaker and no UL radio is transmitting.
-                if (1..=4).contains(&ts) && self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
-                    self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
-                }
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, ts) {
+                if self.channel_scheduler.circuit_is_active(ts) {
                     self.channel_scheduler.dl_schedule_tmd(ts, prim.data);
                 } else {
                     tracing::warn!(
@@ -1274,14 +1273,12 @@ impl UmacBs {
                 let ts = prim.ts;
                 let data = prim.data;
 
-                // Track last UL voice frame time for inactivity detection
-                if (1..=4).contains(&ts) {
-                    self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
-                }
+                // Feed the stuck-talker timer of the circuit transmitting on this slot.
+                self.state.with_circuits(|c| c.umac_update_ul_voice_timer(ts));
 
                 // Forward UL voice to Brew (User plane) if loaded
                 if self.config.config().brew.is_some() {
-                    if self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
+                    if self.channel_scheduler.circuit_is_active(ts) {
                         let msg = SapMsg {
                             sap: Sap::TmdSap,
                             src: TetraEntity::Umac,
@@ -1294,11 +1291,22 @@ impl UmacBs {
                     }
                 }
 
-                // Loopback only if there's an active DL circuit on this timeslot
-                if self.channel_scheduler.circuit_is_active(Direction::Dl, ts) {
-                    tracing::trace!("rx_tmd_prim: loopback UL voice on ts={}", ts);
+                // Loopback to the downlink. For a duplex call the listener sits on the peer
+                // timeslot, so route there. For simplex (no peer) it loops on the same slot.
+                // A network (Brew) circuit renders audio fed from the backend, so suppress the
+                // local loopback there or the caller would hear itself doubled with the echo.
+                let dl_ts = self.channel_scheduler.ul_peer_ts(ts).unwrap_or(ts);
+                let network_media = self.channel_scheduler.dl_is_from_network(dl_ts);
+                if network_media {
+                    tracing::trace!(
+                        "rx_tmd_prim: network media on dl ts={}, suppressing local loopback from ts={}",
+                        dl_ts,
+                        ts
+                    );
+                } else if self.channel_scheduler.circuit_is_active(dl_ts) {
+                    tracing::trace!("rx_tmd_prim: loopback UL voice ts={} -> dl ts={}", ts, dl_ts);
                     if let Some(packed) = pack_ul_acelp_bits(&data) {
-                        self.channel_scheduler.dl_schedule_tmd(ts, packed);
+                        self.channel_scheduler.dl_schedule_tmd(dl_ts, packed);
                     } else {
                         tracing::warn!(
                             "rx_tmd_prim: unsupported UL voice length {} on ts={}, skipping loopback",
@@ -1307,7 +1315,7 @@ impl UmacBs {
                         );
                     }
                 } else {
-                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", ts);
+                    tracing::trace!("rx_tmd_prim: no active DL circuit on ts={}, skipping loopback", dl_ts);
                 }
             }
             _ => {
@@ -1383,162 +1391,6 @@ impl UmacBs {
     //     };
     //     queue.push_back(m);
     // }
-
-    fn rx_control_circuit_open(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
-        let CallControl::Open(circuit) = prim else { panic!() };
-        let ts = circuit.ts;
-        let dir = circuit.direction;
-
-        // Direction::Both needs to be split into separate DL and UL operations
-        // because the UMAC circuit manager tracks them independently.
-        let dirs: Vec<Direction> = match dir {
-            Direction::Both => vec![Direction::Dl, Direction::Ul],
-            d @ (Direction::Dl | Direction::Ul) => vec![d],
-            Direction::None => {
-                tracing::warn!("rx_control_circuit_open: Direction::None, ignoring");
-                return;
-            }
-        };
-
-        for d in dirs {
-            // See if pre-existing circuit somehow needs to be closed
-            if self.channel_scheduler.circuit_is_active(d, ts) {
-                tracing::warn!("rx_control_circuit_open: Circuit already exists for {:?} {}, closing first", d, ts);
-                self.channel_scheduler.close_circuit(d, ts);
-            }
-
-            let c = Circuit {
-                direction: d,
-                ts: circuit.ts,
-                usage: circuit.usage,
-                circuit_mode: circuit.circuit_mode,
-                speech_service: circuit.speech_service,
-                etee_encrypted: circuit.etee_encrypted,
-            };
-            self.channel_scheduler.create_circuit(d, c);
-
-            // Start UL inactivity timer when opening a UL circuit
-            if d == Direction::Ul && (1..=4).contains(&ts) {
-                self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
-            }
-
-            tracing::debug!("  rx_control_circuit_open: Setup {:?} circuit for ts {}", d, ts);
-        }
-    }
-
-    fn rx_control_circuit_close(&mut self, _queue: &mut MessageQueue, prim: CallControl) {
-        let CallControl::Close(dir, ts) = prim else { panic!() };
-
-        // Direction::Both needs to be split into separate DL and UL close operations
-        let dirs: Vec<Direction> = match dir {
-            Direction::Both => vec![Direction::Dl, Direction::Ul],
-            d @ (Direction::Dl | Direction::Ul) => vec![d],
-            Direction::None => {
-                tracing::warn!("rx_control_circuit_close: Direction::None, ignoring");
-                return;
-            }
-        };
-
-        for d in dirs {
-            match self.channel_scheduler.close_circuit(d, ts) {
-                Some(_) => {
-                    // Clear UL inactivity timer when closing a UL circuit
-                    if d == Direction::Ul && (1..=4).contains(&ts) {
-                        self.last_ul_voice[ts as usize - 1] = None;
-                    }
-                    tracing::info!("  rx_control_circuit_close: Closed {:?} circuit for ts {}", d, ts);
-                }
-                None => {
-                    tracing::warn!("  rx_control_circuit_close: No {:?} circuit to close for ts {}", d, ts);
-                }
-            }
-        }
-    }
-
-    /// Check for UL inactivity on traffic timeslots. If no voice frames have arrived
-    /// for UL_INACTIVITY_TIMESLOTS on a timeslot with an active UL circuit (and not in
-    /// hangtime), send UlInactivityTimeout to CMCE.
-    fn check_ul_inactivity(&mut self, queue: &mut MessageQueue) {
-        // 3 multiframes ~ 3s. Above T.213 (1s) to tolerate DTX and brief RF fading.
-        const UL_INACTIVITY_TIMESLOTS: i32 = 3 * 18 * 4;
-
-        for ts in 1..=4u8 {
-            let idx = ts as usize - 1;
-
-            // Only check timeslots with an active UL circuit
-            if !self.channel_scheduler.circuit_is_active(Direction::Ul, ts) {
-                continue;
-            }
-
-            // Skip if in hangtime (no voice expected)
-            if self.channel_scheduler.is_hangtime(ts) {
-                continue;
-            }
-
-            // Check if we've exceeded the inactivity threshold
-            let timed_out = match self.last_ul_voice[idx] {
-                Some(t) => t.age(self.dltime) > UL_INACTIVITY_TIMESLOTS,
-                None => false, // Initialized at circuit open; shouldn't be None here
-            };
-
-            if timed_out {
-                tracing::warn!("UL inactivity timeout on ts={}, sending notification to CMCE", ts);
-                self.last_ul_voice[idx] = None;
-
-                queue.push_back(SapMsg {
-                    sap: Sap::Control,
-                    src: TetraEntity::Umac,
-                    dest: TetraEntity::Cmce,
-                    msg: SapMsgInner::CmceCallControl(CallControl::UlInactivityTimeout { ts }),
-                });
-            }
-        }
-    }
-
-    fn rx_control(&mut self, queue: &mut MessageQueue, message: SapMsg) {
-        tracing::trace!("rx_control");
-        let SapMsgInner::CmceCallControl(prim) = message.msg else {
-            panic!()
-        };
-
-        match prim {
-            CallControl::Open(_) => {
-                self.rx_control_circuit_open(queue, prim);
-            }
-            CallControl::Close(_, _) => {
-                self.rx_control_circuit_close(queue, prim);
-            }
-            // Floor-control signals drive traffic↔signalling transitions during hangtime.
-            CallControl::FloorReleased { ts, .. } => {
-                self.channel_scheduler.set_hangtime(ts, true);
-                // Stop checking UL inactivity during hangtime
-                if (1..=4).contains(&ts) {
-                    self.last_ul_voice[ts as usize - 1] = None;
-                }
-            }
-            CallControl::FloorGranted { ts, .. } => {
-                self.channel_scheduler.set_hangtime(ts, false);
-                // Restart UL inactivity timer when new speaker gets floor
-                if (1..=4).contains(&ts) {
-                    self.last_ul_voice[ts as usize - 1] = Some(self.dltime);
-                }
-            }
-            CallControl::CallEnded { ts, .. } => {
-                self.channel_scheduler.set_hangtime(ts, false);
-                if (1..=4).contains(&ts) {
-                    self.last_ul_voice[ts as usize - 1] = None;
-                }
-            }
-
-            // UlInactivityTimeout is UMAC→CMCE only, UMAC won't receive it back
-            CallControl::UlInactivityTimeout { .. } => {}
-
-            // NetworkCall* are for CMCE ↔ Brew, not UMAC (for now)
-            CallControl::NetworkCallStart { .. } | CallControl::NetworkCallReady { .. } | CallControl::NetworkCallEnd { .. } => {
-                tracing::trace!("rx_control: ignoring CMCE-Brew notification (not for UMAC)");
-            }
-        }
-    }
 }
 
 impl TetraEntityTrait for UmacBs {
@@ -1571,7 +1423,8 @@ impl TetraEntityTrait for UmacBs {
                 unimplemented!();
             }
             Sap::Control => {
-                self.rx_control(queue, message);
+                // Call control is state-driven; nothing signals UMAC over this SAP anymore.
+                tracing::warn!("UmacBs: unexpected Control message: {:?}", message.msg);
             }
             _ => {
                 panic!()
@@ -1590,9 +1443,6 @@ impl TetraEntityTrait for UmacBs {
             // When running, we adopt the new time and check for desync
             self.channel_scheduler.tick_start(ts);
         }
-
-        // Check for UL inactivity (stuck transmitter detection)
-        self.check_ul_inactivity(queue);
 
         // Collect/construct traffic that should be sent down to the LMAC
         // This is basically the _previous_ timeslot

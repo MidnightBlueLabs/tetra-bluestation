@@ -6,5 +6,5 @@ edition.workspace = true
 [dependencies]
 tetra-core = { workspace = true }
 tetra-saps = { workspace = true }
-tetra-config = { workspace = true }
+#tetra-config = { workspace = true }
 tracing = { workspace = true }

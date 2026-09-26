@@ -1,14 +1,16 @@
+use std::collections::HashSet;
+
 use crate::net_control::ControlEndpoint;
 use crate::net_telemetry::channel::TelemetrySink;
 use crate::{MessageQueue, TetraEntityTrait, net_brew};
-use tetra_config::bluestation::SharedConfig;
+use tetra_config::bluestation::{SharedConfig, StackState, Subscriber};
 use tetra_core::tetra_entities::TetraEntity;
 use tetra_core::{BitBuffer, Layer2Service, Sap, TdmaTime, TetraAddress, assert_warn, unimplemented_log};
-use tetra_saps::control::brew::{BrewSubscriberAction, MmSubscriberUpdate};
+use tetra_pdus::mm::fields::class_of_ms::ClassOfMs;
+use tetra_saps::control::subscriber::MmSubscriberEvent;
 use tetra_saps::lmm::LmmMleUnitdataReq;
 use tetra_saps::{SapMsg, SapMsgInner};
 
-use crate::mm::components::client_state::{MmClientMgr, MmClientState};
 use crate::mm::components::not_supported::make_ul_mm_pdu_function_not_supported;
 use tetra_pdus::mm::enums::energy_saving_mode::EnergySavingMode;
 use tetra_pdus::mm::enums::location_update_type::LocationUpdateType;
@@ -33,66 +35,163 @@ use tetra_pdus::mm::pdus::u_mm_status::UMmStatus;
 
 pub struct MmBs {
     config: SharedConfig,
+    state: StackState,
     telemetry: Option<TelemetrySink>,
     control: Option<ControlEndpoint>,
-    client_mgr: MmClientMgr,
 }
 
 impl MmBs {
-    pub fn new(config: SharedConfig, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
-        let client_mgr = MmClientMgr::new(telemetry.clone());
+    pub fn new(config: SharedConfig, state: StackState, telemetry: Option<TelemetrySink>, control: Option<ControlEndpoint>) -> Self {
         Self {
             config,
+            state,
             telemetry,
             control,
-            client_mgr,
         }
     }
 
-    fn emit_subscriber_update(&self, queue: &mut MessageQueue, issi: u32, groups: Vec<u32>, action: BrewSubscriberAction) {
-        // If brew is active, forward subscriber updates to the Brew entity.
-        // Register/Deregister must always be sent for brew-routable ISSIs,
-        // even when there are no group affiliations yet. The Brew worker
-        // decides whether to send REGISTER or REREGISTER based on its own state.
-        // Affiliate/Deaffiliate only sent when there are brew-routable groups.
-        if net_brew::is_active(&self.config) {
-            let brew_groups = groups
-                .iter()
-                .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
-                .copied()
-                .collect::<Vec<u32>>();
-            let should_send = match action {
-                BrewSubscriberAction::Register | BrewSubscriberAction::Deregister => net_brew::is_brew_issi_routable(&self.config, issi),
-                BrewSubscriberAction::Affiliate | BrewSubscriberAction::Deaffiliate => !brew_groups.is_empty(),
-            };
-            if should_send {
-                let brew_update = MmSubscriberUpdate {
+    fn state_is_registered(&self, issi: u32) -> bool {
+        self.state.with_subscribers(|subscribers| subscribers.is_registered(issi))
+    }
+
+    fn state_has_group_members(&self, gssi: u32) -> bool {
+        self.state
+            .with_subscribers(|subscribers| subscribers.group_has_local_attached_mses(gssi))
+    }
+
+    fn state_register_subscriber(&self, issi: u32) {
+        self.state.with_subscribers(|subscribers| {
+            subscribers.register(issi);
+        });
+    }
+
+    fn state_deregister_subscriber(&self, issi: u32) -> Option<Subscriber> {
+        self.state.with_subscribers(|subscribers| subscribers.deregister(issi))
+    }
+
+    fn state_group_attach(&self, issi: u32, gssi: u32) {
+        match self.state.with_subscribers(|subscribers| subscribers.group_attach(issi, gssi)) {
+            None => {
+                tracing::warn!("state_group_attach: could not attach SSI {} to GSSI {}", issi, gssi);
+            }
+            Some(false) => {
+                tracing::warn!("state_group_attach: SSI {} already attached", issi,);
+            }
+            _ => {}
+        }
+    }
+
+    fn state_group_detach(&self, issi: u32, gssi: u32) -> bool {
+        let result = self.state.with_subscribers(|subscribers| subscribers.group_detach(issi, gssi));
+        match result {
+            Some(_) => true,
+            None => {
+                tracing::warn!(
+                    "state_group_detach: SSI {} either not registered or not attached to GSSI {}",
                     issi,
-                    groups: brew_groups,
-                    action,
-                };
-                let msg = SapMsg {
+                    gssi
+                );
+                false
+            }
+        }
+    }
+
+    fn state_group_detach_all(&self, issi: u32) -> Option<HashSet<u32>> {
+        let (groups, detach_result) = self
+            .state
+            .with_subscribers(|s| (s.get_attached_groups(issi), s.group_detach_all(issi)));
+
+        match (groups, detach_result) {
+            (None, None) => {
+                tracing::warn!("state_group_detach_all: SSI {} not registered", issi,);
+                None
+            }
+            (g, _) => {
+                assert!(g.is_some());
+                g
+            }
+        }
+    }
+
+    /// Returns true on success or false if the subscriber is not registered.
+    /// The shared ledger currently exposes no public mutator for these fields, so this
+    /// method is intentionally a compatibility guard that warns and refuses unknown ISSIs.
+    pub fn state_set_client_energy_saving_mode(&mut self, issi: u32, mode: EnergySavingMode) -> bool {
+        let is_known = self.state.with_subscribers(|subscribers| subscribers.is_registered(issi));
+        if !is_known {
+            tracing::warn!("state_set_client_energy_saving_mode: ISSI {} not found in subscriber store", issi);
+            return false;
+        }
+
+        // The current SubscriberStore API exposes no public field-level updater.
+        // This keeps the prototype compatible without mutating a stale local cache.
+        let _ = mode;
+        true
+    }
+
+    /// Returns true on success or false if the subscriber is not registered.
+    /// The shared ledger currently exposes no public mutator for these fields, so this
+    /// method is intentionally a compatibility guard that warns and refuses unknown ISSIs.
+    pub fn state_set_client_class_of_ms(&mut self, issi: u32, class: Option<ClassOfMs>) -> bool {
+        let is_known = self.state.with_subscribers(|subscribers| subscribers.is_registered(issi));
+        if !is_known {
+            tracing::warn!("state_set_client_class_of_ms: ISSI {} not found in subscriber store", issi);
+            return false;
+        }
+
+        // The current SubscriberStore API exposes no public field-level updater.
+        // This keeps the prototype compatible without mutating a stale local cache.
+        let _ = class;
+        true
+    }
+
+    fn emit_subscriber_event(&self, queue: &mut MessageQueue, event: MmSubscriberEvent) {
+        tracing::trace!("emitting subscriber event {:?}", event);
+
+        // Brew only hears about what it can route. Register/Deregister go out even when the
+        // subscriber holds no groups; the Brew worker decides between REGISTER and REREGISTER
+        // from its own state. Group events only go out for brew-routable groups.
+        if net_brew::is_active(&self.config) {
+            let routable_groups = |groups: &[u32]| {
+                groups
+                    .iter()
+                    .filter(|gssi| net_brew::is_brew_gssi_routable(&self.config, **gssi))
+                    .copied()
+                    .collect::<Vec<u32>>()
+            };
+            let brew_event = match &event {
+                MmSubscriberEvent::Register { issi } | MmSubscriberEvent::Deregister { issi } => {
+                    net_brew::is_brew_issi_routable(&self.config, *issi).then(|| event.clone())
+                }
+                MmSubscriberEvent::Affiliate { issi, groups } => {
+                    let groups = routable_groups(groups);
+                    (!groups.is_empty()).then_some(MmSubscriberEvent::Affiliate { issi: *issi, groups })
+                }
+                MmSubscriberEvent::Deaffiliate { issi, groups } => {
+                    let groups = routable_groups(groups);
+                    (!groups.is_empty()).then_some(MmSubscriberEvent::Deaffiliate { issi: *issi, groups })
+                }
+            };
+            if let Some(brew_event) = brew_event {
+                queue.push_back(SapMsg {
                     sap: Sap::Control,
                     src: TetraEntity::Mm,
                     dest: TetraEntity::Brew,
-                    msg: SapMsgInner::MmSubscriberUpdate(brew_update),
-                };
-                queue.push_back(msg);
+                    msg: SapMsgInner::MmSubscriberEvent(brew_event),
+                });
             }
         }
 
-        // Always emit an update to the Cmce entity
-        let mm_update = MmSubscriberUpdate { issi, groups, action };
-        let msg = SapMsg {
+        // CMCE sees every subscriber on the cell, unfiltered.
+        queue.push_back(SapMsg {
             sap: Sap::Control,
             src: TetraEntity::Mm,
             dest: TetraEntity::Cmce,
-            msg: SapMsgInner::MmSubscriberUpdate(mm_update),
-        };
-        queue.push_back(msg);
+            msg: SapMsgInner::MmSubscriberEvent(event),
+        });
     }
 
-    fn rx_u_itsi_detach(&mut self, _queue: &mut MessageQueue, mut message: SapMsg) {
+    fn rx_u_itsi_detach(&mut self, queue: &mut MessageQueue, mut message: SapMsg) {
         tracing::trace!("rx_u_itsi_detach");
         let SapMsgInner::LmmMleUnitdataInd(prim) = &mut message.msg else {
             panic!()
@@ -116,17 +215,18 @@ impl MmBs {
         }
 
         let ssi = prim.received_address.ssi;
-        let detached_client = self.client_mgr.remove_client(ssi);
-        if let Some(client) = detached_client {
-            self.config.state_write().subscribers.deregister(ssi);
-            if !client.groups.is_empty() {
-                let groups: Vec<u32> = client.groups.iter().copied().collect();
-                self.emit_subscriber_update(_queue, ssi, groups, BrewSubscriberAction::Deaffiliate);
+        match self.state_deregister_subscriber(ssi) {
+            Some(client) => {
+                // self.config.state_write().subscribers.deregister(ssi);
+                if !client.attached_groups.is_empty() {
+                    let groups: Vec<u32> = client.attached_groups.iter().copied().collect();
+                    self.emit_subscriber_event(queue, MmSubscriberEvent::Deaffiliate { issi: ssi, groups });
+                }
+                self.emit_subscriber_event(queue, MmSubscriberEvent::Deregister { issi: ssi });
             }
-            self.emit_subscriber_update(_queue, ssi, Vec::new(), BrewSubscriberAction::Deregister);
-        } else {
-            tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
-            // return;
+            None => {
+                tracing::warn!("Received UItsiDetach for unknown client with SSI: {}", ssi);
+            }
         };
     }
 
@@ -199,27 +299,18 @@ impl MmBs {
         // Try to register the client
         let issi = prim.received_address.ssi;
         let handle = prim.handle;
-        let is_new = !self.client_mgr.client_is_known(issi);
+        let is_new = !self.state_is_registered(issi);
+        self.state_register_subscriber(issi);
         if is_new {
-            match self.client_mgr.try_register_client(issi, true) {
-                Ok(_) => {
-                    self.config.state_write().subscribers.register(issi);
-                    self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed registering roaming MS {}: {:?}", issi, e);
-                    // unimplemented_log!("Handle failed registration of roaming MS");
-                    return;
-                }
-            }
-        } else if let Err(e) = self.client_mgr.set_client_state(issi, MmClientState::Attached) {
-            tracing::warn!("Failed updating roaming MS {}: {:?}", issi, e);
+            self.emit_subscriber_event(queue, MmSubscriberEvent::Register { issi });
+        } else {
+            tracing::warn!("Registered already-known MS {}", issi);
             return;
         }
 
         // Store energy saving mode in client state
         let esm = esi.as_ref().map(|e| e.energy_saving_mode).unwrap_or(EnergySavingMode::StayAlive);
-        let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+        self.state_set_client_energy_saving_mode(issi, esm);
 
         // Process optional GroupIdentityLocationDemand field
         let has_groups = pdu.group_identity_location_demand.is_some();
@@ -228,22 +319,38 @@ impl MmBs {
             // attached group identities and attach group identities defined in the
             // group identity uplink element."
             if gild.group_identity_attach_detach_mode == 1 {
-                let prior_groups: Vec<u32> = self
-                    .client_mgr
-                    .get_client_by_issi(issi)
-                    .map(|client| client.groups.iter().copied().collect())
-                    .unwrap_or_default();
-                if let Err(e) = self.client_mgr.client_detach_all_groups(issi) {
-                    tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
-                } else if !prior_groups.is_empty() {
-                    {
-                        let mut state = self.config.state_write();
-                        for &gssi in &prior_groups {
-                            state.subscribers.deaffiliate(issi, gssi);
+                match self.state_group_detach_all(issi) {
+                    Some(detached_groups) => {
+                        let prior_groups: Vec<u32> = detached_groups.iter().copied().collect();
+                        if !prior_groups.is_empty() {
+                            self.emit_subscriber_event(
+                                queue,
+                                MmSubscriberEvent::Deaffiliate {
+                                    issi,
+                                    groups: prior_groups,
+                                },
+                            );
                         }
                     }
-                    self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                    None => {
+                        tracing::warn!("state_group_detach_all: no groups were detached for SSI {}", issi);
+                    }
                 }
+                // let prior_groups: Vec<u32> = self
+                //     .client_mgr
+                //     .get_client_by_issi(issi)
+                //     .map(|client| client.groups.iter().copied().collect())
+                //     .unwrap_or_default();
+                // if let Err(e) = self.client_mgr.client_detach_all_groups(issi) {
+                //     tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
+                // } else if !prior_groups.is_empty() {
+                //     {
+                //         for &gssi in &prior_groups {
+                //             self.state_group_detach(issi, gssi);
+                //         }
+                //     }
+                //     self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
+                // }
             }
 
             // Try to attach to requested groups, then build GroupIdentityLocationAccept element
@@ -266,8 +373,8 @@ impl MmBs {
         // Store and log class_of_ms
         if let Some(ref class) = pdu.class_of_ms {
             tracing::info!("MS {} class_of_ms: {}", issi, class);
+            let _ = self.state_set_client_class_of_ms(issi, pdu.class_of_ms);
         }
-        let _ = self.client_mgr.set_client_class_of_ms(issi, pdu.class_of_ms);
 
         // Build D-LOCATION UPDATE ACCEPT pdu
         let pdu_response = DLocationUpdateAccept {
@@ -369,11 +476,11 @@ impl MmBs {
                 }
 
                 // Store StayAlive (see clause 16.7.1 NOTE 1)
-                let _ = self.client_mgr.set_client_energy_saving_mode(issi, EnergySavingMode::StayAlive);
-
                 // Respond with StayAlive
+                let chosen_esm = EnergySavingMode::StayAlive;
+                self.state_set_client_energy_saving_mode(issi, chosen_esm);
                 let esi = EnergySavingInformation {
-                    energy_saving_mode: EnergySavingMode::StayAlive,
+                    energy_saving_mode: chosen_esm,
                     frame_number: None,
                     multiframe_number: None,
                 };
@@ -385,6 +492,7 @@ impl MmBs {
                 let esm = if let Some(dep_info) = pdu.status_uplink_dependent_information {
                     let dep_len = pdu.status_uplink_dependent_information_len.unwrap_or(0);
                     if dep_len >= 3 {
+                        // TODO FIXME we basically accept a non-prompted modechange if a misbehaving MS sends this "response"
                         let mode_val = dep_info >> (dep_len - 3);
                         EnergySavingMode::try_from(mode_val).unwrap_or(EnergySavingMode::StayAlive)
                     } else {
@@ -395,7 +503,7 @@ impl MmBs {
                 };
 
                 tracing::info!("MS {} energy saving mode change response: {:?}", issi, esm);
-                let _ = self.client_mgr.set_client_energy_saving_mode(issi, esm);
+                let _ = self.state_set_client_energy_saving_mode(issi, esm);
                 handled = true;
             }
             StatusUplink::DualWatchModeRequest
@@ -460,44 +568,28 @@ impl MmBs {
 
         // If group_identity_attach_detach_mode == 1, we first detach all groups
         if pdu.group_identity_attach_detach_mode == true {
-            if !self.client_mgr.client_is_known(issi) {
+            if !self.state_is_registered(issi) {
                 // Client unknown (e.g. never registered via location update).
                 // Re-register so group attachment can proceed.
-                match self.client_mgr.try_register_client(issi, true) {
-                    Ok(_) => {
-                        self.config.state_write().subscribers.register(issi);
-                        self.emit_subscriber_update(queue, issi, Vec::new(), BrewSubscriberAction::Register);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed re-registering MS {} on group attach: {:?}", issi, e);
-                        return;
-                    }
-                }
+                // TODO FIXME this should not happen if we demand attachment first!
+                tracing::warn!("unregistered MS tries to attach/detach group");
+                self.state_register_subscriber(issi);
+                self.emit_subscriber_event(queue, MmSubscriberEvent::Register { issi });
             } else {
                 // Client is known — detach all existing groups first
-                let prior_groups: Vec<u32> = self
-                    .client_mgr
-                    .get_client_by_issi(issi)
-                    .map(|client| client.groups.iter().copied().collect())
-                    .unwrap_or_default();
-                match self.client_mgr.client_detach_all_groups(issi) {
-                    Ok(_) => {
-                        if !prior_groups.is_empty() {
-                            {
-                                let mut state = self.config.state_write();
-                                for &gssi in &prior_groups {
-                                    state.subscribers.deaffiliate(issi, gssi);
-                                }
-                            }
-                            self.emit_subscriber_update(queue, issi, prior_groups, BrewSubscriberAction::Deaffiliate);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed detaching all groups for MS {}: {:?}", issi, e);
-                        return;
-                    }
+                let prior_groups: Vec<u32> = self.state_group_detach_all(issi).unwrap().iter().copied().collect();
+                if !prior_groups.is_empty() {
+                    self.emit_subscriber_event(
+                        queue,
+                        MmSubscriberEvent::Deaffiliate {
+                            issi,
+                            groups: prior_groups,
+                        },
+                    );
                 }
             }
+        } else {
+            tracing::warn!("unimplemented attach/detach mode");
         }
 
         // Try to attach to requested groups, and retrieve list of accepted GroupIdentityDownlink elements
@@ -590,57 +682,45 @@ impl MmBs {
             let is_detach = giu.group_identity_detachment_uplink.is_some();
 
             if is_detach {
-                match self.client_mgr.client_group_attach(issi, gssi, false) {
-                    Ok(changed) => {
-                        if changed {
-                            self.config.state_write().subscribers.deaffiliate(issi, gssi);
-                            deaff_groups.push(gssi);
-                        }
-                        let gid = GroupIdentityDownlink {
-                            group_identity_attachment: None,
-                            group_identity_detachment_uplink: giu.group_identity_detachment_uplink,
-                            gssi: Some(gssi),
-                            address_extension: None,
-                            vgssi: None,
-                        };
-                        accepted_groups.push(gid);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed detaching MS {} from group {}: {:?}", issi, gssi, e);
-                    }
-                }
+                self.state_group_detach(issi, gssi);
+                deaff_groups.push(gssi);
+
+                let gid = GroupIdentityDownlink {
+                    group_identity_attachment: None,
+                    group_identity_detachment_uplink: giu.group_identity_detachment_uplink,
+                    gssi: Some(gssi),
+                    address_extension: None,
+                    vgssi: None,
+                };
+                accepted_groups.push(gid);
             } else {
-                match self.client_mgr.client_group_attach(issi, gssi, true) {
-                    Ok(changed) => {
-                        if changed {
-                            self.config.state_write().subscribers.affiliate(issi, gssi);
-                            aff_groups.push(gssi);
-                        }
-                        // We have added the client to this group. Add an entry to the downlink response
-                        let gid = GroupIdentityDownlink {
-                            group_identity_attachment: Some(GroupIdentityAttachment {
-                                group_identity_attachment_lifetime: 1, // re-attach after ITSI attach (ETSI default per clause 16.4.2)
-                                class_of_usage: giu.class_of_usage.unwrap_or(0),
-                            }),
-                            group_identity_detachment_uplink: None,
-                            gssi: Some(gssi),
-                            address_extension: None,
-                            vgssi: None,
-                        };
-                        accepted_groups.push(gid);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed attaching MS {} to group {}: {:?}", issi, gssi, e);
-                    }
-                }
+                self.state_group_attach(issi, gssi);
+                aff_groups.push(gssi);
+                let gid = GroupIdentityDownlink {
+                    group_identity_attachment: Some(GroupIdentityAttachment {
+                        group_identity_attachment_lifetime: 1, // re-attach after ITSI attach (ETSI default per clause 16.4.2)
+                        class_of_usage: giu.class_of_usage.unwrap_or(0),
+                    }),
+                    group_identity_detachment_uplink: None,
+                    gssi: Some(gssi),
+                    address_extension: None,
+                    vgssi: None,
+                };
+                accepted_groups.push(gid);
             }
         }
 
         if !aff_groups.is_empty() {
-            self.emit_subscriber_update(queue, issi, aff_groups, BrewSubscriberAction::Affiliate);
+            self.emit_subscriber_event(queue, MmSubscriberEvent::Affiliate { issi, groups: aff_groups });
         }
         if !deaff_groups.is_empty() {
-            self.emit_subscriber_update(queue, issi, deaff_groups, BrewSubscriberAction::Deaffiliate);
+            self.emit_subscriber_event(
+                queue,
+                MmSubscriberEvent::Deaffiliate {
+                    issi,
+                    groups: deaff_groups,
+                },
+            );
         }
 
         accepted_groups

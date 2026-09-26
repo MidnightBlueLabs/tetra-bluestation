@@ -18,12 +18,16 @@ use crate::common::ComponentTest;
 
 /// Helper: register a subscriber ISSI in the StackState subscriber registry
 fn register_subscriber(test: &mut ComponentTest, issi: u32) {
-    test.config.state_write().subscribers.register(issi);
+    test.state.with_subscribers(|s| {
+        s.register(issi);
+    })
 }
 
 /// Helper: affiliate a subscriber with a GSSI in the StackState subscriber registry
 fn affiliate_subscriber(test: &mut ComponentTest, issi: u32, gssi: u32) {
-    test.config.state_write().subscribers.affiliate(issi, gssi);
+    test.state.with_subscribers(|s| {
+        s.group_attach(issi, gssi);
+    })
 }
 
 /// Helper: build a U-SDS-DATA message from a source ISSI to a dest SSI with 16-bit payload

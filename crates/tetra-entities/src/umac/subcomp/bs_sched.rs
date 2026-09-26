@@ -1,13 +1,11 @@
-use tetra_core::{BitBuffer, Direction, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
-use tetra_saps::{
-    control::call_control::Circuit,
-    tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel},
-};
+use std::collections::VecDeque;
 
-use crate::{
-    lmac::components::scrambler,
-    umac::subcomp::{bs_frag::BsFragger, circuit_mgr::CircuitMgr},
-};
+use tetra_config::bluestation::{MacSlot, NUM_TIMESLOTS, StackState};
+use tetra_core::{BitBuffer, PhyBlockNum, PhysicalChannel, TdmaTime, TetraAddress, Todo, TxReporter, unimplemented_log};
+use tetra_pdus::cmce::structs::cmce_circuit::CallId;
+use tetra_saps::tmv::{TmvUnitdataReq, TmvUnitdataReqSlot, enums::logical_chans::LogicalChannel};
+
+use crate::{lmac::components::scrambler, umac::subcomp::bs_frag::BsFragger};
 use tetra_pdus::umac::enums::access_code::AccessCode;
 use tetra_pdus::umac::structs::access_field::AccessField;
 use tetra_pdus::umac::structs::base_frame_length::BaseFrameLength;
@@ -42,8 +40,12 @@ pub const TCH_S_CAP: usize = 274;
 // The default access frame marker used in access fields
 const DEFAULT_ACCESS_FRAME_MARKER: BaseFrameLength = BaseFrameLength::Subslots2;
 
-/// Number of timeslots the scheduler operates on. May become larger when secondary carriers are supported.
-pub const NUM_TIMESLOTS: usize = 4;
+// Housekeeping only, not an ETSI value. Reclaims a UL reservation if the MS never sends
+// its continuation at all. Normal reservations are released by ul_release_slot as soon as
+// they are actually consumed, so this almost never fires. Matches the reassembly timeout
+// already used in BsDefrag for the same purpose, so both give up on the same message at
+// the same point instead of disagreeing.
+const UL_RESERVATION_ABANDONED_FRAMES: i32 = 10;
 
 #[derive(Debug)]
 pub struct PrecomputedUmacPdus {
@@ -73,12 +75,20 @@ pub struct BsChannelScheduler {
     dltx_queues: [Vec<DlSchedElem>; 4],
     ulsched: [[TimeslotSchedule; MACSCHED_NUM_FRAMES]; 4],
 
-    circuits: CircuitMgr,
+    /// Shared stack state, holding the circuits this scheduler serves.
+    state: StackState,
 
-    /// When true, the given timeslot is in call hangtime: keep circuit allocated but stop
-    /// sending traffic-plane TCH blocks. Instead, transmit signalling-plane idle (Null PDUs)
-    /// and signal UL usage as AssignedOnly so MS can request the floor.
-    hangtime: [bool; 4],
+    /// Downlink speech blocks queued for transmission, per timeslot
+    tx_data: [VecDeque<Vec<u8>>; 4],
+
+    /// Previous tick's slot occupant (call id) per timeslot, so per-slot MAC state is wiped
+    /// exactly once when the circuit on a slot opens, closes or is replaced.
+    slot_owner: [Option<CallId>; 4],
+
+    /// Previous tick's derived hangtime per timeslot, so the leave-hangtime cleanup runs
+    /// exactly once on the transition. The hangtime itself lives in the shared circuit
+    /// state and is read through `MacSlot::in_hangtime`.
+    was_hangtime: [bool; 4],
 
     /// Per-timeslot set of SSIs whose RandomAccessAck was dropped by dl_drop_all_except_stolen.
     /// The next STCH built for a matching SSI should carry random_access_flag=true to properly
@@ -119,7 +129,7 @@ const EMPTY_SCHED_CHANNEL: [TimeslotSchedule; MACSCHED_NUM_FRAMES] = [EMPTY_SCHE
 const EMPTY_SCHED: [[TimeslotSchedule; MACSCHED_NUM_FRAMES]; 4] = [EMPTY_SCHED_CHANNEL; 4];
 
 impl BsChannelScheduler {
-    pub fn new(scrambling_code: u32, precomps: PrecomputedUmacPdus) -> Self {
+    pub fn new(scrambling_code: u32, precomps: PrecomputedUmacPdus, state: StackState) -> Self {
         BsChannelScheduler {
             cur_dltime: TdmaTime { t: 0, f: 0, m: 0, h: 0 }, // Intentionally invalid, updated in tick function
             scrambling_code,
@@ -127,47 +137,28 @@ impl BsChannelScheduler {
             dltx_next_slot_queue: Vec::new(),
             dltx_queues: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             ulsched: EMPTY_SCHED,
-            circuits: CircuitMgr::new(),
-            hangtime: [false, false, false, false],
+            state,
+            tx_data: [VecDeque::new(), VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            slot_owner: [None; 4],
+            was_hangtime: [false, false, false, false],
             pending_ra_acks: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         }
     }
 
-    /// Enter/leave hangtime for a traffic timeslot (2..=4).
-    pub fn set_hangtime(&mut self, ts: u8, active: bool) {
-        if !(1..=4).contains(&ts) {
-            tracing::warn!("BsChannelScheduler::set_hangtime: invalid ts {}", ts);
-            return;
-        }
-
-        let idx = ts as usize - 1;
-        self.hangtime[idx] = active;
-
-        // When leaving hangtime, drain stale signaling items that can only be consumed
-        // in signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED
-        // that still need FACCH delivery.
-        if !active {
-            self.dl_drop_all_except_stolen(ts);
-        }
-
-        tracing::info!(
-            "BsChannelScheduler: hangtime {} for ts {}",
-            if active { "ENABLED" } else { "DISABLED" },
-            ts,
-        );
-    }
-
+    /// The timeslot is in call hangtime: keep the circuit allocated but stop sending
+    /// traffic-plane TCH blocks. Instead, transmit signalling-plane idle (Null PDUs) and
+    /// signal UL usage as AssignedOnly so MS can request the floor. Derived from the shared
+    /// circuit state.
     pub fn is_hangtime(&self, ts: u8) -> bool {
         if !(1..=4).contains(&ts) {
             tracing::warn!("BsChannelScheduler::is_hangtime: invalid ts {}", ts);
             return false;
         }
-        self.hangtime[ts as usize - 1]
+        self.mac_slot(ts).is_some_and(|s| s.in_hangtime)
     }
 
     fn is_hangtime_effective(&self, ts: u8) -> bool {
-        let idx = ts as usize - 1;
-        if !self.hangtime[idx] {
+        if !self.is_hangtime(ts) {
             return false;
         }
         // If a stealing block is still queued for this slot, keep traffic mode
@@ -395,6 +386,23 @@ impl BsChannelScheduler {
         }
     }
 
+    // Releases a granted UL reservation. ETSI 23.4.3.1.2 permits discarding a continuation
+    // only on decode failure or on a new MAC-ACCESS PDU superseding it. Call this on those
+    // two events, not on a timer, so the reservation stays valid for exactly as long as
+    // ETSI requires the BS to keep attempting reception.
+    pub fn ul_release_slot(&mut self, ts: TdmaTime, slot: PhyBlockNum) {
+        let sched = &mut self.ulsched[ts.t as usize - 1][self.ul_ts_to_sched_index(&ts)];
+        match slot {
+            PhyBlockNum::Block1 => sched.ul1 = None,
+            PhyBlockNum::Block2 => sched.ul2 = None,
+            PhyBlockNum::Both => {
+                sched.ul1 = None;
+                sched.ul2 = None;
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn ul_get_usage(&self, ts: TdmaTime) -> AccessAssignUlUsage {
         let ul_sched = &self.ulsched[ts.t as usize - 1][self.ul_ts_to_sched_index(&ts)];
         match (ul_sched.ul1, ul_sched.ul2) {
@@ -494,27 +502,46 @@ impl BsChannelScheduler {
     // }
 
     pub fn dl_schedule_tmd(&mut self, ts: u8, block: Vec<u8>) {
-        self.circuits.put_block(ts, block);
-    }
-
-    pub fn circuit_is_active(&self, dir: Direction, ts: u8) -> bool {
-        self.circuits.is_active(dir, ts)
-    }
-
-    pub fn close_circuit(&mut self, dir: Direction, ts: u8) -> Option<Circuit> {
-        // Clearing hangtime here is safe: if the circuit is gone, this timeslot is no longer in use.
-        if (1..=4).contains(&ts) {
-            self.hangtime[ts as usize - 1] = false;
+        if !self.circuit_is_active(ts) {
+            tracing::warn!("dl_schedule_tmd: no circuit on ts {}", ts);
+            return;
         }
-        self.circuits.close_circuit(dir, ts)
+        self.tx_data[ts as usize - 1].push_back(block);
     }
 
-    pub fn create_circuit(&mut self, dir: Direction, circuit: Circuit) {
-        // New/updated circuit implies traffic mode.
-        if (1..=4).contains(&circuit.ts) {
-            self.hangtime[circuit.ts as usize - 1] = false;
+    /// The circuit occupying this timeslot, as the MAC sees it.
+    pub fn mac_slot(&self, ts: u8) -> Option<MacSlot> {
+        if !(1..=4).contains(&ts) {
+            return None;
         }
-        self.circuits.create_circuit(dir, circuit);
+        self.state.with_circuits(|c| c.mac_slot(ts))
+    }
+
+    /// A circuit occupies this timeslot. Uplink and downlink are always allocated together,
+    /// so this holds for both directions.
+    pub fn circuit_is_active(&self, ts: u8) -> bool {
+        self.mac_slot(ts).is_some()
+    }
+
+    /// Timeslot whose downlink carries what this timeslot's uplink receives, for a cross-routed
+    /// duplex call.
+    pub fn ul_peer_ts(&self, ts: u8) -> Option<u8> {
+        self.mac_slot(ts).and_then(|s| s.peer_ts)
+    }
+
+    /// True when the downlink speech of the circuit on this timeslot comes from the network,
+    /// so uplink speech must not be looped back onto it.
+    pub fn dl_is_from_network(&self, ts: u8) -> bool {
+        self.mac_slot(ts).is_some_and(|s| s.dl_from_network)
+    }
+
+    /// Drops any downlink speech still queued for a timeslot whose circuit is gone.
+    fn clear_tx_data(&mut self, ts: u8) {
+        let queue = &mut self.tx_data[ts as usize - 1];
+        if !queue.is_empty() {
+            tracing::debug!("clear_tx_data: dropping {} queued speech blocks on ts {}", queue.len(), ts);
+            queue.clear();
+        }
     }
 
     /// Takes a block or None value.
@@ -801,7 +828,7 @@ impl BsChannelScheduler {
     /// Also reports transmission, if a TxReporter was attached to the DlSchedElem::Stealing element
     fn dl_build_traffic_block(&mut self, ts: TdmaTime) -> (BitBuffer, Option<BitBuffer>) {
         // Get speech data or silence
-        let tch_buf = if let Some(block) = self.circuits.take_block(ts.t) {
+        let tch_buf = if let Some(block) = self.tx_data[ts.t as usize - 1].pop_front() {
             let mut buf = BitBuffer::from_vec(block);
             // Raw ACELP speech (274 bits for TCH/S).
             // Clamp to TCH_S_CAP as Vec may be larger (e.g. 280 bits).
@@ -880,6 +907,43 @@ impl BsChannelScheduler {
             self.cur_dltime,
             ts
         );
+
+        // Per-slot bookkeeping against the shared circuit state, before this tick's slot is
+        // finalized.
+        for slot in 1..=4u8 {
+            let idx = slot as usize - 1;
+            let mac_slot = self.mac_slot(slot);
+
+            // Occupant change (circuit opened, closed or replaced): drop speech still queued
+            // for the previous occupant.
+            let owner = mac_slot.map(|s| s.call_id);
+            if owner != self.slot_owner[idx] {
+                tracing::debug!(
+                    "BsChannelScheduler: circuit change on ts {} ({:?} -> {:?})",
+                    slot,
+                    self.slot_owner[idx],
+                    owner
+                );
+                self.clear_tx_data(slot);
+                self.slot_owner[idx] = owner;
+            }
+
+            // On leaving hangtime, drain stale signaling items that can only be consumed in
+            // signaling mode. Keep Stealing items — they carry D-TX GRANTED/CEASED that still
+            // need FACCH delivery.
+            let hangtime = mac_slot.is_some_and(|s| s.in_hangtime);
+            if self.was_hangtime[idx] != hangtime {
+                tracing::info!(
+                    "BsChannelScheduler: hangtime {} for ts {}",
+                    if hangtime { "ENABLED" } else { "DISABLED" },
+                    slot,
+                );
+                if !hangtime {
+                    self.dl_drop_all_except_stolen(slot);
+                }
+            }
+            self.was_hangtime[idx] = hangtime;
+        }
     }
 
     /// Prepares a scheduled FUTURE timeslot for transfer to lmac and transmission
@@ -894,8 +958,7 @@ impl BsChannelScheduler {
         self.precomps.mac_sysinfo1.hyperframe_number = Some(ts.h);
         self.precomps.mac_sysinfo2.hyperframe_number = Some(ts.h);
 
-        let dl_circuit_active = self.circuits.is_active(Direction::Dl, ts.t) && ts.f != 18;
-        let ul_circuit_active = self.circuits.is_active(Direction::Ul, ts.t) && ts.f != 18;
+        let circuit_active = ts.f != 18 && self.circuit_is_active(ts.t);
 
         // During hangtime we stop sending traffic frames and switch to signalling mode.
         // Keep traffic mode while FACCH/stealing is still queued for delivery.
@@ -905,14 +968,14 @@ impl BsChannelScheduler {
             false
         };
 
-        let dl_is_traffic = dl_circuit_active && !hang_effective;
-        let ul_is_traffic = ul_circuit_active && !hang_effective;
+        // Uplink and downlink of a circuit are allocated together, so they switch as one.
+        let is_traffic = circuit_active && !hang_effective;
 
         // Build the block for this timeslot with anything scheduled (traffic or signalling)
         // For traffic timeslots, also check for FACCH/stealing (STCH half-slot)
-        let ul_phy = if ul_is_traffic { PhysicalChannel::Tp } else { PhysicalChannel::Cp };
+        let ul_phy = if is_traffic { PhysicalChannel::Tp } else { PhysicalChannel::Cp };
 
-        let mut elem = if dl_is_traffic {
+        let mut elem = if is_traffic {
             let (tch_buf, stch_opt) = self.dl_build_traffic_block(ts);
 
             if let Some(stch_buf) = stch_opt {
@@ -975,7 +1038,7 @@ impl BsChannelScheduler {
             } else {
                 // If this is an allocated traffic slot in hangtime, keep it alive with an idle SCH/F (Null PDU).
                 // Otherwise, fall back to default SYNC/SYSINFO.
-                if hang_effective && dl_circuit_active {
+                if hang_effective && circuit_active {
                     TmvUnitdataReqSlot {
                         ts,
                         blk1: Some(TmvUnitdataReq {
@@ -1070,8 +1133,9 @@ impl BsChannelScheduler {
         // tracing::warn!("start finalize");
         // self.dump_ul_schedule_full(true);
 
-        // Clear UL schedule for this timeslot
-        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4));
+        // Abandonment backstop. Normal reservations are already gone by now via
+        // ul_release_slot, so this only ever catches a grant the MS never used.
+        let index = self.ul_ts_to_sched_index(&ts.add_timeslots(-4 * UL_RESERVATION_ABANDONED_FRAMES));
         self.ulsched[ts.t as usize - 1][index].ul1 = None;
         self.ulsched[ts.t as usize - 1][index].ul2 = None;
 
@@ -1083,14 +1147,9 @@ impl BsChannelScheduler {
     }
 
     fn generate_bbk_block(&self, ts: TdmaTime) -> TmvUnitdataReq {
-        let (ul_traffic_usage, dl_traffic_usage) = if ts.f == 18 {
-            (None, None)
-        } else {
-            (
-                self.circuits.get_usage(Direction::Ul, ts.t),
-                self.circuits.get_usage(Direction::Dl, ts.t),
-            )
-        };
+        // Uplink and downlink of a circuit are allocated together, so both carry the same marker.
+        let traffic_usage = if ts.f == 18 { None } else { self.mac_slot(ts.t).map(|s| s.usage) };
+        let (ul_traffic_usage, dl_traffic_usage) = (traffic_usage, traffic_usage);
 
         // Generate BBK block
         let mut aach_bb = BitBuffer::new(14);
@@ -1312,10 +1371,12 @@ impl BsChannelScheduler {
 #[cfg(test)]
 mod tests {
 
+    use tetra_config::bluestation::{CircuitState, CircuitStreamDest, CircuitStreamSrc, TetraCircuit};
     use tetra_core::{
         address::{SsiType, TetraAddress},
         debug::setup_logging_default,
     };
+    use tetra_saps::control::enums::communication_type::CommunicationType;
 
     use tetra_pdus::{
         mle::{
@@ -1442,9 +1503,39 @@ mod tests {
             mle_sync: mle_sync_pdu,
         };
 
-        let mut sched = BsChannelScheduler::new(1, precomps);
+        let mut sched = BsChannelScheduler::new(1, precomps, StackState::new());
         sched.set_dl_time(TdmaTime::default().add_timeslots(2));
         sched
+    }
+
+    /// Puts a simplex group call on a traffic timeslot, which is what the scheduler derives its
+    /// per-slot view from.
+    fn open_test_circuit(sched: &BsChannelScheduler, ts: u8, usage: u8) {
+        let circuit = TetraCircuit {
+            state: CircuitState::new_tx(),
+            setup_retrans: Default::default(),
+            has_alerted: false,
+            hangtime_at_release: false,
+            dl1_source: CircuitStreamDest::Local(Some(ts)),
+            ul1_source: CircuitStreamSrc::Local(Some(ts)),
+            dl2_source: None,
+            ul2_source: None,
+            is_duplex: false,
+            hook_on_off: false,
+            comm_type: CommunicationType::P2mp,
+            call_id: 1,
+            usage_id: usage,
+            usage2_id: None,
+            floor: Some(1234),
+            caller: 1234,
+            callee: 4321,
+            is_local_origin: true,
+            is_mobile_terminated: false,
+            brew_origin_uuid: None,
+            is_etee_encrypted: false,
+            t_start: TdmaTime::default(),
+        };
+        sched.state.with_circuits(|c| c.put_circuit(circuit));
     }
 
     #[test]
@@ -1580,23 +1671,10 @@ mod tests {
     /// ACCESS-ASSIGN PDUs, ETSI 23.8.2.3.2) would reset its count.
     #[test]
     fn test_hangtime_marker_does_not_flap_on_pending_stealing() {
-        use tetra_saps::control::call_control::Circuit;
-        use tetra_saps::control::enums::circuit_mode_type::CircuitModeType;
-
         let mut sched = get_testing_slotter();
         let ts = TdmaTime { t: 2, f: 1, m: 1, h: 0 };
 
-        sched.create_circuit(
-            Direction::Dl,
-            Circuit {
-                direction: Direction::Dl,
-                ts: 2,
-                usage: 6,
-                circuit_mode: CircuitModeType::TchS,
-                speech_service: Some(0),
-                etee_encrypted: false,
-            },
-        );
+        open_test_circuit(&sched, 2, 6);
 
         // Active over: traffic usage marker (UMt).
         assert!(
@@ -1604,8 +1682,11 @@ mod tests {
             "active over should carry the traffic usage marker"
         );
 
-        // Hangtime, no pending steal: AssignedControl, not traffic.
-        sched.set_hangtime(2, true);
+        // Hangtime, no pending steal: AssignedControl, not traffic. Hangtime is derived from
+        // the circuit state, so put the call in TxCeased.
+        sched
+            .state
+            .with_circuits(|c| c.set_circuit_state(1, CircuitState::TxCeased { age: 0 }));
         let aach = decode_aach(&sched, ts);
         assert!(!aach.dl_is_traffic(), "hangtime should drop the traffic usage marker");
         assert!(

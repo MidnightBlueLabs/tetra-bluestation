@@ -1,8 +1,8 @@
 use tetra_core::{Direction, TdmaTime};
-use tetra_saps::{
-    control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType},
-    lcmc::CallId,
-};
+use tetra_saps::control::enums::{circuit_mode_type::CircuitModeType, communication_type::CommunicationType};
+
+/// Call ID as allocated by CMCE
+pub type CallId = u16;
 
 // #[derive(Debug, Clone, Copy, PartialEq)]
 // pub struct CmceCircuit {

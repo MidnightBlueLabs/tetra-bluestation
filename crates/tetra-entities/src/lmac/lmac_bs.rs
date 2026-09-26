@@ -269,10 +269,12 @@ impl LmacBs {
             prim.block_num != PhyBlockNum::Block1 || !self.blk2_stolen,
             "blk2_stolen must be false when receiving block1"
         );
-        assert!(
-            pchan == PhysicalChannel::Tp || !self.blk2_stolen,
-            "blk2_stolen must be false when not in a traffic burst"
-        );
+        // Stolen second half slot (ETSI length indication 1111102) can arrive after its circuit
+        // closed, as the uplink block trails the schedule by two timeslots. Honour blk2_stolen
+        // and resolve to STCH below.
+        if self.blk2_stolen && pchan != PhysicalChannel::Tp {
+            tracing::debug!("blk2 stolen on ts {} that left traffic, treating as STCH", ts_idx + 1);
+        }
 
         match lchan {
             LogicalChannel::Clch => {}

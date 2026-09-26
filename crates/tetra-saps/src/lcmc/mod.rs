@@ -5,9 +5,6 @@ use crate::{control::enums::circuit_mode_type::CircuitModeType, lcmc::fields::ch
 pub mod enums;
 pub mod fields;
 
-/// Call ID as allocated by CMCE
-pub type CallId = u16;
-
 // Clause 17.3.3 Service state diagram for the LCMC-SAP (MLE-CMCE)
 
 /// MLE-ACTIVITY request: this primitive shall be used by the CMCE to inform the MLE of the state of any circuit

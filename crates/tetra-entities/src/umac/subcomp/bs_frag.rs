@@ -105,7 +105,6 @@ impl BsFragger {
             // allocation information with a fragmented message then that information shall be included within the MAC-END PDU
             // and shall not be included within the MAC-RESOURCE PDU."
             if self.resource.chan_alloc_element.is_some() {
-
                 // Move the chan_alloc element out of the resource and into the fragger state
                 self.chan_alloc = self.resource.chan_alloc_element.clone();
                 self.resource.chan_alloc_element = None;

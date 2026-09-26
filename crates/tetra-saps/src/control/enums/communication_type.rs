@@ -6,7 +6,7 @@ pub enum CommunicationType {
     /// Point-to-point
     P2p = 0,
     /// Point-to-multipoint
-    P2Mp = 1,
+    P2mp = 1,
     /// Point-to-multipoint Acknowledged
     P2MpAcked = 2,
     /// Broadcast
@@ -18,7 +18,7 @@ impl std::convert::TryFrom<u64> for CommunicationType {
     fn try_from(x: u64) -> Result<Self, Self::Error> {
         match x {
             0 => Ok(CommunicationType::P2p),
-            1 => Ok(CommunicationType::P2Mp),
+            1 => Ok(CommunicationType::P2mp),
             2 => Ok(CommunicationType::P2MpAcked),
             3 => Ok(CommunicationType::Broadcast),
             _ => Err(()),
@@ -31,7 +31,7 @@ impl CommunicationType {
     pub fn into_raw(self) -> u64 {
         match self {
             CommunicationType::P2p => 0,
-            CommunicationType::P2Mp => 1,
+            CommunicationType::P2mp => 1,
             CommunicationType::P2MpAcked => 2,
             CommunicationType::Broadcast => 3,
         }
@@ -48,7 +48,7 @@ impl core::fmt::Display for CommunicationType {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             CommunicationType::P2p => write!(f, "P2p"),
-            CommunicationType::P2Mp => write!(f, "P2mp"),
+            CommunicationType::P2mp => write!(f, "P2mp"),
             CommunicationType::P2MpAcked => write!(f, "P2mpacked"),
             CommunicationType::Broadcast => write!(f, "Broadcast"),
         }
