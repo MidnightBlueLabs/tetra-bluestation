@@ -160,8 +160,6 @@ mod tests {
     use crate::net_telemetry::channel::telemetry_channel;
     use crate::network::transports::NetworkAddress;
     use crate::network::transports::mock::MockTransport;
-    use crate::network::transports::quic::QuicTransport;
-    use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
 
     #[test]
     fn test_worker_forwards_events_and_exits() {
@@ -188,8 +186,11 @@ mod tests {
     /// Run with: `cargo test -p tetra-entities -- --ignored test_websocket_to_telemetry_endpoint`
     #[test]
     #[ignore] // Not run by default as it requires a running local listener
+    #[cfg(feature = "net-transport-websocket")]
     fn test_websocket_to_telemetry_endpoint() {
         setup_logging_verbose();
+
+        use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
 
         let config = WebSocketTransportConfig {
             host: "127.0.0.1".to_string(),
@@ -229,7 +230,12 @@ mod tests {
     /// Run with: `cargo test -p tetra-entities -- --ignored test_quic_to_telemetry_endpoint`
     #[test]
     #[ignore] // Not run by default as it requires a running local QUIC listener
+    #[cfg(feature = "net-transport-quic")]
+
     fn test_quic_to_telemetry_endpoint() {
+
+        use crate::network::transports::quic::QuicTransport;
+
         setup_logging_verbose();
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
@@ -273,7 +279,10 @@ mod tests {
     /// Run: `cargo test -p tetra-entities -- --ignored test_basic_auth_accepted`
     #[test]
     #[ignore]
+    #[cfg(feature = "net-transport-websocket")]
     fn test_basic_auth_accepted() {
+
+        use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
         setup_logging_verbose();
 
         let config = WebSocketTransportConfig {
@@ -302,7 +311,9 @@ mod tests {
     /// Run: `cargo test -p tetra-entities -- --ignored test_basic_auth_rejected`
     #[test]
     #[ignore]
+    #[cfg(feature = "net-transport-websocket")]
     fn test_basic_auth_rejected() {
+        use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
         setup_logging_verbose();
 
         let config = WebSocketTransportConfig {
@@ -330,7 +341,10 @@ mod tests {
     /// Run: `cargo test -p tetra-entities -- --ignored test_basic_auth_missing`
     #[test]
     #[ignore]
+    #[cfg(feature = "net-transport-websocket")]
     fn test_basic_auth_missing() {
+
+        use crate::network::transports::websocket::{WebSocketTransport, WebSocketTransportConfig};
         setup_logging_verbose();
 
         let config = WebSocketTransportConfig {

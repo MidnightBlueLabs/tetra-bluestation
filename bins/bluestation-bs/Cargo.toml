@@ -15,7 +15,14 @@ tetra-entities = { workspace = true }
 
 clap = { workspace = true }
 ctrlc = { workspace = true }
-rustls = { version = "0.23", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+rustls = { workspace = true }
+
+[features]
+default = ["net-transport-websocket"]
+
+net-transport-quic = ["tetra-entities/net-transport-quic"]
+net-transport-tcp = ["tetra-entities/net-transport-tcp"]
+net-transport-websocket = ["tetra-entities/net-transport-websocket"]

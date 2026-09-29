@@ -108,7 +108,11 @@ fn build_tls_config(
             }
         }
         None => {
-            for cert in rustls_native_certs::load_native_certs().map_err(|e| format!("load certs: {}", e))? {
+            let cert_result = rustls_native_certs::load_native_certs();
+            for error in &cert_result.errors {
+                tracing::warn!("Failed to load a native cert: {}", error);
+            }
+            for cert in cert_result.certs {
                 let _ = root_store.add(cert);
             }
         }
@@ -552,7 +556,7 @@ impl NetworkTransport for WebSocketTransport {
         if now.duration_since(self.last_ping_at) >= self.config.heartbeat_interval {
             self.ping_seq = self.ping_seq.wrapping_add(1);
             let payload = self.ping_seq.to_be_bytes().to_vec();
-            if ws.send(Message::Ping(payload)).is_err() {
+            if ws.send(Message::Ping(payload.into())).is_err() {
                 tracing::warn!("WebSocketTransport: heartbeat ping failed, disconnecting");
                 self.ws = None;
                 return vec![];

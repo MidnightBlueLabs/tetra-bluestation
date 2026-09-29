@@ -80,7 +80,7 @@ impl USdsData {
                 let num_bytes = (len_bits as usize + 7) / 8;
                 let mut data = vec![0u8; num_bytes];
                 buffer
-                    .read_bits_into_slice(len_bits as usize, &mut data)
+                    .read_bits_into_slice(&mut data, len_bits as usize)
                     .ok_or(PduParseErr::BufferEnded {
                         field: Some("user_defined_data_4"),
                     })?;

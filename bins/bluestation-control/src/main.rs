@@ -103,10 +103,8 @@ fn load_auth_db(path: &str) -> AuthDb {
 
 /// Prompt for username and password, then print an auth-file line to stdout.
 fn generate_credential() {
-    use argon2::{
-        Argon2,
-        password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
-    };
+    use argon2::{Argon2, password_hash::{PasswordHasher, SaltString}};
+    use rand_core::OsRng;
 
     eprint!("Username: ");
     let mut username = String::new();

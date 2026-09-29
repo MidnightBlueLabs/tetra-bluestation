@@ -10,6 +10,6 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 crossbeam-channel = { workspace = true }
 bitcode = { workspace = true }
-git-version = "0.3.9"
-const_format = "0.2.35"
+git-version = { workspace = true }
+const_format = { workspace = true }
 

@@ -12,22 +12,31 @@ as-any = { workspace = true }
 num = { workspace = true }
 num-complex = { workspace = true }
 rustfft = { workspace = true }
+soapysdr = { workspace = true }
 rand = { workspace = true }
 tracing = { workspace = true }
 crossbeam-channel = { workspace = true }
-soapysdr = { workspace = true }
-
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 bitcode = { workspace = true }
-quinn = "0.11"
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-native-certs = "0.7"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+tokio = { workspace = true }
 tungstenite = { workspace = true }
 httparse = { workspace = true }
 uuid = { workspace = true }
-md5 = "0.7"
-base64 = "0.22"
+md5 = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
+
+# Optional external crates depending on selected features
+quinn = { workspace = true, optional = true }
+
+[features]
+default = ["net-transport-websocket"]
+
+# Transport types for networked components
+net-transport-quic = ["dep:quinn"]  # Unmaintained
+net-transport-tcp = []              # Unmaintained
+net-transport-websocket = []

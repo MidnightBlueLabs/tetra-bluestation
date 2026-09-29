@@ -6,12 +6,15 @@ use serde::{Deserialize, Serialize};
 pub mod mock;
 
 /// QUIC transport implementation
+#[cfg(feature = "net-transport-quic")]
 pub mod quic;
 
 /// WebSocket transport implementation
+#[cfg(feature = "net-transport-websocket")]
 pub mod websocket;
 
 /// Basic TCP transport implementation
+#[cfg(feature = "net-transport-tcp")]
 pub mod tcp;
 
 /// Network transport abstraction for Entity-to-network external communications
@@ -47,18 +50,6 @@ pub trait NetworkTransport: Send {
     }
 }
 
-/// Factory trait for creating transport instances
-///
-/// Each transport type implements this to define how it gets constructed
-/// from a configuration type. This allows generic workers to create transports
-/// without knowing the specific construction details.
-pub trait TransportFactory: NetworkTransport + Sized {
-    /// Configuration type needed to construct this transport
-    type Config: Send + 'static;
-
-    /// Create a new transport instance from configuration
-    fn create(config: Self::Config) -> Result<Self, NetworkError>;
-}
 
 /// Network address abstraction
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

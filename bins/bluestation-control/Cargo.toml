@@ -10,13 +10,14 @@ path = "src/main.rs"
 [dependencies]
 tetra-core = { workspace = true }
 tetra-entities = { workspace = true }
-crossbeam-channel = { workspace = true }
 
+crossbeam-channel = { workspace = true }
 clap = { workspace = true }
 tungstenite = { workspace = true }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-pemfile = "2"
-base64 = "0.22"
-argon2 = "0.5"
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+base64 = { workspace = true }
+argon2 = { workspace = true }
+rand_core = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

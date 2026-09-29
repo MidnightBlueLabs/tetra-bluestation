@@ -148,9 +148,11 @@ impl QuicTransport {
         let mut roots = rustls::RootCertStore::empty();
 
         // Add system certificates
-        for cert in rustls_native_certs::load_native_certs()
-            .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to load native certs: {}", e)))?
-        {
+        let cert_result = rustls_native_certs::load_native_certs();
+        for error in &cert_result.errors {
+            tracing::warn!("Failed to load a native cert: {}", error);
+        }
+        for cert in cert_result.certs {
             roots
                 .add(cert)
                 .map_err(|e| NetworkError::ConnectionFailed(format!("Failed to add cert: {}", e)))?;

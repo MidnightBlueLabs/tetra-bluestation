@@ -209,7 +209,7 @@ impl BitBuffer {
     }
 
     /// Read `num_bits` at the current pos, advancing pos, and write them into the provided output slice as bytes
-    pub fn read_bits_into_slice(&mut self, num_bits: usize, buf: &mut [u8]) -> Option<()> {
+    pub fn read_bits_into_slice(&mut self, buf: &mut [u8], num_bits: usize) -> Option<()> {
         let num_bytes = (num_bits + 7) / 8;
         assert!(buf.len() >= num_bytes, "output buffer too small for num_bits");
 
@@ -414,6 +414,21 @@ impl BitBuffer {
 
         // advance absolute position by full `num_bits`
         self.pos += num_bits;
+    }
+
+    /// Write `num_bits` taken from the provided slice at the current pos, advancing pos.
+    /// The slice is interpreted as MSB-first bytes, where a trailing partial byte is left-aligned.
+    pub fn write_from_slice(&mut self, buf: &[u8], num_bits: usize) {
+        let num_bytes = (num_bits + 7) / 8;
+        assert!(buf.len() >= num_bytes, "input buffer too small for num_bits");
+
+        let mut bits_remaining = num_bits;
+        for i in 0..num_bytes {
+            let bits_in_byte = usize::min(bits_remaining, 8);
+            let value = (buf[i] >> (8 - bits_in_byte)) as u64;
+            self.write_bits(value, bits_in_byte);
+            bits_remaining -= bits_in_byte;
+        }
     }
 
     /// Read `num_bits` from a source bitbuffer, starting at `pos`.
@@ -879,10 +894,25 @@ mod tests {
         let mut bb = BitBuffer::from_bitstr("10110011011");
         let mut out = [0u8; 2];
 
-        bb.read_bits_into_slice(11, &mut out).unwrap();
+        bb.read_bits_into_slice(&mut out, 11).unwrap();
 
         assert_eq!(out, [0b10110011, 0b01100000]);
         assert_eq!(bb.get_pos(), 11);
+    }
+
+    #[test]
+    fn test_write_from_slice() {
+        // Last byte holds 7 significant bits, the lowest bit must be dropped
+        let data = [0xA5, 0x3C, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78, 0b1010_1111];
+        let mut bb = BitBuffer::new_autoexpand(71);
+
+        bb.write_from_slice(&data, 71);
+        assert_eq!(bb.get_pos(), 71);
+
+        bb.seek(0);
+        let mut out = [0u8; 9];
+        bb.read_bits_into_slice(&mut out, 71).unwrap();
+        assert_eq!(out, [0xA5, 0x3C, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78, 0b1010_1110]);
     }
 
     #[test]
