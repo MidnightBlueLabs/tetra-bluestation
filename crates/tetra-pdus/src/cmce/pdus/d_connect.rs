@@ -26,8 +26,8 @@ pub struct DConnect {
     /// Type1, 2 bits, Transmission grant
     pub transmission_grant: TransmissionGrant,
     /// Type1, 1 bits, Transmission request permission
-    /// Set to true to signal MSes they are allowed to send a U-TX DEMAND
-    pub transmission_request_permission: bool,
+    /// Set to FALSE to signal MSes they are allowed to send a U-TX DEMAND
+    pub no_transmission_request_permission: bool,
     /// Type1, 1 bits, Call ownership
     pub call_ownership: bool,
     /// Type2, 4 bits, Call priority
@@ -66,7 +66,7 @@ impl DConnect {
         let transmission_grant = TransmissionGrant::try_from(val).unwrap(); // Never fails
 
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
         // Type1
         let call_ownership = buffer.read_field(1, "call_ownership")? != 0;
 
@@ -100,7 +100,7 @@ impl DConnect {
             hook_method_selection,
             simplex_duplex_selection,
             transmission_grant,
-            transmission_request_permission,
+            no_transmission_request_permission,
             call_ownership,
             call_priority,
             basic_service_information,
@@ -126,7 +126,7 @@ impl DConnect {
         // Type1
         buffer.write_bits(self.transmission_grant as u64, 2);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
         // Type1
         buffer.write_bits(self.call_ownership as u64, 1);
 
@@ -170,13 +170,13 @@ impl fmt::Display for DConnect {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DConnect {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} transmission_grant: {:?} transmission_request_permission: {:?} call_ownership: {:?} call_priority: {:?} basic_service_information: {:?} temporary_address: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
+            "DConnect {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} transmission_grant: {:?} tx_denied: {:?} call_ownership: {:?} call_priority: {:?} basic_service_information: {:?} temporary_address: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.call_time_out,
             self.hook_method_selection,
             self.simplex_duplex_selection,
             self.transmission_grant,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.call_ownership,
             self.call_priority,
             self.basic_service_information,
@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(d_connect.hook_method_selection, false);
         assert_eq!(d_connect.simplex_duplex_selection, false);
         assert_eq!(d_connect.transmission_grant, TransmissionGrant::Granted);
-        assert_eq!(d_connect.transmission_request_permission, false);
+        assert_eq!(d_connect.no_transmission_request_permission, false);
         assert_eq!(d_connect.call_ownership, false);
         assert!(d_connect.call_priority.is_none());
         assert!(d_connect.basic_service_information.is_none());

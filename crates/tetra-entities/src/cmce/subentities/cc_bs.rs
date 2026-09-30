@@ -516,7 +516,7 @@ impl CcBsSubentity {
             simplex_duplex_selection: duplex,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: called_grant,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_priority: pdu.call_priority,
             notification_indicator: None,
             temporary_address: None,
@@ -613,7 +613,7 @@ impl CcBsSubentity {
             hook_method_selection: pdu.hook_method_selection,
             simplex_duplex_selection: pdu.simplex_duplex_selection,
             transmission_grant: TransmissionGrant::Granted,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_ownership: true, // Calling MS is the call owner (ETSI 14.8.4)
             call_priority: None,
             basic_service_information: None,
@@ -664,7 +664,7 @@ impl CcBsSubentity {
             simplex_duplex_selection: pdu.simplex_duplex_selection,
             basic_service_information: pdu.basic_service_information.clone(),
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_priority: pdu.call_priority,
             notification_indicator: None,
             temporary_address: None,
@@ -892,7 +892,7 @@ impl CcBsSubentity {
             hook_method_selection: call.hook_on_off,
             simplex_duplex_selection: call.is_duplex,
             transmission_grant: TransmissionGrant::Granted,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_ownership: true,
             call_priority: None,
             basic_service_information: None,
@@ -1000,7 +1000,7 @@ impl CcBsSubentity {
             } else {
                 TransmissionGrant::GrantedToOtherUser
             },
-            transmission_request_permission: !duplex,
+            no_transmission_request_permission: !duplex,  // Always given if duplex
             call_priority: call.priority,
             notification_indicator: None,
             temporary_address: None,
@@ -1182,7 +1182,7 @@ impl CcBsSubentity {
             hook_method_selection: call.hook_on_off,
             simplex_duplex_selection: call.is_duplex,
             transmission_grant: caller_grant,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_ownership: true,
             call_priority: None,
             basic_service_information: None,
@@ -1204,7 +1204,7 @@ impl CcBsSubentity {
             call_identifier: call.call_id,
             call_time_out: CallTimeout::T5m as u8,
             transmission_grant: called_grant as u8,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             notification_indicator: None,
             facility: None,
             proprietary: None,
@@ -1250,7 +1250,7 @@ impl CcBsSubentity {
             call_identifier: call.call_id,
             call_time_out: CallTimeout::T5m as u8,
             transmission_grant: grant as u8,
-            transmission_request_permission: !call.is_duplex,
+            no_transmission_request_permission: !call.is_duplex,  // Always given for duplex
             notification_indicator: None,
             facility: None,
             proprietary: None,
@@ -1385,7 +1385,7 @@ impl CcBsSubentity {
         for addr in addrs {
             let d_tx_ceased = DTxCeased {
                 call_identifier: call_id,
-                transmission_request_permission: false,
+                no_transmission_request_permission: false,
                 notification_indicator: None,
                 facility: None,
                 dm_ms_address: None,
@@ -1455,7 +1455,7 @@ impl CcBsSubentity {
         let d_tx_granted = DTxGranted {
             call_identifier: call_id,
             transmission_grant: grant.into_raw() as u8,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             encryption_control: false,
             reserved: false,
             notification_indicator: None,
@@ -1746,7 +1746,7 @@ impl CcBsSubentity {
         // Send D-TX CEASED via FACCH (stealing) to all group members
         let d_tx_ceased = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
+            no_transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,
@@ -1839,7 +1839,7 @@ impl CcBsSubentity {
         let d_tx_granted_individual = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::Granted.into_raw() as u8,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             encryption_control: false,
             reserved: false,
             notification_indicator: None,
@@ -2155,7 +2155,7 @@ impl CcBsSubentity {
                 speech_service: Some(0),
             },
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_priority: 0,
             notification_indicator: None,
             temporary_address: None,
@@ -2192,7 +2192,7 @@ impl CcBsSubentity {
             hook_method_selection: false,
             simplex_duplex_selection: false, // Simplex
             transmission_grant: TransmissionGrant::GrantedToOtherUser,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             call_ownership: false,
             call_priority: None,
             basic_service_information: None,
@@ -2263,7 +2263,7 @@ impl CcBsSubentity {
         let pdu = DTxGranted {
             call_identifier: call_id,
             transmission_grant: TransmissionGrant::GrantedToOtherUser.into_raw() as u8,
-            transmission_request_permission: false,
+            no_transmission_request_permission: false,
             encryption_control: false,
             reserved: false,
             notification_indicator: None,
@@ -2314,7 +2314,7 @@ impl CcBsSubentity {
     fn send_d_tx_ceased_facch(&mut self, queue: &mut MessageQueue, call_id: u16, dest_gssi: u32, ts: u8) {
         let pdu = DTxCeased {
             call_identifier: call_id,
-            transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
+            no_transmission_request_permission: false, // ETSI 14.8.43: 0 = allowed to request transmission
             notification_indicator: None,
             facility: None,
             dm_ms_address: None,

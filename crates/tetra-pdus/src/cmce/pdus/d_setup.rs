@@ -30,8 +30,8 @@ pub struct DSetup {
     /// Type1, 2 bits, Transmission grant
     pub transmission_grant: TransmissionGrant,
     /// Type1, 1 bits, Transmission request permission
-    /// Set to true to signal MSes they are allowed to send a U-TX DEMAND
-    pub transmission_request_permission: bool,
+    /// Set to FALSE to signal MSes they are allowed to send a U-TX DEMAND
+    pub no_transmission_request_permission: bool,
     /// Type1, 4 bits, See note 1,
     pub call_priority: u8,
     /// Type2, 6 bits, Notification indicator
@@ -77,7 +77,7 @@ impl DSetup {
         let val = buffer.read_field(2, "transmission_grant")?;
         let transmission_grant = TransmissionGrant::try_from(val).unwrap(); // Never fails
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
         // Type1
         let call_priority = buffer.read_field(4, "call_priority")? as u8;
 
@@ -128,7 +128,7 @@ impl DSetup {
             simplex_duplex_selection,
             basic_service_information,
             transmission_grant,
-            transmission_request_permission,
+            no_transmission_request_permission,
             call_priority,
             notification_indicator,
             temporary_address,
@@ -159,7 +159,7 @@ impl DSetup {
         // Type1
         buffer.write_bits(self.transmission_grant as u64, 2);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
         // Type1
         buffer.write_bits(self.call_priority as u64, 4);
 
@@ -226,14 +226,14 @@ impl fmt::Display for DSetup {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DSetup {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} basic_service_information: {:?} transmission_grant: {:?} transmission_request_permission: {:?} call_priority: {:?} notification_indicator: {:?} temporary_address: {:?} calling_party_address_ssi: {:?} calling_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            "DSetup {{ call_identifier: {:?} call_time_out: {:?} hook_method_selection: {:?} simplex_duplex_selection: {:?} basic_service_information: {:?} transmission_grant: {:?} tx_denied: {:?} call_priority: {:?} notification_indicator: {:?} temporary_address: {:?} calling_party_address_ssi: {:?} calling_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.call_time_out,
             self.hook_method_selection,
             self.simplex_duplex_selection,
             self.basic_service_information,
             self.transmission_grant,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.call_priority,
             self.notification_indicator,
             self.temporary_address,
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(pdu.basic_service_information.speech_service, Some(0));
 
         assert_eq!(pdu.transmission_grant, TransmissionGrant::GrantedToOtherUser);
-        assert_eq!(pdu.transmission_request_permission, false);
+        assert_eq!(pdu.no_transmission_request_permission, false);
         assert_eq!(pdu.call_priority, 0);
         assert!(pdu.notification_indicator.is_none());
         assert!(pdu.temporary_address.is_none());
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(pdu.basic_service_information.slots_per_frame, None);
         assert_eq!(pdu.basic_service_information.speech_service, Some(0));
         assert_eq!(pdu.transmission_grant, TransmissionGrant::GrantedToOtherUser);
-        assert_eq!(pdu.transmission_request_permission, false);
+        assert_eq!(pdu.no_transmission_request_permission, false);
         assert_eq!(pdu.call_priority, 0);
         assert!(pdu.notification_indicator.is_none());
         assert!(pdu.temporary_address.is_none());

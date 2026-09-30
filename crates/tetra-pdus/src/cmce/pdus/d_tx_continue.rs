@@ -17,7 +17,7 @@ pub struct DTxContinue {
     pub do_continue: bool,
     /// Type1, 1 bits, Transmission request permission
     /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
-    pub transmission_request_permission: bool,
+    pub no_transmission_request_permission: bool,
     /// Type2, 6 bits, Notification indicator
     pub notification_indicator: Option<u64>,
     /// Type3, Facility
@@ -40,7 +40,7 @@ impl DTxContinue {
         // Type1
         let do_continue = buffer.read_field(1, "do_continue")? != 0;
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -66,7 +66,7 @@ impl DTxContinue {
         Ok(DTxContinue {
             call_identifier,
             do_continue,
-            transmission_request_permission,
+            no_transmission_request_permission,
             notification_indicator,
             facility,
             dm_ms_address,
@@ -83,7 +83,7 @@ impl DTxContinue {
         // Type1
         buffer.write_bits(self.do_continue as u64, 1);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
 
         // Check if any optional field present and place o-bit
         let obit =
@@ -115,10 +115,10 @@ impl fmt::Display for DTxContinue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DTxContinue {{ call_identifier: {:?} do_continue: {:?} transmission_request_permission: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            "DTxContinue {{ call_identifier: {:?} do_continue: {:?} tx_denied: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.do_continue,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.notification_indicator,
             self.facility,
             self.dm_ms_address,

@@ -15,7 +15,7 @@ pub struct DTxCeased {
     pub call_identifier: u16,
     /// Type1, 1 bits, Transmission request permission
     /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
-    pub transmission_request_permission: bool,
+    pub no_transmission_request_permission: bool,
     /// Type2, 6 bits, Notification indicator
     pub notification_indicator: Option<u64>,
     /// Type3, Facility
@@ -36,7 +36,7 @@ impl DTxCeased {
         // Type1
         let call_identifier = buffer.read_field(14, "call_identifier")? as u16;
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -61,7 +61,7 @@ impl DTxCeased {
 
         Ok(DTxCeased {
             call_identifier,
-            transmission_request_permission,
+            no_transmission_request_permission,
             notification_indicator,
             facility,
             dm_ms_address,
@@ -76,7 +76,7 @@ impl DTxCeased {
         // Type1
         buffer.write_bits(self.call_identifier as u64, 14);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
 
         // Check if any optional field present and place o-bit
         let obit =
@@ -108,9 +108,9 @@ impl fmt::Display for DTxCeased {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DTxCeased {{ call_identifier: {:?} transmission_request_permission: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            "DTxCeased {{ call_identifier: {:?} tx_denied: {:?} notification_indicator: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.notification_indicator,
             self.facility,
             self.dm_ms_address,

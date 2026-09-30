@@ -19,7 +19,7 @@ pub struct DTxGranted {
     pub transmission_grant: u8,
     /// Type1, 1 bits, Transmission request permission
     /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
-    pub transmission_request_permission: bool,
+    pub no_transmission_request_permission: bool,
     /// Type1, 1 bits, Encryption control
     pub encryption_control: bool,
     /// Type1, 1 bits, See note 1,
@@ -54,7 +54,7 @@ impl DTxGranted {
         // Type1
         let transmission_grant = buffer.read_field(2, "transmission_grant")? as u8;
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
         // Type1
         let encryption_control = buffer.read_field(1, "encryption_control")? != 0;
         // Type1
@@ -102,7 +102,7 @@ impl DTxGranted {
         Ok(DTxGranted {
             call_identifier,
             transmission_grant,
-            transmission_request_permission,
+            no_transmission_request_permission,
             encryption_control,
             reserved,
             notification_indicator,
@@ -125,7 +125,7 @@ impl DTxGranted {
         // Type1
         buffer.write_bits(self.transmission_grant as u64, 2);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
         // Type1
         buffer.write_bits(self.encryption_control as u64, 1);
         // Type1
@@ -180,10 +180,10 @@ impl fmt::Display for DTxGranted {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DTxGranted {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} encryption_control: {:?} reserved: {:?} notification_indicator: {:?} transmitting_party_type_identifier: {:?} transmitting_party_address_ssi: {:?} transmitting_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            "DTxGranted {{ call_identifier: {:?} transmission_grant: {:?} tx_denied: {:?} encryption_control: {:?} reserved: {:?} notification_indicator: {:?} transmitting_party_type_identifier: {:?} transmitting_party_address_ssi: {:?} transmitting_party_extension: {:?} external_subscriber_number: {:?} facility: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.transmission_grant,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.encryption_control,
             self.reserved,
             self.notification_indicator,

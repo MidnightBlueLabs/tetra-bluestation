@@ -17,7 +17,7 @@ pub struct DCallRestore {
     pub transmission_grant: u8,
     /// Type1, 1 bits, Transmission request permission
     /// ETSI 14.8.43: 0 = allowed to request transmission, 1 = not allowed.
-    pub transmission_request_permission: bool,
+    pub no_transmission_request_permission: bool,
     /// Type1, 1 bits, Reset call time-out timer (T310)
     pub reset_call_time_out_timer_t310_: bool,
     /// Type2, 14 bits, New call identifier
@@ -52,7 +52,7 @@ impl DCallRestore {
         // Type1
         let transmission_grant = buffer.read_field(2, "transmission_grant")? as u8;
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
         // Type1
         let reset_call_time_out_timer_t310_ = buffer.read_field(1, "reset_call_time_out_timer_t310_")? != 0;
 
@@ -88,7 +88,7 @@ impl DCallRestore {
         Ok(DCallRestore {
             call_identifier,
             transmission_grant,
-            transmission_request_permission,
+            no_transmission_request_permission,
             reset_call_time_out_timer_t310_,
             new_call_identifier,
             call_time_out,
@@ -111,7 +111,7 @@ impl DCallRestore {
         // Type1
         buffer.write_bits(self.transmission_grant as u64, 2);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
         // Type1
         buffer.write_bits(self.reset_call_time_out_timer_t310_ as u64, 1);
 
@@ -167,10 +167,10 @@ impl fmt::Display for DCallRestore {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DCallRestore {{ call_identifier: {:?} transmission_grant: {:?} transmission_request_permission: {:?} reset_call_time_out_timer_t310_: {:?} new_call_identifier: {:?} call_time_out: {:?} call_status: {:?} modify: {:?} notification_indicator: {:?} facility: {:?} temporary_address: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
+            "DCallRestore {{ call_identifier: {:?} transmission_grant: {:?} tx_denied: {:?} reset_call_time_out_timer_t310_: {:?} new_call_identifier: {:?} call_time_out: {:?} call_status: {:?} modify: {:?} notification_indicator: {:?} facility: {:?} temporary_address: {:?} dm_ms_address: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.transmission_grant,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.reset_call_time_out_timer_t310_,
             self.new_call_identifier,
             self.call_time_out,

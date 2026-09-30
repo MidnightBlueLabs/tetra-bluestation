@@ -19,7 +19,7 @@ pub struct DConnectAcknowledge {
     pub transmission_grant: u8,
     /// Type1, 1 bits, Transmission request permission
     /// Set to true to signal MSes they are allowed to send a U-TX DEMAND
-    pub transmission_request_permission: bool,
+    pub no_transmission_request_permission: bool,
     /// Type2, 6 bits, Notification indicator
     pub notification_indicator: Option<u64>,
     /// Type3, Facility
@@ -42,7 +42,7 @@ impl DConnectAcknowledge {
         // Type1
         let transmission_grant = buffer.read_field(2, "transmission_grant")? as u8;
         // Type1
-        let transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
+        let no_transmission_request_permission = buffer.read_field(1, "transmission_request_permission")? != 0;
 
         // obit designates presence of any further type2, type3 or type4 fields
         let mut obit = delimiters::read_obit(buffer)?;
@@ -66,7 +66,7 @@ impl DConnectAcknowledge {
             call_identifier,
             call_time_out,
             transmission_grant,
-            transmission_request_permission,
+            no_transmission_request_permission,
             notification_indicator,
             facility,
             proprietary,
@@ -84,7 +84,7 @@ impl DConnectAcknowledge {
         // Type1
         buffer.write_bits(self.transmission_grant as u64, 2);
         // Type1
-        buffer.write_bits(self.transmission_request_permission as u64, 1);
+        buffer.write_bits(self.no_transmission_request_permission as u64, 1);
 
         // Check if any optional field present and place o-bit
         let obit = self.notification_indicator.is_some() || self.facility.is_some() || self.proprietary.is_some();
@@ -112,11 +112,11 @@ impl fmt::Display for DConnectAcknowledge {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "DConnectAcknowledge {{ call_identifier: {:?} call_time_out: {:?} transmission_grant: {:?} transmission_request_permission: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
+            "DConnectAcknowledge {{ call_identifier: {:?} call_time_out: {:?} transmission_grant: {:?} tx_denied: {:?} notification_indicator: {:?} facility: {:?} proprietary: {:?} }}",
             self.call_identifier,
             self.call_time_out,
             self.transmission_grant,
-            self.transmission_request_permission,
+            self.no_transmission_request_permission,
             self.notification_indicator,
             self.facility,
             self.proprietary,
